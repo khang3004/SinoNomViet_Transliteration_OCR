@@ -239,9 +239,21 @@ class SinoNomAlignmentValidator:
         self,
         s1_dict: dict[str, list[str]] | None = None,
         s2_dict: dict[str, set[str]] | None = None,
+        hanviet_path: str | None = None,
     ) -> None:
         self._s1: dict[str, list[str]] = s1_dict or SINONOM_SIMILAR_S1
         self._s2: dict[str, set[str]] = s2_dict or QUOCNGU_SINONOM_S2
+
+        # Load and merge hanviet.csv if provided and exists
+        if hanviet_path:
+            try:
+                hv_s2 = load_hanviet_csv(hanviet_path)
+                for qn, chars in hv_s2.items():
+                    if qn not in self._s2:
+                        self._s2[qn] = set()
+                    self._s2[qn].update(chars)
+            except Exception as e:
+                logger.warning("Failed to load hanviet_path %s: %s", hanviet_path, e)
 
     # ------------------------------------------------------------------
     def validate_pair(self, sn: str, qn: str) -> CharAlignmentResult:
@@ -539,6 +551,58 @@ def load_s2_from_file(filepath: str) -> dict[str, set[str]]:
                 result[key] = sinonom_chars
 
     logger.info("Loaded S2 dictionary: %d entries from %s", len(result), filepath)
+    return result
+
+
+def load_hanviet_csv(filepath: str) -> dict[str, set[str]]:
+    """Load S2 mapping from a hanviet.csv file.
+
+    CSV columns: char, hanviet, pinyin
+    Format of hanviet column: "['thướng']" or "['phật', 'phất']"
+
+    Args:
+        filepath: Path to the hanviet.csv file.
+
+    Returns:
+        Dictionary mapping each Quoc Ngu word to its set of SinoNom character candidates.
+    """
+    import ast
+    import csv
+    from pathlib import Path
+
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"HanViet CSV file not found: {filepath}")
+
+    result: dict[str, set[str]] = {}
+    with open(path, encoding="utf-8") as fh:
+        reader = csv.reader(fh)
+        try:
+            next(reader)  # Skip header
+        except StopIteration:
+            return result
+
+        for row in reader:
+            if len(row) < 2:
+                continue
+            char = row[0].strip()
+            raw_readings = row[1].strip()
+            if not char or not raw_readings:
+                continue
+            try:
+                readings = ast.literal_eval(raw_readings)
+            except Exception:
+                # Fallback: simple strip
+                readings = [r.strip("'\" ") for r in raw_readings.strip("[]").split(",")]
+
+            for r in readings:
+                r = r.strip().lower()
+                if r:
+                    if r not in result:
+                        result[r] = set()
+                    result[r].add(char)
+
+    logger.info("Loaded HanViet CSV: %d entries from %s", len(result), filepath)
     return result
 
 

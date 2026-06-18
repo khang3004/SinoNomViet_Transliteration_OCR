@@ -130,9 +130,9 @@ notebook:  ## Launch Jupyter Lab with the project notebooks
 
 notebook-run:  ## Execute all notebooks end-to-end (non-interactive)
 	@mkdir -p output/executed_notebooks
-	$(NBCONVERT) --to notebook --execute notebooks/01_data_scraper.ipynb --output-dir output/executed_notebooks --output 01_data_scraper.ipynb --ExecutePreprocessor.timeout=300
-	$(NBCONVERT) --to notebook --execute notebooks/02_ocr_and_layout.ipynb --output-dir output/executed_notebooks --output 02_ocr_and_layout.ipynb --ExecutePreprocessor.timeout=300
-	$(NBCONVERT) --to notebook --execute notebooks/03_alignment_and_export.ipynb --output-dir output/executed_notebooks --output 03_alignment_and_export.ipynb --ExecutePreprocessor.timeout=300
+	$(NBCONVERT) --to notebook --execute notebooks/01_data_scraper.ipynb --output-dir output/executed_notebooks --output 01_data_scraper.ipynb --ExecutePreprocessor.timeout=1800
+	$(NBCONVERT) --to notebook --execute notebooks/02_ocr_and_layout.ipynb --output-dir output/executed_notebooks --output 02_ocr_and_layout.ipynb --ExecutePreprocessor.timeout=1800
+	$(NBCONVERT) --to notebook --execute notebooks/03_alignment_and_export.ipynb --output-dir output/executed_notebooks --output 03_alignment_and_export.ipynb --ExecutePreprocessor.timeout=1800
 	@echo "$(GREEN)✅ All notebooks executed successfully!$(RESET)"
 
 # ─────────────────────────────────────────────────────────────────────────────
