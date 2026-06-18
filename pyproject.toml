@@ -1,6 +1,6 @@
 [build-system]
-requires      = ["hatchling"]
-build-backend = "hatchling.build"
+requires      = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Project metadata
@@ -75,10 +75,14 @@ notebook = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CLI entry points
+# Setuptools package discovery (flat-layout: scripts live at project root)
 # ─────────────────────────────────────────────────────────────────────────────
-[project.scripts]
-sinonom-scrape = "data_scraper:main"
+[tool.setuptools.packages.find]
+where   = ["src"]
+exclude = ["tests*", "data*", "output*", "docs*", ".venv*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.dic", "*.md"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tool configurations
@@ -86,7 +90,16 @@ sinonom-scrape = "data_scraper:main"
 [tool.ruff]
 target-version = "py310"
 line-length    = 100
-src            = ["."]
+src            = ["src"]
+exclude = [
+  "data",
+  "output",
+  "notebooks",
+  ".venv",
+  "__pycache__",
+  "build",
+  "dist",
+]
 
 [tool.ruff.lint]
 select = [
@@ -103,6 +116,10 @@ select = [
 ignore = [
   "D100",  # Missing docstring in public module (handled in headers)
   "D104",  # Missing docstring in public package
+  "D105",  # Missing docstring in magic method
+  "D107",  # Missing docstring in __init__
+  "D205",  # 1 blank line required between summary line and description
+  "D415",  # First line should end with a period
   "ANN101", "ANN102",  # self/cls type hints
 ]
 
@@ -110,7 +127,7 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["data_scraper", "spatial_layout_engine", "alignment_validator"]
+known-first-party = ["sinonom_ocr"]
 
 [tool.mypy]
 python_version         = "3.10"

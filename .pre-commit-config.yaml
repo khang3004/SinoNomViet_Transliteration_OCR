@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# pre-commit configuration
+# Runs ruff (lint + format) and mypy on every git commit automatically.
+# Install: make hooks   (runs: uv run pre-commit install)
+# ─────────────────────────────────────────────────────────────────────────────
+repos:
+  # Ruff — ultra-fast Python linter + formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff
+        name: ruff lint
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+        name: ruff format
+
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=5000]   # Block files > 5 MB (e.g. accidentally committing raw images)
+      - id: debug-statements    # Catch accidental breakpoint() / pdb calls
+      - id: check-case-conflict
+
+  # mypy — static type checking (uses .venv via uv run)
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy type check
+        entry: uv run mypy
+        language: system
+        types: [python]
+        files: ^(data_scraper|spatial_layout_engine|alignment_validator)\.py$
+        args:
+          - --ignore-missing-imports
+          - --no-strict-optional

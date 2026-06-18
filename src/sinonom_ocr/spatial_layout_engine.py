@@ -1,5 +1,4 @@
-"""
-spatial_layout_engine.py
+"""spatial_layout_engine.py
 ========================
 Geometry processing module for classical SinoNom vertical text layout.
 
@@ -28,7 +27,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 import numpy as np
 
@@ -38,6 +36,7 @@ logger = logging.getLogger("spatial_layout_engine")
 # ---------------------------------------------------------------------------
 # Core data structures
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class BoundingBox:
@@ -68,8 +67,8 @@ class BoundingBox:
     y_min: float = field(init=False)
     x_max: float = field(init=False)
     y_max: float = field(init=False)
-    cx: float = field(init=False)   # Centroid x
-    cy: float = field(init=False)   # Centroid y
+    cx: float = field(init=False)  # Centroid x
+    cy: float = field(init=False)  # Centroid y
     width: float = field(init=False)
     height: float = field(init=False)
 
@@ -96,7 +95,7 @@ class BoundingBox:
         y2: float,
         text: str = "",
         confidence: float = 1.0,
-    ) -> "BoundingBox":
+    ) -> BoundingBox:
         """Convenience constructor from (x1, y1, x2, y2) axis-aligned format.
 
         Args:
@@ -117,8 +116,8 @@ class BoundingBox:
     @classmethod
     def from_paddleocr(
         cls,
-        ocr_result: tuple,
-    ) -> "BoundingBox":
+        ocr_result: tuple[list[list[float]], tuple[str, float]],
+    ) -> BoundingBox:
         """Parse a single PaddleOCR result entry.
 
         PaddleOCR returns entries in the format:
@@ -179,6 +178,7 @@ class Column:
 # ---------------------------------------------------------------------------
 # Adaptive Horizontal Threshold algorithm
 # ---------------------------------------------------------------------------
+
 
 class AdaptiveHorizontalThresholdClusterer:
     """Clusters bounding boxes into vertical columns using an adaptive threshold.
@@ -253,9 +253,7 @@ class AdaptiveHorizontalThresholdClusterer:
                 if abs(box.cx - col.x_center) <= threshold:
                     col.boxes.append(box)
                     # Update running x-center
-                    col.x_center = float(
-                        np.mean([b.cx for b in col.boxes])
-                    )
+                    col.x_center = float(np.mean([b.cx for b in col.boxes]))
                     assigned = True
                     break
             if not assigned:
@@ -334,6 +332,7 @@ class AdaptiveHorizontalThresholdClusterer:
 # Reading-order finaliser
 # ---------------------------------------------------------------------------
 
+
 class SinoNomReadingOrderSorter:
     """Assigns global reading-order indices to all boxes across all columns.
 
@@ -380,6 +379,7 @@ class SinoNomReadingOrderSorter:
 # ---------------------------------------------------------------------------
 # Public pipeline function
 # ---------------------------------------------------------------------------
+
 
 def process_page_layout(
     raw_boxes: list[BoundingBox],
@@ -438,6 +438,7 @@ def process_page_layout(
 # Mock data helper (for testing / notebook demos)
 # ---------------------------------------------------------------------------
 
+
 def create_mock_ocr_response() -> list[BoundingBox]:
     """Create a mock OCR bounding-box response mirroring the example from
     Prof. Dien's SinoNom_OCR_TransliterationAlignment.pdf (Section I.c).
@@ -452,13 +453,13 @@ def create_mock_ocr_response() -> list[BoundingBox]:
         In real pipeline usage, this mock is replaced by actual OCR output
         from PaddleOCR, Google Vision, or a HCMUS CLC endpoint.
     """
-    mock_data: list[tuple[tuple[int, int, int, int], str, float]] = [
+    mock_data: list[tuple[int, int, int, int, str, float]] = [
         # (x1, y1, x2, y2,  text,  confidence)
-        (341, 8,  379, 149, "百",  0.96),  # Column 1 (rightmost)
-        (261, 9,  297, 251, "年",  0.93),  # Column 2
-        (181, 6,  219, 252, "身",  0.91),  # Column 3
-        (102, 9,  137, 250, "後",  0.89),  # Column 4
-        (20,  9,  55,  250, "名",  0.94),  # Column 5 (leftmost)
+        (341, 8, 379, 149, "百", 0.96),  # Column 1 (rightmost)
+        (261, 9, 297, 251, "年", 0.93),  # Column 2
+        (181, 6, 219, 252, "身", 0.91),  # Column 3
+        (102, 9, 137, 250, "後", 0.89),  # Column 4
+        (20, 9, 55, 250, "名", 0.94),  # Column 5 (leftmost)
     ]
 
     boxes: list[BoundingBox] = []
@@ -477,23 +478,23 @@ def create_mock_multi_char_response() -> list[BoundingBox]:
     """
     # Column A (rightmost, x ≈ 360): 4 chars top→bottom
     col_a = [
-        (340, 10,  380,  60,  "帝", 0.97),
-        (340, 65,  380, 115,  "王", 0.95),
-        (340, 120, 380, 170,  "臨", 0.92),
-        (340, 175, 380, 225,  "朝", 0.90),
+        (340, 10, 380, 60, "帝", 0.97),
+        (340, 65, 380, 115, "王", 0.95),
+        (340, 120, 380, 170, "臨", 0.92),
+        (340, 175, 380, 225, "朝", 0.90),
     ]
     # Column B (middle, x ≈ 260): 3 chars
     col_b = [
-        (245, 15,  285,  65,  "聖", 0.96),
-        (245, 70,  285, 120,  "德", 0.93),
-        (245, 125, 285, 175,  "日", 0.88),
+        (245, 15, 285, 65, "聖", 0.96),
+        (245, 70, 285, 120, "德", 0.93),
+        (245, 125, 285, 175, "日", 0.88),
     ]
     # Column C (leftmost, x ≈ 160): 4 chars
     col_c = [
-        (150, 10,  190,  60,  "新", 0.94),
-        (150, 65,  190, 115,  "月", 0.92),
-        (150, 120, 190, 170,  "異", 0.89),
-        (150, 175, 190, 225,  "盛", 0.91),
+        (150, 10, 190, 60, "新", 0.94),
+        (150, 65, 190, 115, "月", 0.92),
+        (150, 120, 190, 170, "異", 0.89),
+        (150, 175, 190, 225, "盛", 0.91),
     ]
 
     boxes: list[BoundingBox] = []

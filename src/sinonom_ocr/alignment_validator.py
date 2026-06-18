@@ -1,5 +1,4 @@
-"""
-alignment_validator.py
+"""alignment_validator.py
 =======================
 Minimum Edit Distance (Levenshtein) alignment validator for SinoNom OCR.
 
@@ -37,7 +36,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from rapidfuzz.distance import Levenshtein
 
@@ -48,6 +46,7 @@ logger = logging.getLogger("alignment_validator")
 # Status enum
 # ---------------------------------------------------------------------------
 
+
 class AlignmentStatus(str, Enum):
     """Colour-coded OCR alignment status for a single SinoNom character.
 
@@ -57,14 +56,15 @@ class AlignmentStatus(str, Enum):
     - RED:   OCR failure — neither direct match nor correction found.
     """
 
-    BLACK = "BLACK"   # Correct: sn ∈ S2
-    GREEN = "GREEN"   # Corrected: unique or best match found in S1 ∩ S2
-    RED = "RED"       # Failure: S1 ∩ S2 is empty
+    BLACK = "BLACK"  # Correct: sn ∈ S2
+    GREEN = "GREEN"  # Corrected: unique or best match found in S1 ∩ S2
+    RED = "RED"  # Failure: S1 ∩ S2 is empty
 
 
 # ---------------------------------------------------------------------------
 # Result dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class CharAlignmentResult:
@@ -83,21 +83,14 @@ class CharAlignmentResult:
     sn: str
     qn: str
     status: AlignmentStatus
-    corrected_char: Optional[str] = None
+    corrected_char: str | None = None
     s1_candidates: set[str] = field(default_factory=set)
     s2_candidates: set[str] = field(default_factory=set)
     intersection: set[str] = field(default_factory=set)
 
     def __str__(self) -> str:
-        correction = (
-            f" → corrected={self.corrected_char!r}"
-            if self.corrected_char
-            else ""
-        )
-        return (
-            f"CharAlign(sn={self.sn!r}, qn={self.qn!r}, "
-            f"status={self.status.value}{correction})"
-        )
+        correction = f" → corrected={self.corrected_char!r}" if self.corrected_char else ""
+        return f"CharAlign(sn={self.sn!r}, qn={self.qn!r}, status={self.status.value}{correction})"
 
 
 @dataclass
@@ -125,7 +118,8 @@ class SequenceAlignmentResult:
         if not self.char_results:
             return 0.0
         good = sum(
-            1 for r in self.char_results
+            1
+            for r in self.char_results
             if r.status in (AlignmentStatus.BLACK, AlignmentStatus.GREEN)
         )
         return good / len(self.char_results)
@@ -188,47 +182,48 @@ SINONOM_SIMILAR_S1: dict[str, list[str]] = {
 # In production, this is a large dictionary loaded from file.
 QUOCNGU_SINONOM_S2: dict[str, set[str]] = {
     # Example from Prof. Dien's PDF: "trăm" maps to {百, 𬃴, …}
-    "trăm":   {"百", "𬃴", "𤾓"},
-    "năm":    {"年", "南", "𢆥"},
-    "thân":   {"身", "親", "𨉟"},
-    "sau":    {"後", "𠫾"},
-    "danh":   {"名", "𠊛"},
+    "trăm": {"百", "𬃴", "𤾓"},
+    "năm": {"年", "南", "𢆥"},
+    "thân": {"身", "親", "𨉟"},
+    "sau": {"後", "𠫾"},
+    "danh": {"名", "𠊛"},
     # Common Vietnamese syllables → SinoNom mappings
-    "vua":    {"王", "𤤰"},
-    "hoàng":  {"皇", "黃"},
-    "đế":     {"帝"},
-    "thánh":  {"聖"},
-    "đức":    {"德"},
-    "mới":    {"新"},
-    "lâm":    {"臨"},
-    "triều":  {"朝"},
-    "ngày":   {"日"},
-    "tháng":  {"月"},
-    "núi":    {"山"},
-    "nước":   {"水", "國"},
-    "lửa":    {"火"},
-    "cây":    {"木"},
-    "vàng":   {"金"},
-    "đất":    {"土"},
-    "người":  {"人", "𠊛"},
-    "lòng":   {"心", "𢚸"},
-    "tay":    {"手"},
-    "miệng":  {"口"},
-    "mắt":    {"目"},
-    "tai":    {"耳"},
-    "chân":   {"足"},
-    "lời":    {"言"},
-    "chạy":   {"走"},
-    "sức":    {"力"},
-    "khác":   {"異"},
-    "thịnh":  {"盛"},
-    "lạ":     {"異"},
+    "vua": {"王", "𤤰"},
+    "hoàng": {"皇", "黃"},
+    "đế": {"帝"},
+    "thánh": {"聖"},
+    "đức": {"德"},
+    "mới": {"新"},
+    "lâm": {"臨"},
+    "triều": {"朝"},
+    "ngày": {"日"},
+    "tháng": {"月"},
+    "núi": {"山"},
+    "nước": {"水", "國"},
+    "lửa": {"火"},
+    "cây": {"木"},
+    "vàng": {"金"},
+    "đất": {"土"},
+    "người": {"人", "𠊛"},
+    "lòng": {"心", "𢚸"},
+    "tay": {"手"},
+    "miệng": {"口"},
+    "mắt": {"目"},
+    "tai": {"耳"},
+    "chân": {"足"},
+    "lời": {"言"},
+    "chạy": {"走"},
+    "sức": {"力"},
+    "khác": {"異"},
+    "thịnh": {"盛"},
+    "lạ": {"異"},
 }
 
 
 # ---------------------------------------------------------------------------
 # Core validator class
 # ---------------------------------------------------------------------------
+
 
 class SinoNomAlignmentValidator:
     """Validates OCR character correctness using the S1∩S2 algorithm.
@@ -242,8 +237,8 @@ class SinoNomAlignmentValidator:
 
     def __init__(
         self,
-        s1_dict: Optional[dict[str, list[str]]] = None,
-        s2_dict: Optional[dict[str, set[str]]] = None,
+        s1_dict: dict[str, list[str]] | None = None,
+        s2_dict: dict[str, set[str]] | None = None,
     ) -> None:
         self._s1: dict[str, list[str]] = s1_dict or SINONOM_SIMILAR_S1
         self._s2: dict[str, set[str]] = s2_dict or QUOCNGU_SINONOM_S2
@@ -303,7 +298,10 @@ class SinoNomAlignmentValidator:
             )
             logger.debug(
                 "PAIR (%r, %r) → GREEN (|G|=%d, corrected→%r)",
-                sn, qn, len(intersection), corrected,
+                sn,
+                qn,
+                len(intersection),
+                corrected,
             )
             return CharAlignmentResult(
                 sn=sn,
@@ -432,9 +430,9 @@ class SinoNomAlignmentValidator:
             for j in range(1, n + 1):
                 cost = 0 if sn_seq[i - 1] == qn_seq[j - 1] else 1
                 dp[i][j] = min(
-                    dp[i - 1][j] + 1,       # Deletion
-                    dp[i][j - 1] + 1,       # Insertion
-                    dp[i - 1][j - 1] + cost, # Substitution / match
+                    dp[i - 1][j] + 1,  # Deletion
+                    dp[i][j - 1] + 1,  # Insertion
+                    dp[i - 1][j - 1] + cost,  # Substitution / match
                 )
 
         # Traceback
@@ -463,6 +461,7 @@ class SinoNomAlignmentValidator:
 # Dictionary loading utilities
 # ---------------------------------------------------------------------------
 
+
 def load_s1_from_file(filepath: str) -> dict[str, list[str]]:
     """Load the SinoNom_Similar.dic dictionary from a text file.
 
@@ -478,7 +477,6 @@ def load_s1_from_file(filepath: str) -> dict[str, list[str]]:
     Raises:
         FileNotFoundError: If the dictionary file does not exist.
     """
-    import csv
     from pathlib import Path
 
     path = Path(filepath)
@@ -557,12 +555,12 @@ if __name__ == "__main__":
     print("Pair-level validation — Prof. Dien's canonical example")
     print("=" * 65)
     test_pairs = [
-        ("百", "trăm"),   # → BLACK  (百 ∈ S2{"trăm"})
-        ("𤾓", "trăm"),   # → GREEN  (visually similar to 百, in S2)
-        ("帝", "đế"),     # → BLACK
+        ("百", "trăm"),  # → BLACK  (百 ∈ S2{"trăm"})
+        ("𤾓", "trăm"),  # → GREEN  (visually similar to 百, in S2)
+        ("帝", "đế"),  # → BLACK
         ("聖", "thánh"),  # → BLACK
         ("人", "người"),  # → BLACK
-        ("X",  "trăm"),   # → RED    (unknown char, no S1 or S2 match)
+        ("X", "trăm"),  # → RED    (unknown char, no S1 or S2 match)
     ]
     for sn, qn in test_pairs:
         result = validator.validate_pair(sn, qn)
