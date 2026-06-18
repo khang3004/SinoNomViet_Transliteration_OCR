@@ -1,8 +1,6 @@
 # SinoNom Vietnamese OCR Project — HVH_004
 
 > **An Nam Nhất Thống Chí** | HCMUS NLP Midterm Project  
-> **Prof. Dien** | HCMUS — Faculty of Information Technology
-
 ---
 
 ## Overview
