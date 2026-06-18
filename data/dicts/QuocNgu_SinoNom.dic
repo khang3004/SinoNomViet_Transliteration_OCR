@@ -1,0 +1,54 @@
+# Quoc Ngu → SinoNom Translation Dictionary (S2)
+# Format: <quoc_ngu_word>:<sinonom_char1> <sinonom_char2> ...
+# Source: Adapted from QuocNgu_SinoNom.dic (HCMUS CLC Lab / Kim Tu Dien)
+# Encoding: UTF-8
+#
+# Usage:  load_s2_from_file('data/dicts/QuocNgu_SinoNom.dic')
+
+# ── Example from Prof. Dien's PDF ──────────────────────────────────────────
+trăm:百 𬃴 𤾓
+
+# ── Common Vietnamese syllables ─────────────────────────────────────────────
+năm:年 南 𢆥
+thân:身 親 𨉟
+sau:後 𠫾
+danh:名 𠊛
+vua:王 𤤰
+hoàng:皇 黃
+đế:帝
+thánh:聖
+đức:德
+mới:新
+lâm:臨
+triều:朝
+ngày:日
+tháng:月
+núi:山
+nước:水 國
+lửa:火
+cây:木
+vàng:金
+đất:土
+người:人 𠊛
+lòng:心 𢚸
+tay:手
+miệng:口
+mắt:目
+tai:耳
+chân:足
+lời:言
+chạy:走
+sức:力
+khác:異
+thịnh:盛
+lạ:異
+an:安
+nam:南
+nhất:一
+thống:統
+chí:志
+quyển:卷
+chiếu:詔
+viết:曰
+thiên:天
+hạ:下

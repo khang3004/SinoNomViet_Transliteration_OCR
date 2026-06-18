@@ -1,0 +1,55 @@
+# SinoNom Similar Characters Dictionary (S1)
+# Format: <sinonom_char>:<similar1> <similar2> <similar3> ...
+# Characters are ordered by visual similarity (most similar first).
+# Source: Adapted from SinoNom_Similar.dic (HCMUS CLC Lab)
+# Encoding: UTF-8
+#
+# Usage:  load_s1_from_file('data/dicts/SinoNom_Similar.dic')
+
+# ── Example from Prof. Dien's PDF ──────────────────────────────────────────
+百:𤾓 榥 釈 椩 棅 稂 百 佒
+
+# ── Common historical characters ───────────────────────────────────────────
+人:入 八 人
+大:太 犬 大
+日:曰 目 日
+月:用 勿 月
+山:屮 凸 山
+水:氺 氵 水
+火:灬 火
+木:本 末 木
+金:釒 金
+土:士 土
+王:玨 壬 王
+帝:啻 蒂 帝
+聖:𦣣 聖
+德:惪 德
+新:薪 新
+臨:𡦫 臨
+朝:嘲 朝
+異:巽 異
+盛:𦚟 盛
+年:秊 年
+身:躳 身
+後:後 後
+名:名 各
+心:忄 心
+手:扌 手
+口:囗 口
+目:罒 目
+耳:耳
+足:⻊ 足
+言:訁 言
+走:赱 走
+力:刀 力
+弓:弔 弓
+安:案 安
+南:楠 南
+一:乙 一
+統:統 統
+志:誌 志
+皇:凰 皇
+詔:召 詔
+曰:日 曰
+天:夭 天
+下:卜 下
