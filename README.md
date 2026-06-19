@@ -8,8 +8,6 @@
 
 An end-to-end Document Intelligence & Natural Language Processing pipeline for the historical Sino-Vietnamese text **"An Nam Nhất Thống Chí" (安南一統志)**. This project implements state-of-the-art Chinese/Nom layout analysis, PaddleOCR text extraction, automated dictionary-based Hán-Việt transliteration, and sequence-level alignment validation.
 
-Designed and developed according to the midterm requirements specified by **Prof. Dien (HCMUS NLP Lab)**.
-
 ---
 
 ## 🗺️ Architectural Pipeline
@@ -62,11 +60,8 @@ SinoNomVietnamese_OCR_Project/
 │   ├── 02_ocr_and_layout.ipynb     # Phase 2: OCR & Layout Analysis
 │   ├── 03_alignment_and_export.ipynb # Phase 3: Alignment, Validation & Export
 │   └── 04_visual_playground.ipynb  # Interactive visualization playground
-├── tests/
-│   └── test_pipeline.py            # Complete pytest suite
-└── docs/
-    ├── MidTerm_Requirement.pdf
-    └── SinoNom_OCR_TransliterationAlignment.pdf
+└── tests/
+    └── test_pipeline.py            # Complete pytest suite
 ```
 
 ---
@@ -147,6 +142,5 @@ make notebook
 ---
 
 ## 🎓 References
-*   *MidTerm_Requirement.pdf* — Midterm requirements (NLP Class, HCMUS).
-*   *SinoNom_OCR_TransliterationAlignment.pdf* — Character alignment algorithm (Prof. Dien, HCMUS).
 *   [Nom Foundation Digital Library](https://lib.nomfoundation.org) (Volume 664).
+*   Standard CJK Unified Ideographs and Sino-Nom Character Visual Similarity mappings.
