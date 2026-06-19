@@ -24,7 +24,7 @@ Usage (CLI):
                            --workers 8 \\
                            --delay 0.3
 
-Author: NLP Pipeline — HCMUS NaturalLanguageProcessing
+Author: SinoNom OCR Project Contributors
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ class ScraperConfig:
     request_delay: float = 0.3
     max_retries: int = 3
     timeout: int = 60
-    user_agent: str = "Mozilla/5.0 (compatible; NomFoundationScraper/1.0; HCMUS-NLP-Research/2024)"
+    user_agent: str = "Mozilla/5.0 (compatible; NomFoundationScraper/1.0; SinoNomOCR-Research/2026)"
     file_prefix: str = "page"
 
 

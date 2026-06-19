@@ -8,10 +8,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in this project, please **do not**
-open a public GitHub issue.
-
-Instead, email us privately at **nlp@fit.hcmus.edu.vn** with:
+Instead, please report it privately via GitHub Security Advisories or contact the repository owner directly. Please provide:
 
 1. A description of the vulnerability
 2. Steps to reproduce it

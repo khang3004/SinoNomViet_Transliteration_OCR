@@ -59,8 +59,7 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behaviour may be
-reported to the community leaders responsible for enforcement at
-**nlp@fit.hcmus.edu.vn**.
+reported to the community leaders responsible for enforcement by contacting the repository owner.
 
 All complaints will be reviewed and investigated promptly and fairly.
 

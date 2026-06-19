@@ -17,10 +17,7 @@ used by PaddleOCR, Google Vision, and most commercial OCR APIs:
   [(x_top_left, y_top_left), (x_top_right, y_top_right),
    (x_bot_right, y_bot_right), (x_bot_left,  y_bot_left)]
 
-Reference (Prof. Dien, HCMUS):
-  SinoNom_OCR_TransliterationAlignment.pdf — Section I, Step 1.
-
-Author: NLP Pipeline — HCMUS NaturalLanguageProcessing
+Author: SinoNom OCR Project Contributors
 """
 
 from __future__ import annotations
@@ -440,8 +437,7 @@ def process_page_layout(
 
 
 def create_mock_ocr_response() -> list[BoundingBox]:
-    """Create a mock OCR bounding-box response mirroring the example from
-    Prof. Dien's SinoNom_OCR_TransliterationAlignment.pdf (Section I.c).
+    """Create a mock OCR bounding-box response mirroring a canonical 5-column layout.
 
     The example page has 5 vertical boxes (columns), each containing one
     Sino-Nom character. Coordinates are in pixels.
@@ -451,7 +447,7 @@ def create_mock_ocr_response() -> list[BoundingBox]:
 
     Note:
         In real pipeline usage, this mock is replaced by actual OCR output
-        from PaddleOCR, Google Vision, or a HCMUS CLC endpoint.
+        from PaddleOCR or Google Vision.
     """
     mock_data: list[tuple[int, int, int, int, str, float]] = [
         # (x1, y1, x2, y2,  text,  confidence)
@@ -513,7 +509,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
     print("=" * 60)
-    print("Example 1: Prof. Dien's canonical 5-column example")
+    print("Example 1: Canonical 5-column example")
     print("=" * 60)
     boxes = create_mock_ocr_response()
     columns, ordered = process_page_layout(boxes)

@@ -2,9 +2,8 @@
 =======================
 Minimum Edit Distance (Levenshtein) alignment validator for SinoNom OCR.
 
-This module implements the exact character-alignment algorithm described by
-Prof. Dien in the HCMUS midterm requirements:
-  SinoNom_OCR_TransliterationAlignment.pdf — Section I, Step 3.
+This module implements the character-alignment algorithm for SinoNom OCR validation
+using visual similarity and transliteration mappings.
 
 Algorithm Summary
 -----------------
@@ -28,7 +27,7 @@ Additionally, this module implements the full Levenshtein sequence alignment
 so that an entire OCR character sequence can be aligned with a QN token sequence,
 producing an edit-script with per-character status annotations.
 
-Author: NLP Pipeline — HCMUS NaturalLanguageProcessing
+Author: SinoNom OCR Project Contributors
 """
 
 from __future__ import annotations
@@ -50,7 +49,7 @@ logger = logging.getLogger("alignment_validator")
 class AlignmentStatus(str, Enum):
     """Colour-coded OCR alignment status for a single SinoNom character.
 
-    Values mirror the colour conventions from Prof. Dien's specification:
+    Values mirror standard color conventions:
     - BLACK: OCR is correct and matches the expected QN character.
     - GREEN: OCR was incorrect but corrected via S1∩S2 lookup.
     - RED:   OCR failure — neither direct match nor correction found.
@@ -133,10 +132,10 @@ class SequenceAlignmentResult:
 # Maps each SinoNom character to a list of visually similar characters.
 # The ORDER within each list is significant — used for tie-breaking (leftmost wins).
 # In production, this is loaded from the actual .dic file.
-# Here we pre-seed with the canonical example from Prof. Dien's PDF plus
+# Here we pre-seed with canonical examples plus
 # a comprehensive representative subset.
 SINONOM_SIMILAR_S1: dict[str, list[str]] = {
-    # Example from Prof. Dien's PDF (Truyện Kiều, first character "百"):
+    # Canonical example (Truyện Kiều, first character "百"):
     "百": ["𤾓", "榥", "釈", "椩", "棅", "稂", "百", "佒"],
     # Common Sino-Nom character confusables
     "人": ["入", "八", "人"],
@@ -181,7 +180,7 @@ SINONOM_SIMILAR_S1: dict[str, list[str]] = {
 # represent it (transcription/translation candidates).
 # In production, this is a large dictionary loaded from file.
 QUOCNGU_SINONOM_S2: dict[str, set[str]] = {
-    # Example from Prof. Dien's PDF: "trăm" maps to {百, 𬃴, …}
+    # Canonical example: "trăm" maps to {百, 𬃴, …}
     "trăm": {"百", "𬃴", "𤾓"},
     "năm": {"年", "南", "𢆥"},
     "thân": {"身", "親", "𨉟"},
@@ -259,7 +258,7 @@ class SinoNomAlignmentValidator:
     def validate_pair(self, sn: str, qn: str) -> CharAlignmentResult:
         """Validate a single (OCR char, Quoc Ngu word) pair.
 
-        Implements the algorithm from Prof. Dien's specification exactly:
+        Implements the core alignment algorithm:
 
         ::
 
@@ -345,7 +344,7 @@ class SinoNomAlignmentValidator:
     ) -> str:
         """Select the highest-ranked intersection candidate.
 
-        Per Prof. Dien's specification: when |G| > 1, pick the character
+        Tie-breaking rule: when |G| > 1, pick the character
         that appears leftmost (earliest index) in the S1 ordered list,
         as S1 is assumed to be ordered by visual similarity descending.
 
@@ -616,7 +615,7 @@ if __name__ == "__main__":
     validator = SinoNomAlignmentValidator()
 
     print("=" * 65)
-    print("Pair-level validation — Prof. Dien's canonical example")
+    print("Pair-level validation — Canonical example")
     print("=" * 65)
     test_pairs = [
         ("百", "trăm"),  # → BLACK  (百 ∈ S2{"trăm"})

@@ -1,12 +1,12 @@
 # SinoNom Similar Characters Dictionary (S1)
 # Format: <sinonom_char>:<similar1> <similar2> <similar3> ...
 # Characters are ordered by visual similarity (most similar first).
-# Source: Adapted from SinoNom_Similar.dic (HCMUS CLC Lab)
+# Source: Adapted from SinoNom_Similar.dic
 # Encoding: UTF-8
 #
 # Usage:  load_s1_from_file('data/dicts/SinoNom_Similar.dic')
 
-# ── Example from Prof. Dien's PDF ──────────────────────────────────────────
+# ── Canonical example ──────────────────────────────────────────────────────
 百:𤾓 榥 釈 椩 棅 稂 百 佒
 
 # ── Common historical characters ───────────────────────────────────────────

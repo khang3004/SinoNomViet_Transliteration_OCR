@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Integration with real OCR APIs (PaddleOCR, Google Vision, CLC HCMUS)
-- Full S1/S2 dictionaries loaded from HCMUS Kim Tự Điển v3
+- Integration with real OCR APIs (PaddleOCR, Google Vision)
+- Full S1/S2 dictionaries loaded from Sino-Nom dictionaries
 - Sentence-level box alignment (m-n mapping)
 - NER tagging for PER, LOC, ORG, TITLE, TME, NUM
 - GitHub Actions CI pipeline
@@ -30,13 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `BoundingBox`, `Column` data structures with full type hints  
   - PaddleOCR result parser (`BoundingBox.from_paddleocr`)  
 - `alignment_validator.py` — S1∩S2 Levenshtein alignment validator  
-  - Exact Prof. Dien algorithm: BLACK / GREEN / RED status  
+  - Alignment validation: BLACK / GREEN / RED status  
   - Full Needleman-Wunsch sequence alignment  
   - Dictionary loaders (`load_s1_from_file`, `load_s2_from_file`)  
 - `hvm_dataset_generator.ipynb` — master Colab/Jupyter pipeline notebook  
   - Google Drive mount + path configuration  
   - `SentenceIDGenerator` producing `HVH_004.ccc.ppp.ss` (18-char IDs)  
-  - XML export with strict metadata headers per Prof. Dien's spec  
+  - XML export with metadata headers  
   - 3-sheet Excel export (summary, char alignment, dictionary reference)  
   - Validation assertions on all outputs  
 - `pyproject.toml` — PEP 517/518 project with `uv` dev dependencies  

@@ -1,11 +1,11 @@
 # Quoc Ngu → SinoNom Translation Dictionary (S2)
 # Format: <quoc_ngu_word>:<sinonom_char1> <sinonom_char2> ...
-# Source: Adapted from QuocNgu_SinoNom.dic (HCMUS CLC Lab / Kim Tu Dien)
+# Source: Adapted from QuocNgu_SinoNom.dic
 # Encoding: UTF-8
 #
 # Usage:  load_s2_from_file('data/dicts/QuocNgu_SinoNom.dic')
 
-# ── Example from Prof. Dien's PDF ──────────────────────────────────────────
+# ── Canonical example ──────────────────────────────────────────────────────
 trăm:百 𬃴 𤾓
 
 # ── Common Vietnamese syllables ─────────────────────────────────────────────

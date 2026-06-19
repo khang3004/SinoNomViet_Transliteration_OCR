@@ -44,7 +44,7 @@ class TestAdaptiveHorizontalThreshold:
     """Tests for the AHT column-clustering algorithm."""
 
     def test_five_column_canonical(self) -> None:
-        """Prof. Dien's 5-column example produces 5 distinct columns."""
+        """The canonical 5-column example produces 5 distinct columns."""
         boxes = create_mock_ocr_response()
         columns, ordered = process_page_layout(boxes)
         assert len(columns) == 5

@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name        = "sinonom-ocr"
 version     = "0.1.0"
-description = "End-to-end NLP pipeline for historical SinoNom manuscripts — HCMUS NLP Project"
+description = "End-to-end NLP pipeline for historical SinoNom manuscripts"
 readme      = "README.md"
 license     = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -28,7 +28,7 @@ classifiers = [
   "Topic :: Text Processing :: Linguistic",
 ]
 authors = [
-  { name = "HCMUS NLP Team", email = "nlp@fit.hcmus.edu.vn" },
+  { name = "SinoNom OCR Contributors" },
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
