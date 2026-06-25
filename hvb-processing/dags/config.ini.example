@@ -1,0 +1,85 @@
+[paths]
+raw_dir = data/raw
+staging_dir = data/staging
+# Local dev: relative to dags/. K8s pods override via HVB_PATHS_OUTPUT_DIR=/tmp/hvb-output
+output_dir = data/output
+
+[minio]
+endpoint = http://minio.storage.svc.cluster.local:9000
+access_key = admin
+secret_key = kaizen123
+secure = false
+bucket_raw = hvb-raw
+bucket_output = hvb-ocr-result
+ocr_output_prefix = ocr
+bucket_airflow = airflow
+airflow_dags_prefix = hvb-processing
+raw_prefix = hvb_base/source
+pages_prefix = hvb_base/pages
+manifest_prefix = hvb_base/manifests
+
+# Cloud OCR — set keys here or via env HVB_<SECTION>_<KEY>
+[gemini]
+api_key =
+model = gemini-2.5-flash
+# Reduce tokens / burst: smaller image, retries with API backoff, pause between pages
+max_image_side = 1536
+max_retries = 6
+page_delay_sec = 20
+
+[openai]
+api_key =
+model = gpt-4o
+
+[google_vision]
+# Path to GCP service account JSON inside Airflow pod, or use GOOGLE_APPLICATION_CREDENTIALS
+credentials_json =
+
+# On-prem OCR services on K3s
+[paddle]
+service_url = http://hvb-paddle-ocr.ocr.svc.cluster.local:8080
+render_dpi = 400
+max_image_side = 3072
+metadata_fix_enabled = true
+# Paddle pod env: PADDLE_OCR_TIER=server|mobile, PADDLE_LATIN_ENABLED=true, PADDLE_LATIN_LANG=vi
+# PADDLE_PREPROCESS=clahe, PADDLE_MAX_IMAGE_SIDE=3072
+
+[ollama]
+# CPU-only post-process for Paddle metadata pages (safe with 1x GPU) / Refine metadata Paddle qua CPU
+enabled = true
+base_url = http://ollama.llm.svc.cluster.local:11434
+model = qwen2.5:3b
+metadata_max_page = 10
+timeout_sec = 120
+temperature = 0.1
+
+[kandianguji]
+service_url =
+api_key =
+
+# Vector search (Qdrant on K3s namespace qdrant)
+[qdrant]
+url = http://qdrant-nodeport.qdrant.svc.cluster.local:6333
+api_key =
+collection = hvb_database
+vector_size = 384
+distance = cosine
+
+[embedding]
+provider = fastembed
+# Must be a fastembed TextEmbedding model (384 dim keeps hvb_database collection unchanged)
+model = sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+passage_prefix =
+
+# HVB job pods (KubernetesPodOperator in orchestrator namespace)
+[kubernetes]
+namespace = orchestrator
+image = apache/airflow:2.10.5-python3.12
+init_image = minio/mc:latest
+service_account_name = default
+minio_secret_name = airflow-minio-secret
+ocr_secret_name = hvb-ocr-keys
+pod_cpu_request = 500m
+pod_cpu_limit = 2
+pod_memory_request = 1Gi
+pod_memory_limit = 4Gi
