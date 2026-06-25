@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ocr
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hvb-paddle-ocr
+  namespace: ocr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hvb-paddle-ocr
+  template:
+    metadata:
+      labels:
+        app: hvb-paddle-ocr
+    spec:
+      containers:
+        - name: paddle-ocr
+          image: python:3.10-slim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PADDLE_OCR_PORT
+              value: "8080"
+            - name: PADDLE_OCR_TIER
+              value: "server"
+            - name: PADDLE_LATIN_ENABLED
+              value: "true"
+            - name: PADDLE_LATIN_LANG
+              value: "vi"
+            - name: PADDLE_PREPROCESS
+              value: "clahe"
+            - name: PADDLE_MAX_IMAGE_SIDE
+              value: "3072"
+          command: ["/bin/bash", "/app/start.sh"]
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "8Gi"
+              cpu: "2"
+          volumeMounts:
+            - name: app-src
+              mountPath: /app
+            - name: paddlex-cache
+              mountPath: /root/.paddlex
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            failureThreshold: 120
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+      volumes:
+        - name: app-src
+          configMap:
+            name: hvb-paddle-ocr-app
+            defaultMode: 0755
+        - name: paddlex-cache
+          emptyDir:
+            sizeLimit: 3Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hvb-paddle-ocr
+  namespace: ocr
+spec:
+  selector:
+    app: hvb-paddle-ocr
+  ports:
+    - port: 8080
+      targetPort: 8080
