@@ -1,0 +1,30 @@
+# Local secrets and runtime artifacts / File secret và artifact runtime
+dags/config.ini
+dags/config.k3s-new
+.mc/
+
+# Python / Python cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local OCR outputs / Output OCR local
+data/raw/
+data/output/
+data/staging/
+scripts/data/output/
+scripts/data/staging/
+
+# Local environments and secrets / Môi trường local và secret
+.venv/
+venv/
+.env
+.env.*
+
+# Logs and temporary files / Log và file tạm
+*.log
+*.tmp
+tmp/
+
+# OS / Hệ điều hành
+.DS_Store
