@@ -125,10 +125,18 @@ def render_page(pdf_path: str, page_index: int = 0, dpi: int = 300):
     Raises:
         ImportError: if pdf2image/poppler is not installed (worker-only).
     """
+    import os
+
     from pdf2image import convert_from_path  # lazy: worker-only dependency
 
+    # Allow a portable poppler install (no admin) via POPPLER_PATH=<...>/bin.
+    poppler_path = os.environ.get("POPPLER_PATH", "").strip() or None
     pages = convert_from_path(
-        pdf_path, dpi=dpi, first_page=page_index + 1, last_page=page_index + 1
+        pdf_path,
+        dpi=dpi,
+        first_page=page_index + 1,
+        last_page=page_index + 1,
+        poppler_path=poppler_path,
     )
     if not pages:
         raise ValueError(f"Could not render page {page_index} of {pdf_path!r}")

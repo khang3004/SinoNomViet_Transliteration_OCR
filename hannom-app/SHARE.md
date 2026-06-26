@@ -17,39 +17,52 @@ All commands are PowerShell, run from the `hannom-app/` folder.
 
 ## 1. One-time install
 
-Install the CPU OCR stack (numpy pin order matters) + the app deps:
+> **Why a separate Python 3.11 env?** PaddleOCR/paddlepaddle have NO wheels for
+> very new Pythons (this project's `.venv` is 3.14). So the OCR worker runs in a
+> dedicated **Python 3.11** venv. Paddle's CPU wheels live on Paddle's own index,
+> not PyPI.
+
+Create the worker env and install the OCR stack (numpy pin order matters):
 
 ```powershell
 cd hannom-app
-uv pip install numpy==1.26.4
-uv pip install -r requirements-worker-cpu.txt
-uv pip install --force-reinstall numpy==1.26.4
-uv pip install fastapi "uvicorn[standard]" python-multipart
+uv venv --python 3.11 .venv-worker
+$PY = ".\.venv-worker\Scripts\python.exe"
+uv pip install --python $PY numpy==1.26.4
+uv pip install --python $PY --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/ --index-strategy unsafe-best-match paddlepaddle==2.6.1 paddleocr==2.8.1 pdfplumber==0.11.4 pdf2image==1.17.0 setuptools
+uv pip install --python $PY --force-reinstall numpy==1.26.4
 ```
+
+Install **poppler** (renders PDF pages for Han-side OCR) — portable, no admin.
+Download the latest zip from
+<https://github.com/oschwartz10612/poppler-windows/releases>, unzip it, and note
+the path to its `Library\bin` folder (used as `POPPLER_PATH` below).
 
 Install the tunnel tool (no account needed):
 
 ```powershell
-winget install --id Cloudflare.cloudflared
+winget install --id Cloudflare.cloudflared   # or download cloudflared.exe portably
 ```
 
 ## 2. Run it (three terminals)
 
-**Terminal 1 — worker (CPU OCR).** First run downloads the PaddleOCR models
-(a few hundred MB), so give it a minute:
+**Terminal 1 — worker (CPU OCR).** First run downloads the PaddleOCR models, so
+give it a minute. Set `POPPLER_PATH` to your unzipped poppler `Library\bin`:
 
 ```powershell
 cd hannom-app
-$env:DATA_DIR="./data"; $env:OCR_BACKEND="paddle"; $env:OCR_USE_GPU="0"; $env:TRANSLATE_BACKEND="skip"
-uv run python -m worker.worker
+$env:DATA_DIR="./data"; $env:OCR_BACKEND="paddle"; $env:OCR_USE_GPU="0"; $env:OCR_LANG="ch"; $env:TRANSLATE_BACKEND="skip"
+$env:POPPLER_PATH="$PWD\.tools\poppler-24.08.0\Library\bin"   # adjust to your poppler path
+.\.venv-worker\Scripts\python.exe -m worker.worker
 ```
 
-**Terminal 2 — web app** (bind 0.0.0.0 so the tunnel can reach it):
+**Terminal 2 — web app** (bind 0.0.0.0 so the tunnel can reach it). The app is
+light and runs fine in the main env:
 
 ```powershell
 cd hannom-app
 $env:DATA_DIR="./data"
-uv run python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+uv run --with fastapi --with "uvicorn[standard]" --with python-multipart python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 **Terminal 3 — public tunnel:**

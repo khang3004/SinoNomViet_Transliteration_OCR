@@ -6,6 +6,10 @@
 data/
 !data/.gitkeep
 
+# Local OCR worker env + portable poppler (not committed; see SHARE.md)
+.venv*/
+.tools/
+
 # Python
 __pycache__/
 *.py[cod]
