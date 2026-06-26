@@ -104,6 +104,21 @@ class JobStore:
             conn.execute("COMMIT;")
             return self._row_to_job(row, status=JobStatus.RUNNING.value, updated_at=now)
 
+    def requeue_running(self) -> int:
+        """Reset any ``running`` jobs back to ``pending`` and return the count.
+
+        With the single-worker model, any job still ``running`` when the worker
+        (re)starts was orphaned by a previous worker that died mid-job. Call this
+        at startup so such jobs are retried instead of stuck forever.
+        """
+        now = time.time()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE status = ?",
+                (JobStatus.PENDING.value, now, JobStatus.RUNNING.value),
+            )
+            return cur.rowcount
+
     def mark_done(self, job_id: int, output_path: str) -> None:
         self._update(job_id, JobStatus.DONE.value, output_path=output_path, error="")
 

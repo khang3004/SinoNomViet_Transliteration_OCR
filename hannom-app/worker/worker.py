@@ -60,6 +60,9 @@ def main() -> None:
     config.validate()  # fail fast if a selected api backend lacks its key
 
     store = JobStore(config.jobs_db)
+    requeued = store.requeue_running()
+    if requeued:
+        logger.info("Requeued %d orphaned 'running' job(s) from a prior worker.", requeued)
     logger.info("Polling for jobs every %.1fs …", POLL_INTERVAL_S)
     while True:
         try:
