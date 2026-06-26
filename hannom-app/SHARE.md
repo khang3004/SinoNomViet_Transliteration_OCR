@@ -51,7 +51,7 @@ give it a minute. Set `POPPLER_PATH` to your unzipped poppler `Library\bin`:
 
 ```powershell
 cd hannom-app
-$env:DATA_DIR="./data"; $env:OCR_BACKEND="paddle"; $env:OCR_USE_GPU="0"; $env:OCR_LANG="ch"; $env:TRANSLATE_BACKEND="skip"
+$env:DATA_DIR="./data"; $env:OCR_BACKEND="paddle"; $env:OCR_USE_GPU="0"; $env:OCR_LANG="chinese_cht"; $env:TRANSLATE_BACKEND="skip"
 $env:POPPLER_PATH="$PWD\.tools\poppler-24.08.0\Library\bin"   # adjust to your poppler path
 .\.venv-worker\Scripts\python.exe -m worker.worker
 ```

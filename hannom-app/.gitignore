@@ -1,6 +1,9 @@
 # Secrets — NEVER commit real keys (AGENTS.md §7). Only .env.example is tracked.
 .env
 *.key
+# The repo-root .gitignore has ".env.*" which also hides .env.example; keep the
+# placeholder template tracked (it has empty values only).
+!.env.example
 
 # Runtime state — lives in the mounted data/ volume, not in git/the image.
 data/
