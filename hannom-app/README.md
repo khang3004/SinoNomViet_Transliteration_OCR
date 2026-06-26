@@ -96,7 +96,8 @@ on the GTX 2060.
 | Env | Values | Default | Notes |
 | --- | --- | --- | --- |
 | `OCR_BACKEND` | paddle / vision / kandianguji / mock | `paddle` | paddle fits the 2060 |
-| `TRANSLATE_BACKEND` | api / offline | `api` | api = Gemini flash (cheap) |
+| `TRANSLATE_BACKEND` | api / offline / mock / skip | `api` | api = Gemini flash (cheap) |
+| `TRANSLATE_MODEL` | gemini model id | `gemini-2.0-flash` | used when backend=api |
 | `CORRECT_BACKEND` | skip / api / offline | `skip` | |
 | `QWEN_MODEL` | hf id | `Qwen2.5-3B-Instruct` | only if offline + bigger GPU |
 | `DSG_FFF` | str | `HVB_001` | work id |
@@ -104,6 +105,10 @@ on the GTX 2060.
 
 Translation defaults to the **API** because the 6 GB 2060 cannot host OCR + a
 3B LLM together; offline LLM translation stays behind a flag for bigger GPUs.
+The runner fills empty `meaning` fields via the selected translator (registry in
+`pipeline/translate/`: `api`=Gemini, `offline`=Qwen stub, `mock`=key-free
+placeholder, `skip`=no-op). Records that already carry a higher-trust meaning
+(two_column's `pdf_text`) are never overwritten.
 
 ### Secrets (AGENTS.md §7)
 
@@ -139,11 +144,22 @@ watermark-free); the Han (left) side is **image-based**. So (AGENTS.md §4):
    `TRÍCH YẾU` and `Công đồng …:` headings dropped from the parallel body.
 7. Han OCR post-filter drops low-confidence non-CJK tokens (watermark bleed).
 
+### Coordinate spaces (real PDF)
+
+The Vietnamese text layer comes back from pdfplumber in **PDF points** (72 dpi),
+but the Han OCR runs on a page **raster rendered at `PDF_DPI`** (e.g. 300). So
+`PageContext` scales the text spans by `PDF_DPI/72` into the raster's pixel space
+and crops/OCRs the Han left column at the same dpi — both sides share one
+coordinate system, so y-overlap pairing is exact. Rendering uses `pdf2image`
+(poppler / `pdftoppm`).
+
 > **Test-data note:** the repo has no real Châu bản PDF — only sample page
-> images (no text layer). All dev/testing uses MOCK text spans + MOCK Han OCR
-> (`tests/fixtures/mock_two_column.py`). The real text-layer path in
-> `pdf_text.py` / `runner.py` is marked `TODO(real-pdf)` and validated when a
-> genuine text-layer PDF is supplied.
+> images (no text layer). The two_column dry-run uses MOCK text spans + MOCK Han
+> OCR (`tests/fixtures/mock_two_column.py`); the real PDF code path (scale +
+> render + crop + OCR) is exercised by `tests/test_two_column_pdf.py` with the
+> poppler render / text-layer / OCR calls monkeypatched. Validate against a
+> genuine text-layer PDF (needs poppler + the OCR backend) when one is supplied —
+> see the `TODO(real-pdf)` markers.
 
 ---
 

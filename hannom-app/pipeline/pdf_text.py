@@ -68,11 +68,16 @@ def has_text_layer(pdf_path: str, page_index: int = 0, min_words: int = 5) -> bo
     return len(spans) >= min_words
 
 
-def extract_spans(pdf_path: str, page_index: int = 0) -> list[TextSpan]:
+def extract_spans(pdf_path: str, page_index: int = 0, scale: float = 1.0) -> list[TextSpan]:
     """Extract text-layer word spans from one PDF page.
 
     Uses pdfplumber's ``extract_words()``. ``pdfplumber`` is imported lazily so
     the lightweight ``app`` service (which never parses PDFs) need not install it.
+
+    pdfplumber yields coordinates in PDF points (72 dpi). Pass ``scale`` =
+    ``render_dpi / 72`` to convert spans into the SAME pixel space as a page
+    raster rendered at ``render_dpi`` (so the Vietnamese text layer and the Han
+    OCR crop share one coordinate system for y-overlap pairing).
 
     Returns:
         A list of :class:`TextSpan`, one per word, in PDF reading order.
@@ -89,10 +94,42 @@ def extract_spans(pdf_path: str, page_index: int = 0) -> list[TextSpan]:
             spans.append(
                 TextSpan(
                     text=w["text"],
-                    x0=float(w["x0"]),
-                    y0=float(w["top"]),
-                    x1=float(w["x1"]),
-                    y1=float(w["bottom"]),
+                    x0=float(w["x0"]) * scale,
+                    y0=float(w["top"]) * scale,
+                    x1=float(w["x1"]) * scale,
+                    y1=float(w["bottom"]) * scale,
                 )
             )
     return spans
+
+
+def page_size_points(pdf_path: str, page_index: int = 0) -> tuple[float, float]:
+    """Return (width, height) of a PDF page in points (72 dpi)."""
+    import pdfplumber  # lazy: worker-only dependency
+
+    with pdfplumber.open(pdf_path) as pdf:
+        page = pdf.pages[page_index]
+        return float(page.width), float(page.height)
+
+
+def render_page(pdf_path: str, page_index: int = 0, dpi: int = 300):
+    """Render one PDF page to a PIL image at ``dpi`` (for Han-side OCR).
+
+    Uses ``pdf2image`` (poppler / pdftoppm — the ``poppler-utils`` system package
+    in the worker image, AGENTS.md §10). Pixel coordinates of the returned raster
+    relate to PDF points by ``pixel = point * dpi / 72``.
+
+    Returns:
+        ``(pil_image, scale)`` where ``scale = dpi / 72``.
+
+    Raises:
+        ImportError: if pdf2image/poppler is not installed (worker-only).
+    """
+    from pdf2image import convert_from_path  # lazy: worker-only dependency
+
+    pages = convert_from_path(
+        pdf_path, dpi=dpi, first_page=page_index + 1, last_page=page_index + 1
+    )
+    if not pages:
+        raise ValueError(f"Could not render page {page_index} of {pdf_path!r}")
+    return pages[0], dpi / 72.0

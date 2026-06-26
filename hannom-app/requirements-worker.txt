@@ -10,6 +10,7 @@
 
 numpy==1.26.4
 pdfplumber==0.11.4
+pdf2image==1.17.0   # renders PDF pages via poppler (pdftoppm) for Han-side OCR
 Pillow==10.4.0
 
 # OCR engines (worker only). PaddleOCR is the default backend.

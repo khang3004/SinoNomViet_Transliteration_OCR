@@ -273,21 +273,24 @@ class TwoColumnHandler:
 
     # --- Han side ------------------------------------------------------
     def _han_detections(self, page_ctx: PageContext, split_x: float) -> list[dict]:
-        """OCR the left-column crop, or use injected mock detections."""
-        if page_ctx.mock_han_ocr is not None:
-            return list(page_ctx.mock_han_ocr)
-        if page_ctx.ocr_engine is None:
-            logger.warning("two_column: no OCR engine and no mock Han OCR; Han empty.")
-            return []
-        # TODO(real-pdf): render ONLY the left-column region [0, split_x] of the
-        # page to an image at config.pdf_dpi and OCR that crop, instead of the
-        # whole page. With a real text-layer PDF, split_x comes from the text
-        # span distribution above; we then crop the rendered page raster to the
-        # left of it. For now (sample image), OCR the whole image and rely on the
-        # left/right partition + watermark filter.
-        dets = page_ctx.ocr_engine.ocr(page_ctx.image_path)
-        # Keep only detections on the Han (left) side of the split.
-        return [d for d in dets if (d["bbox"][0] + d["bbox"][2]) / 2.0 < split_x or split_x == 0]
+        """Get Han detections for the left column (PageContext owns rendering).
+
+        For a real PDF, ``han_side_ocr`` renders the page at ``render_dpi`` and
+        OCRs only the ``[0, split_x]`` crop; ``split_x`` and the text spans are
+        in the SAME pixel space, so y-overlap pairing is consistent. For a plain
+        image, it OCRs the whole page and we keep the Han (left) side here.
+
+        TODO(real-pdf): validate end-to-end against a genuine text-layer Châu bản
+        PDF when one is available (the render + Paddle path needs poppler + GPU).
+        """
+        dets = page_ctx.han_side_ocr(split_x)
+        if page_ctx.pdf_path or page_ctx.mock_han_ocr is not None:
+            return dets  # already restricted to the Han column / mock
+        # Plain-image fallback: keep detections on the Han (left) side of split.
+        return [
+            d for d in dets
+            if split_x <= 0 or (d["bbox"][0] + d["bbox"][2]) / 2.0 < split_x
+        ]
 
     @staticmethod
     def _han_for_band(han_dets: list[dict], y0: float, y1: float) -> str:

@@ -89,15 +89,26 @@ def _process_image(image_path: str, doc: str, engine, config: Config) -> list[Re
 
 
 def _process_pdf(pdf_path: str, doc: str, engine, config: Config) -> list[Record]:
-    # TODO(real-pdf): iterate every page. Per page, render the Han-side crop at
-    # config.pdf_dpi for OCR and read the Vietnamese text layer via pdf_text.
-    # Validate against a real Châu bản text-layer PDF when one is added.
-    import pdfplumber  # lazy, worker-only
+    """Process every page of a real PDF.
 
-    all_records: list[Record] = []
+    Per page: the Vietnamese side comes from the text layer (scaled to render_dpi
+    pixel space) and the Han side from OCR of the left-column crop rendered at
+    config.pdf_dpi — both owned by PageContext so they stay coordinate-consistent.
+
+    TODO(real-pdf): validate against a genuine text-layer Châu bản PDF (needs
+    poppler for rendering + the OCR backend). The logic is exercised by
+    tests/test_two_column_pdf.py with the render/OCR/text-layer calls monkeypatched.
+    """
+    import pdfplumber  # lazy, worker-only
+    from pipeline.pdf_text import page_size_points
+
+    scale = config.pdf_dpi / 72.0
     with pdfplumber.open(pdf_path) as pdf:
         n = len(pdf.pages)
+
+    all_records: list[Record] = []
     for page_index in range(n):
+        width_pts, _h = page_size_points(pdf_path, page_index)
         ctx = PageContext(
             source_doc=doc,
             page=page_index + 1,
@@ -106,6 +117,8 @@ def _process_pdf(pdf_path: str, doc: str, engine, config: Config) -> list[Record
             pdf_page_index=page_index,
             ocr_engine=engine,
             config=config,
+            render_dpi=config.pdf_dpi,
+            page_width=width_pts * scale,  # pixel-space width at render_dpi
         )
         handler = layouts.route(ctx)
         all_records.extend(handler.extract(ctx))
