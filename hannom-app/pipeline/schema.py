@@ -54,6 +54,10 @@ class Record:
     page: int
     line_no: int
     han: str = ""
+    # Raw OCR Han before any correction pass; `han` holds the corrected text.
+    han_raw: str = ""
+    # Optional per-character OCR/correction confidence, aligned to `han`.
+    han_conf: list[float] = field(default_factory=list)
     phonetic: str = ""
     meaning: str = ""
     layout_type: str = ""

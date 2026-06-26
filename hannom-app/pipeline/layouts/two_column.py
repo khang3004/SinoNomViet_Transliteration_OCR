@@ -50,7 +50,24 @@ _META_LABELS: list[tuple[str, str]] = [
 
 # Headings to drop from the parallel (meaning) body.
 _HEADING_PREFIXES = ("TRÍCH YẾU",)
-_HEADING_REGEXES = (re.compile(r"^Công đồng\b.*:"),)  # "Công đồng truyền:" etc.
+# A STANDALONE "Công đồng truyền:" sub-heading (nothing after the colon) is
+# dropped; a "Công Đồng truyền: <content>" line is a body lead-in (kept).
+_STANDALONE_HEADING_RE = re.compile(r"^Công\s*[đĐ]ồng\b[^:：]*[:：]\s*$", re.IGNORECASE)
+
+# Body lead-in: the document-type that introduces the parallel body
+# ("Chiếu:", "Chỉ Dụ:", "Công Đồng truyền: …", "Sử:", "Tư:", …). The meaning
+# STARTS here (lead-in kept). Everything between the entry number and this line
+# is metadata.
+_BODY_LEADIN_RE = re.compile(
+    r"^(Chiếu|Chỉ\s*[Dd]ụ|Dụ|Sử|Tư|Truyền|Sai|Tấu|Phụng|Phê|Tư\s*di|"
+    r"Công\s*[đĐ]ồng\s+\S+)\s*[:：]",
+    re.IGNORECASE,
+)
+
+# Watermark/noise filter for the Vietnamese side (Bug 4). A "noise" token is a
+# short alphanumeric fragment mixing digits and letters ("2S", "3t", "2k") — the
+# text-layer twin of Han glyphs / watermark bleed — or a configured watermark.
+_NOISE_TOKEN_RE = re.compile(r"^(?=.*\d)(?=.*[A-Za-zÀ-ỹ])[\dA-Za-zÀ-ỹ]{1,3}$")
 
 _ENTRY_NO_RE = re.compile(r"^(\d{1,4})\.?$")
 # A line like "6 tháng 7 năm Gia Long 1" is a DATE, not an entry start.
@@ -88,15 +105,14 @@ _MAX_LEFT_FRAC = 0.45
 # Fallback Han|Vietnamese split as a fraction of page width when no clean gutter
 # is found (the Han column occupies roughly the left third of a Mục lục page).
 _LEFT_COL_FRAC = 0.35
-# Han OCR crop width as a fraction of page width. Wider than the text-layer split
-# because the Han IMAGE extends further right than its garbled text-layer twin;
-# Vietnamese latin caught by the wider crop is dropped by the CJK filter.
-_HAN_CROP_FRAC = 0.48
 
 # Symbols that almost never appear in real Vietnamese but riddle the mangled Han
 # OCR tokens (e.g. "2E]Í#:", "X#3e&H])L"). A token containing any of these is
 # treated as Han-OCR garbage and dropped from the Vietnamese side.
 _GARBAGE_CHARS = frozenset("#{}[]*&%~^<>|\\@=+")
+
+
+_VN_VOWELS = set("aàáảãạăắằẳẵặâấầẩẫậeèéẻẽẹêếềểễệiìíỉĩịoòóỏõọôốồổỗộơớờởỡợuùúủũụưứừửữựyỳýỷỹỵ")
 
 
 def _is_garbage_token(text: str) -> bool:
@@ -105,6 +121,29 @@ def _is_garbage_token(text: str) -> bool:
     if not t:
         return True
     return any(c in _GARBAGE_CHARS for c in t)
+
+
+def _is_vietnamese_word(text: str) -> bool:
+    """True if a token is a real Vietnamese word (≥2 letters incl. a vowel).
+
+    Used to locate the Vietnamese text column's left edge robustly, ignoring
+    entry numbers and Han-twin noise that share the left region.
+    """
+    t = text.strip()
+    letters = [c for c in t if c.isalpha()]
+    if len(letters) < 2:
+        return False
+    return any(c.lower() in _VN_VOWELS for c in letters)
+
+
+def _is_noise_token(text: str, watermark: "re.Pattern | None" = None) -> bool:
+    """True if a Vietnamese-side token is watermark/Han-twin noise (Bug 4)."""
+    t = text.strip()
+    if not t:
+        return True
+    if watermark is not None and watermark.search(t):
+        return True
+    return bool(_NOISE_TOKEN_RE.match(t))
 
 
 class TwoColumnHandler:
@@ -140,10 +179,15 @@ class TwoColumnHandler:
     def extract(self, page_ctx: PageContext) -> list[Record]:
         spans = page_ctx.text_spans()
         split_x = self._column_split_x(spans, page_ctx.page_width)
-        # Vietnamese column = right of the split, minus any mangled-Han garbage
-        # tokens that bled across (real OCR'd PDFs interleave them).
+        watermark = self._watermark_pattern()
+        # Vietnamese column = right of the split, minus mangled-Han garbage tokens
+        # and watermark/noise fragments ("2S", "3t") that bled into the text layer.
         right_spans = [
-            s for s in spans if s.cx >= split_x and not _is_garbage_token(s.text)
+            s
+            for s in spans
+            if s.cx >= split_x
+            and not _is_garbage_token(s.text)
+            and not _is_noise_token(s.text, watermark)
         ]
 
         # Step 3: group right-side spans into entries by entry numbers + y-bands.
@@ -152,22 +196,29 @@ class TwoColumnHandler:
             logger.warning("two_column.extract: no entries detected.")
             return []
 
-        # Han side: OCR the left-column crop. The Han IMAGE extends further right
-        # than its (garbled) text-layer twin, so the text-layer split is too
-        # narrow and would clip the right of each Han line. Crop wider — out to a
-        # fraction of the page — and rely on the CJK filter below to discard any
-        # Vietnamese latin that the wider crop picks up.
+        # Bug 1 — Han crop boundary. The Han crop must stop BEFORE the metadata /
+        # Vietnamese column: derive it from the text-layer span distribution (left
+        # edge of the Vietnamese text minus a small margin), not a fixed ratio.
         page_w = page_ctx.page_width or (max((s.x1 for s in spans), default=split_x))
-        han_crop_x = max(split_x, _HAN_CROP_FRAC * page_w)
+        han_crop_x = self._han_crop_x(spans, split_x)
         han_dets = self._han_detections(page_ctx, han_crop_x)
         # Step 6: drop watermark / noise tokens, then keep only CJK-majority
-        # detections (removes Latin label-bleed like "NgTaXuDe" that the OCR
-        # picks up at the crop's right edge).
+        # detections (removes any Latin label-bleed at the crop's right edge).
         han_dets = filter_han_detections(han_dets)
         han_dets = [d for d in han_dets if cjk_ratio(d.get("text", "")) >= 0.34]
 
+        # Bug 4 — record the ACTUAL Vietnamese provenance and log the path used.
+        used_text_layer = page_ctx.has_text_layer()
+        meaning_src = "pdf_text" if used_text_layer else "ocr"
+        logger.info(
+            "two_column page %s: Vietnamese via %s; Han crop x≤%.0f (page_w=%.0f)",
+            page_ctx.page,
+            "text-layer" if used_text_layer else "OCR-fallback",
+            han_crop_x,
+            page_w,
+        )
+
         image_name = self._image_name(page_ctx)
-        right_edge = page_w
         records: list[Record] = []
         for line_no, entry in enumerate(entries, start=1):
             y0, y1 = entry["y0"], entry["y1"]
@@ -175,10 +226,10 @@ class TwoColumnHandler:
             han_text = self._han_for_band(han_dets, y0, y1)
             # Step 5: parse metadata + build the parallel body (meaning).
             meta, meaning = self._parse_entry_body(entry["lines"])
-            # Block regions on the page image: Han (left of split), Vietnamese
-            # (right of split), spanning this entry's y-band.
-            han_bbox = [0.0, y0, split_x, y1]
-            meaning_bbox = [split_x, y0, right_edge, y1]
+            # Block regions: the Han/Vietnamese boundary is the tightened crop x,
+            # so the Han box no longer overlaps the metadata column.
+            han_bbox = [0.0, y0, han_crop_x, y1]
+            meaning_bbox = [han_crop_x, y0, page_w, y1]
 
             rec = Record(
                 id=self._record_id(page_ctx, line_no),
@@ -189,18 +240,62 @@ class TwoColumnHandler:
                 entry_meta=meta,
                 image_path=image_name,
                 han=han_text,
+                han_raw=han_text,  # correction pass (runner) may overwrite han
                 phonetic="",  # this layout has no phonetic (AGENTS.md §5)
                 meaning=meaning,
                 han_chars=list(han_text),
                 phonetic_per_char=[],
                 layout_type=self.name,
-                source_of=SourceOf(han="ocr", phonetic="", meaning="pdf_text"),
+                source_of=SourceOf(han="ocr", phonetic="", meaning=meaning_src),
                 review_status="pending",
                 han_bbox=han_bbox,
                 meaning_bbox=meaning_bbox,
             )
             records.append(rec)
         return records
+
+    @staticmethod
+    def _watermark_pattern() -> "re.Pattern | None":
+        import os
+
+        pat = os.environ.get("WATERMARK_PATTERN", "").strip()
+        if not pat:
+            return None
+        try:
+            return re.compile(pat, re.IGNORECASE)
+        except re.error:
+            logger.warning("Invalid WATERMARK_PATTERN %r; ignoring.", pat)
+            return None
+
+    def _han_crop_x(self, spans: list[TextSpan], split_x: float) -> float:
+        """Bug 1: tight Han|Vietnamese boundary from the text-layer distribution.
+
+        Set it just left of the minimum x0 of Vietnamese TEXT spans (real words)
+        — but only those RIGHT of the column split, so garbled Han-twin tokens in
+        the low-x region don't pull the boundary into the Han image. This keeps
+        the Han OCR crop clear of the metadata column. Warn if the boundary still
+        overlaps any metadata span.
+        """
+        vn_x0s = [
+            s.x0 for s in spans if _is_vietnamese_word(s.text) and s.x0 > split_x
+        ]
+        if not vn_x0s:
+            return split_x
+        heights = sorted((s.y1 - s.y0) for s in spans if s.y1 > s.y0)
+        margin = heights[len(heights) // 2] if heights else 10.0
+        crop_x = max(min(vn_x0s) - margin, 0.0)
+
+        meta_x0s = [
+            s.x0 for s in spans if self._match_meta_label(s.text.strip()) is not None
+        ]
+        if meta_x0s and crop_x > min(meta_x0s):
+            logger.warning(
+                "two_column: Han crop right edge %.0f overlaps metadata column "
+                "(left=%.0f); metadata glyphs may leak into Han OCR.",
+                crop_x,
+                min(meta_x0s),
+            )
+        return crop_x
 
     # ------------------------------------------------------------------
     # helpers
@@ -350,25 +445,30 @@ class TwoColumnHandler:
         return out
 
     def _parse_entry_body(self, lines: list[str]) -> tuple[EntryMeta, str]:
-        """Step 5: split an entry's lines into metadata + parallel body.
+        """Step 5: split an entry's lines into metadata + parallel body (Bug 2).
 
-        Metadata lines (Ngày:/Tờ-Tập:/…) populate EntryMeta. Heading lines
-        (TRÍCH YẾU, "Công đồng …:") are dropped. Everything else is the meaning.
+        Structure of a Châu bản entry:
+            <entry no> <date> <Loại> <Xuất xứ> <Đề tài> [TRÍCH YẾU] <body lead-in>…
+
+        Everything between the entry number and the document-type body lead-in
+        ("Chiếu:", "Chỉ Dụ:", "Công Đồng truyền: …") is METADATA → ``entry_meta``.
+        The body (``meaning``) STARTS at the lead-in and the lead-in is KEPT
+        (consistent choice). Metadata may be labelled (Ngày:/Tờ-Tập:/Loại:/
+        Xuất xứ:/Đề tài:) or POSITIONAL (e.g. "Đại Nội" = origin, "Tập hợp…" =
+        topic) — both are removed from ``meaning``. Standalone headings
+        (TRÍCH YẾU, bare "Công đồng truyền:") are dropped.
         """
         meta = EntryMeta()
-        body_parts: list[str] = []
+        others: list[str] = []  # unlabelled, non-heading lines, in order
         for raw in lines:
             line = raw.strip()
             if not line:
                 continue
-            # A bare Vietnamese date line → ngay (real Mục lục positional date).
-            if _DATE_LINE_RE.match(line):
+            if _DATE_LINE_RE.match(line):  # positional date → ngay
                 if not meta.ngay:
                     meta.ngay = line
                 continue
-            # "Loại:" may appear inline after the entry number ("; 11 Loại: Chiếu")
-            # or at line start; capture its value and drop the line from meaning.
-            if re.search(r"\bLoại\s*[:：]", line):
+            if re.search(r"\bLoại\s*[:：]", line):  # inline/labelled Loại
                 mv = _LOAI_VALUE_RE.search(line)
                 if mv and not meta.loai:
                     meta.loai = mv.group(1).strip()
@@ -380,11 +480,24 @@ class TwoColumnHandler:
                 if not getattr(meta, fld):
                     setattr(meta, fld, value)
                 continue
-            if self._is_heading(line):
+            if self._is_heading(line):  # TRÍCH YẾU / bare "Công đồng truyền:"
                 continue
-            body_parts.append(line)
-        meaning = " ".join(body_parts).strip()
-        meaning = re.sub(r"\s{2,}", " ", meaning)
+            others.append(line)
+
+        # Find the body lead-in; everything before it is positional metadata.
+        lead_idx = next(
+            (i for i, ln in enumerate(others) if _BODY_LEADIN_RE.match(ln)), None
+        )
+        if lead_idx is not None:
+            pre, body_parts = others[:lead_idx], others[lead_idx:]
+            if pre and not meta.xuat_xu:
+                meta.xuat_xu = pre[0]
+            if len(pre) > 1 and not meta.de_tai:
+                meta.de_tai = " ".join(pre[1:])
+        else:
+            body_parts = others  # no lead-in → all remaining lines are the body
+
+        meaning = re.sub(r"\s{2,}", " ", " ".join(body_parts).strip())
         return meta, meaning
 
     @staticmethod
@@ -396,9 +509,12 @@ class TwoColumnHandler:
 
     @staticmethod
     def _is_heading(line: str) -> bool:
+        """Standalone headings dropped from the body (TRÍCH YẾU, bare
+        "Công đồng truyền:"). A "Công Đồng truyền: <content>" line is NOT a
+        heading — it is the body lead-in (handled by _BODY_LEADIN_RE)."""
         if any(line.startswith(p) for p in _HEADING_PREFIXES):
             return True
-        return any(rx.match(line) for rx in _HEADING_REGEXES)
+        return bool(_STANDALONE_HEADING_RE.match(line))
 
     # --- Han side ------------------------------------------------------
     def _han_detections(self, page_ctx: PageContext, split_x: float) -> list[dict]:

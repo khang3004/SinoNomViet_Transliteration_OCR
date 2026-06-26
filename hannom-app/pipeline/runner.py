@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import os
 
-from pipeline import layouts, ocr, translate
+from pipeline import correct, layouts, ocr, translate
 from pipeline.config import Config
 from pipeline.page_context import PageContext
 from pipeline.schema import Record, write_jsonl
@@ -43,11 +43,39 @@ def process_file(input_path: str, output_path: str, config: Config, source_doc: 
     else:
         raise ValueError(f"Unsupported input type: {ext!r}")
 
+    _apply_correction(records, config)  # Bug 3: optional Han OCR proofreading
     _apply_translation(records, config)
 
     write_jsonl(records, output_path)
     logger.info("Wrote %d record(s) → %s", len(records), output_path)
     return records
+
+
+def _apply_correction(records: list[Record], config: Config) -> None:
+    """Bug 3: correct the Han column via the selected CORRECT_BACKEND.
+
+    Default ``skip`` is a no-op (``han`` == ``han_raw``). Otherwise the corrected
+    text goes to ``han`` while ``han_raw`` keeps the original OCR so reviewers can
+    see what changed.
+    """
+    if config.correct_backend == "skip":
+        return
+    targets = [r for r in records if r.han.strip()]
+    if not targets:
+        return
+    corrector = correct.get_corrector(config)
+    logger.info(
+        "Correcting Han for %d record(s) with backend %r.",
+        len(targets),
+        config.correct_backend,
+    )
+    for rec in targets:
+        if not rec.han_raw:
+            rec.han_raw = rec.han
+        fixed = corrector.correct(rec.han_raw)
+        if fixed and fixed != rec.han:
+            rec.han = fixed
+            rec.han_chars = list(fixed)
 
 
 def _apply_translation(records: list[Record], config: Config) -> None:
