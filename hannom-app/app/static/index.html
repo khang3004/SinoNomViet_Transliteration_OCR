@@ -35,6 +35,13 @@
     .meta { padding: 0 0.9rem 0.6rem; font-size: 0.8rem; color: #444; }
     .meta b { color: #000; }
     .empty { color: #aaa; font-style: italic; }
+
+    /* side-by-side: source page image | extracted records */
+    .page-row { display: grid; grid-template-columns: minmax(260px, 40%) 1fr; gap: 1rem; margin: 1.25rem 0; align-items: start; }
+    .page-img { position: sticky; top: 0.5rem; }
+    .page-img img { width: 100%; border: 1px solid #ddd; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    .page-label { font-size: 0.78rem; color: #777; margin-bottom: 0.3rem; }
+    @media (max-width: 720px) { .page-row { grid-template-columns: 1fr; } .page-img { position: static; } }
   </style>
 </head>
 <body>
@@ -79,32 +86,60 @@
 
     function esc(s) { return (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
+    // HTML for one record card (parallel Han↔Vietnamese + metadata).
+    function recordCardHTML(r) {
+      const m = r.entry_meta || {};
+      const metaRows = [
+        ['Ngày', m.ngay], ['Tờ/Tập', m.to_tap], ['Loại', m.loai],
+        ['Xuất xứ', m.xuat_xu], ['Đề tài', m.de_tai],
+      ].filter(([, v]) => v).map(([k, v]) => `<b>${k}:</b> ${esc(v)}`).join(' &nbsp;·&nbsp; ');
+      const src = r.source_of || {};
+      const meaning = r.meaning ? esc(r.meaning) : '<span class="empty">(no meaning)</span>';
+      return `
+        <div class="rec">
+          <div class="rec-head">
+            ${r.entry_no != null ? `<span class="badge">entry ${esc(r.entry_no)}</span>` : ''}
+            <span class="badge grey">${esc(r.layout_type)}</span>
+            ${src.meaning ? `<span class="badge green">meaning: ${esc(src.meaning)}</span>` : ''}
+            <span class="muted">${esc(r.id)}</span>
+          </div>
+          <div class="rec-body">
+            <div class="han">${esc(r.han) || '<span class="empty">(no han)</span>'}</div>
+            <div class="meaning">${meaning}</div>
+          </div>
+          ${metaRows ? `<div class="meta">${metaRows}</div>` : ''}
+        </div>`;
+    }
+
+    function recordsHTML(records) {
+      return records.map(recordCardHTML).join('');
+    }
+
     // Render an array of records into `container` as parallel Han↔Vietnamese cards.
     function renderRecords(records, container) {
+      container.innerHTML = (records && records.length)
+        ? recordsHTML(records) : '<p class="muted">No records.</p>';
+    }
+
+    // Render records grouped by page, each page's SOURCE IMAGE beside its records.
+    function renderJobPages(records, container) {
       if (!records || !records.length) { container.innerHTML = '<p class="muted">No records.</p>'; return; }
-      container.innerHTML = records.map(r => {
-        const m = r.entry_meta || {};
-        const metaRows = [
-          ['Ngày', m.ngay], ['Tờ/Tập', m.to_tap], ['Loại', m.loai],
-          ['Xuất xứ', m.xuat_xu], ['Đề tài', m.de_tai],
-        ].filter(([, v]) => v).map(([k, v]) => `<b>${k}:</b> ${esc(v)}`).join(' &nbsp;·&nbsp; ');
-        const src = r.source_of || {};
-        const meaning = r.meaning ? esc(r.meaning) : '<span class="empty">(no meaning)</span>';
-        return `
-          <div class="rec">
-            <div class="rec-head">
-              ${r.entry_no != null ? `<span class="badge">entry ${esc(r.entry_no)}</span>` : ''}
-              <span class="badge grey">${esc(r.layout_type)}</span>
-              ${src.meaning ? `<span class="badge green">meaning: ${esc(src.meaning)}</span>` : ''}
-              <span class="muted">${esc(r.id)}</span>
-            </div>
-            <div class="rec-body">
-              <div class="han">${esc(r.han) || '<span class="empty">(no han)</span>'}</div>
-              <div class="meaning">${meaning}</div>
-            </div>
-            ${metaRows ? `<div class="meta">${metaRows}</div>` : ''}
-          </div>`;
-      }).join('');
+      const byPage = new Map();
+      for (const r of records) {
+        if (!byPage.has(r.page)) byPage.set(r.page, { img: r.image_path, recs: [] });
+        byPage.get(r.page).recs.push(r);
+      }
+      let html = '';
+      for (const [page, info] of [...byPage.entries()].sort((a, b) => a[0] - b[0])) {
+        const img = info.img
+          ? `<img src="/pages/${encodeURIComponent(info.img)}" alt="page ${page}" onerror="this.replaceWith(Object.assign(document.createElement('p'),{className:'muted',textContent:'(source image unavailable)'}))"/>`
+          : '<p class="muted">(no source image)</p>';
+        html += `<div class="page-row">
+          <div class="page-img"><div class="page-label">page ${page} — ${esc(info.img || '')}</div>${img}</div>
+          <div class="page-recs">${recordsHTML(info.recs)}</div>
+        </div>`;
+      }
+      container.innerHTML = html;
     }
 
     async function runDemo() {
@@ -123,9 +158,9 @@
       try {
         const r = await fetch('/jobs/' + id + '/records');
         const j = await r.json();
-        out.innerHTML = '<h2>Job #' + id + ' records</h2>';
+        out.innerHTML = '<h2>Job #' + id + ' — source page ↔ records</h2>';
         const div = document.createElement('div'); out.appendChild(div);
-        renderRecords(j.records, div);
+        renderJobPages(j.records, div);
       } catch (err) { out.innerHTML = '<p class="muted">Could not load records: ' + esc(err) + '</p>'; }
     }
 

@@ -106,6 +106,18 @@ def get_records(job_id: int) -> dict:
     return {"job_id": job_id, "records": records}
 
 
+@app.get("/pages/{filename}")
+def get_page_image(filename: str):
+    """Serve a rendered PDF page image (or an uploaded image) for side-by-side
+    review. Looks in data/output/pages first, then data/uploads."""
+    safe = os.path.basename(filename)  # prevent path traversal
+    for base in (os.path.join(config.output_dir, "pages"), config.uploads_dir):
+        path = os.path.join(base, safe)
+        if os.path.exists(path):
+            return FileResponse(path)
+    raise HTTPException(status_code=404, detail="page image not found")
+
+
 @app.get("/demo/two_column")
 def demo_two_column() -> dict:
     """Run the PRIMARY two_column extraction on synthetic mock data (no GPU/PDF).

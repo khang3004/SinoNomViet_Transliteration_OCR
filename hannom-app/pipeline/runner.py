@@ -37,7 +37,7 @@ def process_file(input_path: str, output_path: str, config: Config, source_doc: 
 
     records: list[Record] = []
     if ext == ".pdf":
-        records = _process_pdf(input_path, doc, engine, config)
+        records = _process_pdf(input_path, doc, engine, config, output_path)
     elif ext in _IMAGE_EXTS:
         records = _process_image(input_path, doc, engine, config)
     else:
@@ -88,7 +88,7 @@ def _process_image(image_path: str, doc: str, engine, config: Config) -> list[Re
     return handler.extract(ctx)
 
 
-def _process_pdf(pdf_path: str, doc: str, engine, config: Config) -> list[Record]:
+def _process_pdf(pdf_path: str, doc: str, engine, config: Config, output_path: str) -> list[Record]:
     """Process every page of a real PDF.
 
     Per page: the Vietnamese side comes from the text layer (scaled to render_dpi
@@ -100,29 +100,47 @@ def _process_pdf(pdf_path: str, doc: str, engine, config: Config) -> list[Record
     tests/test_two_column_pdf.py with the render/OCR/text-layer calls monkeypatched.
     """
     import pdfplumber  # lazy, worker-only
-    from pipeline.pdf_text import page_size_points
+    from pipeline.pdf_text import render_page
 
-    scale = config.pdf_dpi / 72.0
     with pdfplumber.open(pdf_path) as pdf:
         n = len(pdf.pages)
 
+    # Save rendered page images so the UI can show the source page next to its
+    # extracted records. Named by the output stem so they're unique per job.
+    pages_dir = os.path.join(config.output_dir, "pages")
+    os.makedirs(pages_dir, exist_ok=True)
+    stem = _safe_stem(output_path)
+
     all_records: list[Record] = []
     for page_index in range(n):
-        width_pts, _h = page_size_points(pdf_path, page_index)
+        # Rasterise the page ONCE: saved for the UI and reused for Han OCR.
+        image, _scale = render_page(pdf_path, page_index, config.pdf_dpi)
+        img_name = f"{stem}_p{page_index + 1:04d}.png"
+        image.save(os.path.join(pages_dir, img_name))
+
         ctx = PageContext(
             source_doc=doc,
             page=page_index + 1,
-            image_path="",
+            image_path=img_name,  # filename the UI fetches from /pages/
             pdf_path=pdf_path,
             pdf_page_index=page_index,
             ocr_engine=engine,
             config=config,
             render_dpi=config.pdf_dpi,
-            page_width=width_pts * scale,  # pixel-space width at render_dpi
+            page_width=float(image.width),
+            prerendered_image=image,
         )
         handler = layouts.route(ctx)
         all_records.extend(handler.extract(ctx))
     return all_records
+
+
+def _safe_stem(output_path: str) -> str:
+    """ASCII-safe, URL-safe stem derived from the output file name."""
+    import re
+
+    base = os.path.splitext(os.path.basename(output_path))[0]
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", base)[:80] or "page"
 
 
 def _infer_source_doc(path: str) -> str:

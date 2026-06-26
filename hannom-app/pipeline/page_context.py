@@ -47,6 +47,10 @@ class PageContext:
     # MOCK Han OCR result injection — list of {text, bbox, conf}. When set, the
     # handler uses it instead of calling the real OCR engine.
     mock_han_ocr: list[dict] | None = field(default=None)
+    # Optional pre-rendered full page image (PIL.Image). When the runner has
+    # already rasterised the PDF page (e.g. to save it for the UI), it passes it
+    # here so the Han crop reuses it instead of rendering the page twice.
+    prerendered_image: object | None = field(default=None)
 
     # ------------------------------------------------------------------
     @property
@@ -104,7 +108,12 @@ class PageContext:
         backend are installed.
         """
         try:
-            image, _scale = render_page(self.pdf_path, self.pdf_page_index, self.render_dpi)
+            if self.prerendered_image is not None:
+                image = self.prerendered_image
+            else:
+                image, _scale = render_page(
+                    self.pdf_path, self.pdf_page_index, self.render_dpi
+                )
             crop_x = max(int(split_x), 1)
             crop = image.crop((0, 0, min(crop_x, image.width), image.height))
             # Save the crop to the work dir and OCR by path (works for every engine).
