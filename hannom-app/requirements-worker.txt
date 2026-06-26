@@ -1,0 +1,23 @@
+# worker service — OCR (GPU) + PDF text-layer extraction (AGENTS.md §10).
+#
+# numpy is pinned to 1.26.4 and MUST be installed first, then deps, then
+# force-reinstalled last (PaddleOCR drags in a newer numpy that breaks Paddle).
+# See Dockerfile.worker for the exact ordered install.
+#
+# PDF text layer: pdfplumber (chosen over pymupdf — see pipeline/pdf_text.py for
+# the justification: extract_words() already yields per-word top-left pixel boxes,
+# pure-Python, no surprising system libs in the slim image).
+
+numpy==1.26.4
+pdfplumber==0.11.4
+Pillow==10.4.0
+
+# OCR engines (worker only). PaddleOCR is the default backend.
+paddleocr==2.8.1
+paddlepaddle-gpu==2.6.1   # GPU build for the GTX 2060; swap to paddlepaddle for CPU-only
+
+# Optional: Google Cloud Vision (only if OCR_BACKEND=vision)
+# google-cloud-vision==3.7.4
+
+# Optional: Gemini translation client (TRANSLATE_BACKEND=api)
+google-generativeai==0.8.3
