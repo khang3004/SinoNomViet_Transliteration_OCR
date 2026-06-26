@@ -33,15 +33,19 @@ from pipeline.schema import EntryMeta, Record, SourceOf
 
 logger = logging.getLogger("hannom.layouts.two_column")
 
-# Labels that introduce metadata lines, mapped to EntryMeta fields.
-# Order matters: longer/more-specific labels first.
+# Labels that introduce metadata lines (at line start), mapped to EntryMeta
+# fields. Order matters: longer/more-specific labels first. Includes common OCR
+# variants ("Để tài" for "Đề tài", "TờITập" for "Tờ/Tập", "Xuấtxứ"). ``Loại`` is
+# handled separately (it appears inline after the entry number).
 _META_LABELS: list[tuple[str, str]] = [
     ("Tờ/Tập:", "to_tap"),
     ("Tờ/ Tập:", "to_tap"),
+    ("TờITập:", "to_tap"),
     ("Xuất xứ:", "xuat_xu"),
+    ("Xuấtxứ:", "xuat_xu"),
     ("Đề tài:", "de_tai"),
+    ("Để tài:", "de_tai"),
     ("Ngày:", "ngay"),
-    ("Loại:", "loai"),
 ]
 
 # Headings to drop from the parallel (meaning) body.
@@ -51,6 +55,16 @@ _HEADING_REGEXES = (re.compile(r"^Công đồng\b.*:"),)  # "Công đồng truy�
 _ENTRY_NO_RE = re.compile(r"^(\d{1,4})\.?$")
 # A line like "6 tháng 7 năm Gia Long 1" is a DATE, not an entry start.
 _DATE_AFTER_NUM_RE = re.compile(r"^\d{1,4}\s+(tháng|năm|nhuận)\b", re.IGNORECASE)
+# A standalone Vietnamese date line ("6 tháng 7 năm Gia Long 1") — on real Mục
+# lục pages each entry BEGINS with one, so it is the reliable entry anchor.
+_DATE_LINE_RE = re.compile(r"^\s*\d{1,3}\s+tháng\b.*\bnăm\b", re.IGNORECASE)
+# The entry number sits right before "Loại:" — e.g. "; 11 Loại: Chiếu" → 11.
+_NUM_LOAI_RE = re.compile(r"(\d{1,4})\s+Loại\s*[:：]", re.IGNORECASE)
+# Value after "Loại:", up to the next label keyword or end of line.
+_LOAI_VALUE_RE = re.compile(
+    r"Loại\s*[:：]\s*(.+?)(?:\s+(?:Xuất|Xuấtxứ|Đề|Để|Tờ|TờI|Công|Ngày)\b|$)",
+    re.IGNORECASE,
+)
 
 # Label/heading keywords unique to the Châu bản "Mục lục" format. Used by
 # detect() as a fingerprint (tolerant of OCR typos like "Để tài" for "Đề tài").
@@ -66,8 +80,14 @@ _FINGERPRINT = (
     "Ngày:",
 )
 
-# Minimum spans in the left cluster to treat it as a real (Han-garbage) column.
+# Minimum spans in the left cluster to treat it as a real (Han-garbage) column,
+# and the maximum fraction of all spans it may hold (the Han column is always a
+# minority — a larger left side means the gap is inside the Vietnamese column).
 _MIN_LEFT_COL = 6
+_MAX_LEFT_FRAC = 0.45
+# Fallback Han|Vietnamese split as a fraction of page width when no clean gutter
+# is found (the Han column occupies roughly the left third of a Mục lục page).
+_LEFT_COL_FRAC = 0.35
 
 # Symbols that almost never appear in real Vietnamese but riddle the mangled Han
 # OCR tokens (e.g. "2E]Í#:", "X#3e&H])L"). A token containing any of these is
@@ -115,7 +135,7 @@ class TwoColumnHandler:
     # ------------------------------------------------------------------
     def extract(self, page_ctx: PageContext) -> list[Record]:
         spans = page_ctx.text_spans()
-        split_x = self._column_split_x(spans)
+        split_x = self._column_split_x(spans, page_ctx.page_width)
         # Vietnamese column = right of the split, minus any mangled-Han garbage
         # tokens that bled across (real OCR'd PDFs interleave them).
         right_spans = [
@@ -130,8 +150,11 @@ class TwoColumnHandler:
 
         # Han side: OCR the left-column crop (mocked in dev/testing).
         han_dets = self._han_detections(page_ctx, split_x)
-        # Step 6: drop watermark / noise tokens.
+        # Step 6: drop watermark / noise tokens, then keep only CJK-majority
+        # detections (removes Latin label-bleed like "NgTaXuDe" that the OCR
+        # picks up at the crop's right edge).
         han_dets = filter_han_detections(han_dets)
+        han_dets = [d for d in han_dets if cjk_ratio(d.get("text", "")) >= 0.34]
 
         image_name = self._image_name(page_ctx)
         records: list[Record] = []
@@ -146,7 +169,7 @@ class TwoColumnHandler:
                 source_doc=page_ctx.source_doc,
                 page=page_ctx.page,
                 line_no=line_no,
-                entry_no=entry["entry_no"],
+                entry_no=self._resolve_entry_no(entry),
                 entry_meta=meta,
                 image_path=image_name,
                 han=han_text,
@@ -165,7 +188,7 @@ class TwoColumnHandler:
     # helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _column_split_x(spans: list[TextSpan]) -> float:
+    def _column_split_x(spans: list[TextSpan], page_width: float | None = None) -> float:
         """Step 2: derive the Han|Vietnamese split x from the span distribution.
 
         Two real cases:
@@ -188,22 +211,34 @@ class TwoColumnHandler:
         left_edge = x0s[0]
         clean_split = max(left_edge - margin, 0.0)
 
-        # Look for the widest gap in the central band [10%, 60%] of the x-range.
-        span_range = x0s[-1] - x0s[0]
-        if span_range <= 0:
-            return clean_split
-        lo, hi = x0s[0] + 0.10 * span_range, x0s[0] + 0.60 * span_range
-        best_gap, best_mid = 0.0, clean_split
-        for a, b in zip(x0s, x0s[1:]):
-            if a < lo or b > hi:
+        # Find the gap separating the sparse left (Han-garbage) cluster from the
+        # dense Vietnamese column. The Han column is always a MINORITY of the
+        # text-layer spans, so we only accept a gap whose left side holds between
+        # ``_MIN_LEFT_COL`` and ``_MAX_LEFT_FRAC`` of all spans — this prevents
+        # the split from landing in the middle of the Vietnamese column (the
+        # per-page instability that previously yielded empty Han crops). Among
+        # qualifying gaps, take the widest (the true gutter).
+        n = len(x0s)
+        best_gap, best_mid = 0.0, None
+        for i in range(1, n):
+            a, b = x0s[i - 1], x0s[i]
+            gap = b - a
+            if gap <= 2.0 * margin:
                 continue
-            if (b - a) > best_gap:
-                best_gap, best_mid = b - a, (a + b) / 2.0
-        # Use the gap split only if a real left column sits to its left and the
-        # gap is meaningfully wider than a glyph (a true gutter, not indentation).
-        left_count = sum(1 for x in x0s if x < best_mid)
-        if left_count >= _MIN_LEFT_COL and best_gap > 2.0 * margin:
+            left_count = i  # spans strictly left of this gap
+            if left_count < _MIN_LEFT_COL or left_count > _MAX_LEFT_FRAC * n:
+                continue
+            if gap > best_gap:
+                best_gap, best_mid = gap, (a + b) / 2.0
+        if best_mid is not None:
             return best_mid
+        # No clean gutter found. On these uniformly-formatted Mục lục pages the
+        # Han column occupies the left ~third, so fall back to a fraction of the
+        # page width (the Han-garbage left edge alone, ``clean_split``, is useless
+        # because ``min x0`` is itself garbage). Pure clean_split only when the
+        # page width is unknown (idealized/mock pages with no left garbage).
+        if page_width:
+            return _LEFT_COL_FRAC * page_width
         return clean_split
 
     def _group_entries(self, right_spans: list[TextSpan], split_x: float) -> list[dict]:
@@ -216,37 +251,51 @@ class TwoColumnHandler:
         if not lines:
             return []
 
-        # An entry starts at a line whose left-most token is a bare entry number
-        # — but NOT a date ("6 tháng 7 năm …"), where the number is followed by a
-        # date word. That date-guard avoids treating every "Ngày:" date as a new
-        # entry on real Mục lục pages.
+        # Pick ONE anchor mode per page so the two formats don't fragment each
+        # other:
+        #  * date mode (real Mục lục): each entry BEGINS with a Vietnamese date
+        #    line ("6 tháng 7 năm Gia Long 1"); the entry number sits inline
+        #    before "Loại:". Used whenever the page has such date lines.
+        #  * bare-number mode (idealized/mock): each entry begins with a bare
+        #    number line. Used when there are no bare date lines.
+        date_mode = any(_DATE_LINE_RE.match(t) for (t, *_rest) in lines)
+
         entries: list[dict] = []
         current: dict | None = None
         for text, ly0, ly1, leftmost in lines:
-            m = _ENTRY_NO_RE.match(leftmost.strip())
-            starts_entry = m is not None and not _DATE_AFTER_NUM_RE.match(text.strip())
-            if starts_entry:
+            t = text.strip()
+            if date_mode:
+                starts = bool(_DATE_LINE_RE.match(t))
+                hint = None
+            else:
+                m_num = _ENTRY_NO_RE.match(leftmost.strip())
+                starts = m_num is not None and not _DATE_AFTER_NUM_RE.match(t)
+                hint = int(m_num.group(1)) if starts else None
+            if starts:
                 if current is not None:
                     entries.append(current)
-                current = {
-                    "entry_no": int(m.group(1)),
-                    "y0": ly0,
-                    "y1": ly1,
-                    "lines": [],
-                }
-                # The remainder of the number line (after the number) is body text.
-                remainder = text.strip()
-                # strip the leading number token only
-                remainder = re.sub(r"^\d{1,4}\.?\s*", "", remainder)
-                if remainder:
-                    current["lines"].append(remainder)
+                current = {"y0": ly0, "y1": ly1, "lines": [], "entry_no_hint": hint}
+                if hint is not None:  # bare-number mode: drop the leading number
+                    remainder = re.sub(r"^\d{1,4}\.?\s*", "", t)
+                    if remainder:
+                        current["lines"].append(remainder)
+                else:  # date mode: keep the date line (→ ngay)
+                    current["lines"].append(t)
             elif current is not None:
                 current["y1"] = ly1
-                current["lines"].append(text.strip())
-            # lines before the first entry number (page title etc.) are ignored.
+                current["lines"].append(t)
+            # lines before the first entry anchor (page title) are ignored.
         if current is not None:
             entries.append(current)
         return entries
+
+    @staticmethod
+    def _resolve_entry_no(entry: dict) -> int | None:
+        """Entry number: the bare-number hint (mock) or the digits before Loại:."""
+        if entry.get("entry_no_hint") is not None:
+            return entry["entry_no_hint"]
+        m = _NUM_LOAI_RE.search(" ".join(entry["lines"]))
+        return int(m.group(1)) if m else None
 
     @staticmethod
     def _cluster_lines(spans: list[TextSpan]) -> list[tuple[str, float, float, str]]:
@@ -294,11 +343,24 @@ class TwoColumnHandler:
             line = raw.strip()
             if not line:
                 continue
+            # A bare Vietnamese date line → ngay (real Mục lục positional date).
+            if _DATE_LINE_RE.match(line):
+                if not meta.ngay:
+                    meta.ngay = line
+                continue
+            # "Loại:" may appear inline after the entry number ("; 11 Loại: Chiếu")
+            # or at line start; capture its value and drop the line from meaning.
+            if re.search(r"\bLoại\s*[:：]", line):
+                mv = _LOAI_VALUE_RE.search(line)
+                if mv and not meta.loai:
+                    meta.loai = mv.group(1).strip()
+                continue
             label_field = self._match_meta_label(line)
             if label_field is not None:
                 label, fld = label_field
                 value = line[len(label):].strip()
-                setattr(meta, fld, value)
+                if not getattr(meta, fld):
+                    setattr(meta, fld, value)
                 continue
             if self._is_heading(line):
                 continue
