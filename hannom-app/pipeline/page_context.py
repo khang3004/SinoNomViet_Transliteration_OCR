@@ -95,14 +95,30 @@ class PageContext:
         return self.ocr_engine.ocr(self.image_path)
 
     def _ocr_pdf_left_column(self, split_x: float) -> list[dict]:
-        """Render the PDF page, crop the Han (left) column, OCR it."""
-        image, _scale = render_page(self.pdf_path, self.pdf_page_index, self.render_dpi)
-        crop_x = max(int(split_x), 1)
-        crop = image.crop((0, 0, min(crop_x, image.width), image.height))
-        # Save the crop to the work dir and OCR by path (works for every engine).
-        work_dir = getattr(self.config, "work_dir", None) or "."
-        os.makedirs(work_dir, exist_ok=True)
-        crop_path = os.path.join(work_dir, f"han_crop_p{self.page:04d}.png")
-        crop.save(crop_path)
-        # Crop origin is (0,0) ⇒ returned bboxes are already full-page coords.
-        return self.ocr_engine.ocr(crop_path)
+        """Render the PDF page, crop the Han (left) column, OCR it.
+
+        Rendering needs poppler (via pdf2image). If that — or the OCR call —
+        isn't available, we DEGRADE GRACEFULLY: log a warning and return no Han
+        detections, so the record still carries the (real, text-layer) Vietnamese
+        meaning + metadata. The Han side can be filled once poppler + an OCR
+        backend are installed.
+        """
+        try:
+            image, _scale = render_page(self.pdf_path, self.pdf_page_index, self.render_dpi)
+            crop_x = max(int(split_x), 1)
+            crop = image.crop((0, 0, min(crop_x, image.width), image.height))
+            # Save the crop to the work dir and OCR by path (works for every engine).
+            work_dir = getattr(self.config, "work_dir", None) or "."
+            os.makedirs(work_dir, exist_ok=True)
+            crop_path = os.path.join(work_dir, f"han_crop_p{self.page:04d}.png")
+            crop.save(crop_path)
+            # Crop origin is (0,0) ⇒ returned bboxes are already full-page coords.
+            return self.ocr_engine.ocr(crop_path)
+        except Exception as exc:  # noqa: BLE001 - poppler/OCR optional at this stage
+            logger.warning(
+                "Han-side render/OCR unavailable (%s: %s); emitting Vietnamese-only "
+                "records for this PDF page. Install poppler + an OCR backend to fill Han.",
+                type(exc).__name__,
+                exc,
+            )
+            return []

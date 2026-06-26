@@ -49,6 +49,38 @@ _HEADING_PREFIXES = ("TRÍCH YẾU",)
 _HEADING_REGEXES = (re.compile(r"^Công đồng\b.*:"),)  # "Công đồng truyền:" etc.
 
 _ENTRY_NO_RE = re.compile(r"^(\d{1,4})\.?$")
+# A line like "6 tháng 7 năm Gia Long 1" is a DATE, not an entry start.
+_DATE_AFTER_NUM_RE = re.compile(r"^\d{1,4}\s+(tháng|năm|nhuận)\b", re.IGNORECASE)
+
+# Label/heading keywords unique to the Châu bản "Mục lục" format. Used by
+# detect() as a fingerprint (tolerant of OCR typos like "Để tài" for "Đề tài").
+_FINGERPRINT = (
+    "TRÍCH YẾU",
+    "Loại:",
+    "Xuất xứ",
+    "Đề tài",
+    "Để tài",
+    "Công Đồng truyền",
+    "Công đồng truyền",
+    "Tờ/Tập",
+    "Ngày:",
+)
+
+# Minimum spans in the left cluster to treat it as a real (Han-garbage) column.
+_MIN_LEFT_COL = 6
+
+# Symbols that almost never appear in real Vietnamese but riddle the mangled Han
+# OCR tokens (e.g. "2E]Í#:", "X#3e&H])L"). A token containing any of these is
+# treated as Han-OCR garbage and dropped from the Vietnamese side.
+_GARBAGE_CHARS = frozenset("#{}[]*&%~^<>|\\@=+")
+
+
+def _is_garbage_token(text: str) -> bool:
+    """True if a span looks like mangled Han OCR rather than Vietnamese."""
+    t = text.strip()
+    if not t:
+        return True
+    return any(c in _GARBAGE_CHARS for c in t)
 
 
 class TwoColumnHandler:
@@ -59,15 +91,14 @@ class TwoColumnHandler:
 
     # ------------------------------------------------------------------
     def detect(self, page_ctx: PageContext) -> bool:
-        """Step 1: usable text layer AND Vietnamese-right / image-left split.
+        """Step 1: a Châu bản "Mục lục" text-layer page.
 
-        The Han (left) side is an IMAGE, so it contributes no text-layer spans:
-        the selectable text is essentially all Vietnamese and sits in a column
-        whose left edge is well to the right of the page origin. We therefore
-        require (a) a usable text layer, (b) the text is Vietnamese (low CJK
-        ratio), and (c) the Vietnamese column begins on the right portion of the
-        page — confirmed via ``page_width`` when known, else inferred from the
-        empty left band before the column's left edge.
+        Identified by its strong LABEL FINGERPRINT — the metadata labels and
+        headings that are unique to this format (``TRÍCH YẾU``, ``Loại:``,
+        ``Xuất xứ``, ``Đề tài``, ``Công Đồng truyền``, ``Tờ``, ``Ngày:``). This is
+        far more robust than a pure-geometry test: on a real OCR'd PDF the Han
+        column is mangled into Latin garbage that pollutes the left side and the
+        x-distribution, but the Vietnamese labels are always present and reliable.
         """
         if not page_ctx.has_text_layer():
             logger.debug("two_column.detect: no usable text layer.")
@@ -76,30 +107,20 @@ class TwoColumnHandler:
         if len(spans) < 5:
             return False
         all_text = " ".join(s.text for s in spans)
-        if cjk_ratio(all_text) >= 0.2:
-            logger.debug("two_column.detect: text layer is not Vietnamese.")
-            return False
-        left_edge = min(s.x0 for s in spans)
-        if page_ctx.page_width:
-            right_side = left_edge >= 0.30 * page_ctx.page_width
-        else:
-            # No width known: accept if there is a non-trivial empty band to the
-            # left of the Vietnamese column (the Han image column lives there).
-            right_side = left_edge > 0.0
-        logger.debug(
-            "two_column.detect: spans=%d left_edge=%.1f width=%s ⇒ %s",
-            len(spans),
-            left_edge,
-            page_ctx.page_width,
-            right_side,
-        )
-        return bool(right_side)
+        hits = sum(1 for kw in _FINGERPRINT if kw.lower() in all_text.lower())
+        ok = hits >= 2
+        logger.debug("two_column.detect: fingerprint hits=%d ⇒ %s", hits, ok)
+        return ok
 
     # ------------------------------------------------------------------
     def extract(self, page_ctx: PageContext) -> list[Record]:
         spans = page_ctx.text_spans()
         split_x = self._column_split_x(spans)
-        right_spans = [s for s in spans if s.cx >= split_x]
+        # Vietnamese column = right of the split, minus any mangled-Han garbage
+        # tokens that bled across (real OCR'd PDFs interleave them).
+        right_spans = [
+            s for s in spans if s.cx >= split_x and not _is_garbage_token(s.text)
+        ]
 
         # Step 3: group right-side spans into entries by entry numbers + y-bands.
         entries = self._group_entries(right_spans, split_x)
@@ -147,18 +168,43 @@ class TwoColumnHandler:
     def _column_split_x(spans: list[TextSpan]) -> float:
         """Step 2: derive the Han|Vietnamese split x from the span distribution.
 
-        The Vietnamese text-layer column has a well-defined LEFT EDGE
-        (``min x0`` over all spans). The Han image column lies to the left of it;
-        the gutter between them is just left of that edge. We place the split a
-        median-glyph-width to the left of the Vietnamese column's left edge —
-        data-driven, NOT a hardcoded pixel.
+        Two real cases:
+
+        * **Clean text layer (Han is image-only):** all spans are Vietnamese; the
+          split is just left of the column's left edge (``min x0`` − a glyph).
+
+        * **OCR'd PDF (Han mangled into the text layer):** a dense LEFT cluster of
+          garbage Han tokens sits to the left of the Vietnamese column. We find
+          the widest gap in the sorted x0 distribution; if a substantial cluster
+          (≥ ``_MIN_LEFT_COL`` spans) lies left of that gap, it's the Han column
+          and the split is the gap midpoint. Otherwise we fall back to the clean
+          case. Data-driven, NOT a hardcoded pixel.
         """
         if not spans:
             return 0.0
-        left_edge = min(s.x0 for s in spans)
+        x0s = sorted(s.x0 for s in spans)
         heights = sorted((s.y1 - s.y0) for s in spans if s.y1 > s.y0)
         margin = heights[len(heights) // 2] if heights else 10.0
-        return max(left_edge - margin, 0.0)
+        left_edge = x0s[0]
+        clean_split = max(left_edge - margin, 0.0)
+
+        # Look for the widest gap in the central band [10%, 60%] of the x-range.
+        span_range = x0s[-1] - x0s[0]
+        if span_range <= 0:
+            return clean_split
+        lo, hi = x0s[0] + 0.10 * span_range, x0s[0] + 0.60 * span_range
+        best_gap, best_mid = 0.0, clean_split
+        for a, b in zip(x0s, x0s[1:]):
+            if a < lo or b > hi:
+                continue
+            if (b - a) > best_gap:
+                best_gap, best_mid = b - a, (a + b) / 2.0
+        # Use the gap split only if a real left column sits to its left and the
+        # gap is meaningfully wider than a glyph (a true gutter, not indentation).
+        left_count = sum(1 for x in x0s if x < best_mid)
+        if left_count >= _MIN_LEFT_COL and best_gap > 2.0 * margin:
+            return best_mid
+        return clean_split
 
     def _group_entries(self, right_spans: list[TextSpan], split_x: float) -> list[dict]:
         """Step 3: cluster right spans into lines, then split into entries.
@@ -170,12 +216,15 @@ class TwoColumnHandler:
         if not lines:
             return []
 
-        # An entry starts at a line whose left-most token is a bare entry number.
+        # An entry starts at a line whose left-most token is a bare entry number
+        # — but NOT a date ("6 tháng 7 năm …"), where the number is followed by a
+        # date word. That date-guard avoids treating every "Ngày:" date as a new
+        # entry on real Mục lục pages.
         entries: list[dict] = []
         current: dict | None = None
         for text, ly0, ly1, leftmost in lines:
             m = _ENTRY_NO_RE.match(leftmost.strip())
-            starts_entry = m is not None
+            starts_entry = m is not None and not _DATE_AFTER_NUM_RE.match(text.strip())
             if starts_entry:
                 if current is not None:
                     entries.append(current)
