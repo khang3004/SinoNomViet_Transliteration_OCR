@@ -1,0 +1,28 @@
+# worker service — OCR (GPU) + PDF text-layer extraction (AGENTS.md §2, §8, §10).
+FROM python:3.12-slim
+
+WORKDIR /srv
+
+# System packages PaddleOCR/pdf rendering need.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        poppler-utils \
+        libgl1 \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# numpy-pin install order (AGENTS.md §10): numpy first, then the rest, then
+# force-reinstall numpy last so PaddleOCR cannot leave a newer numpy behind.
+COPY requirements-worker.txt .
+RUN pip install --no-cache-dir numpy==1.26.4 \
+    && pip install --no-cache-dir -r requirements-worker.txt \
+    && pip install --no-cache-dir --force-reinstall numpy==1.26.4
+
+# Worker code (pipeline + worker; not the web app).
+COPY pipeline/ ./pipeline/
+COPY worker/ ./worker/
+
+# Secrets come from the environment at runtime (worker only); never baked in.
+ENV DATA_DIR=/data
+ENV DICTS_DIR=/dicts
+
+CMD ["python", "-m", "worker.worker"]

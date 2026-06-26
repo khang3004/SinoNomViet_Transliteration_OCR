@@ -1,0 +1,52 @@
+# Local dev stack (AGENTS.md §8). K8s is FUTURE/out of scope — no YAML manifests.
+# Two decoupled services sharing the ./data volume (jobs.db + uploads + output).
+#
+# Usage:
+#   cp .env.example .env   # fill GOOGLE_API_KEY etc.
+#   docker compose up --build
+#   open http://localhost:8000
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    ports:
+      - "8000:8000"
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data
+    # The app is stateless and needs NO API keys (AGENTS.md §7).
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      DATA_DIR: /data
+      DICTS_DIR: /dicts
+      OCR_BACKEND: ${OCR_BACKEND:-paddle}
+      TRANSLATE_BACKEND: ${TRANSLATE_BACKEND:-api}
+      CORRECT_BACKEND: ${CORRECT_BACKEND:-skip}
+      DSG_FFF: ${DSG_FFF:-HVB_001}
+      PDF_DPI: ${PDF_DPI:-300}
+    # Secrets injected from .env (worker only). Maps 1:1 to a K8s Secret later.
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+      - ./dicts:/dicts:ro
+    restart: unless-stopped
+    # --- GPU (GTX 2060) — UNCOMMENT on a GPU host to run PaddleOCR on the GPU ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+# State (jobs.db, uploads/, output/) lives in this bind-mounted volume, not in
+# the containers — exactly what makes a future K8s PVC move trivial.

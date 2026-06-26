@@ -1,0 +1,17 @@
+# Secrets — NEVER commit real keys (AGENTS.md §7). Only .env.example is tracked.
+.env
+*.key
+
+# Runtime state — lives in the mounted data/ volume, not in git/the image.
+data/
+!data/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+coverage.xml
+.mypy_cache/
+.ruff_cache/
