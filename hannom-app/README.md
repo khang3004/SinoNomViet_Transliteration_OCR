@@ -79,6 +79,12 @@ OCR_BACKEND=mock TRANSLATE_BACKEND=skip DATA_DIR=./data python -m worker.worker
 The worker processes the upload (an image has no text layer, so the router falls
 back to `han_only` full-OCR) and writes JSONL you can download from the UI.
 
+**See the full `two_column` extraction in the browser** without any upload: click
+**▶ Run two_column demo** on the home page (or `GET /demo/two_column`). It runs
+the PRIMARY handler on synthetic mock data and renders the parallel
+Han↔Vietnamese records with parsed metadata — no GPU, no PDF. Completed upload
+jobs also have a **view** link that renders their records inline.
+
 ### Run with Docker Compose
 
 ```bash

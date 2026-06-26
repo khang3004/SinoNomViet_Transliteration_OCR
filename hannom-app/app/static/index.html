@@ -5,20 +5,36 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>hannom-app — Han-Nom OCR corpus builder</title>
   <style>
-    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 880px; color: #1c1c1c; }
+    :root { --accent: #b3122a; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 980px; color: #1c1c1c; }
     h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.05rem; }
     .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
     label { display: block; margin: 0.5rem 0 0.25rem; font-weight: 600; font-size: 0.9rem; }
-    input, select, button { font-size: 0.95rem; padding: 0.4rem; }
-    button { background: #b3122a; color: #fff; border: 0; border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; }
-    button:hover { background: #8f0e21; }
+    input, select { font-size: 0.95rem; padding: 0.4rem; }
+    button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; font-size: 0.9rem; }
+    button.ghost { background: #eee; color: #333; }
+    button:hover { filter: brightness(0.92); }
     table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
     th, td { border-bottom: 1px solid #eee; text-align: left; padding: 0.4rem 0.5rem; }
     .status { font-weight: 600; }
     .pending { color: #b07900; } .running { color: #1565c0; }
     .done { color: #2e7d32; } .failed { color: #c62828; }
-    a { color: #b3122a; }
+    a { color: var(--accent); cursor: pointer; }
     .muted { color: #777; font-size: 0.8rem; }
+
+    /* parallel record viewer */
+    .rec { border: 1px solid #e3e3e3; border-radius: 8px; margin: 0.75rem 0; overflow: hidden; }
+    .rec-head { background: #faf3f4; padding: 0.4rem 0.75rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .badge { font-size: 0.7rem; background: var(--accent); color: #fff; border-radius: 10px; padding: 0.1rem 0.55rem; }
+    .badge.grey { background: #888; } .badge.green { background: #2e7d32; }
+    .rec-body { display: grid; grid-template-columns: 1fr 1.4fr; gap: 0; }
+    .han { font-size: 1.5rem; line-height: 1.7; padding: 0.6rem 0.9rem; border-right: 1px solid #eee;
+           font-family: "Noto Serif CJK SC", "Songti SC", "SimSun", "Microsoft YaHei", serif; background: #fcfcfc; }
+    .meaning { padding: 0.6rem 0.9rem; }
+    .meta { padding: 0 0.9rem 0.6rem; font-size: 0.8rem; color: #444; }
+    .meta b { color: #000; }
+    .empty { color: #aaa; font-style: italic; }
   </style>
 </head>
 <body>
@@ -27,7 +43,16 @@
     extracts parallel Han · Vietnamese records into JSONL.</p>
 
   <div class="card">
-    <h2 style="font-size:1.05rem">Upload</h2>
+    <h2>Try it — two_column demo</h2>
+    <p class="muted">Runs the PRIMARY <code>two_column</code> extraction on synthetic mock
+      data (no GPU, no PDF): Vietnamese from a mock PDF text layer, Han from mock OCR,
+      paired by position, watermark filtered, metadata parsed.</p>
+    <button onclick="runDemo()">▶ Run two_column demo</button>
+    <div id="demo-out"></div>
+  </div>
+
+  <div class="card">
+    <h2>Upload</h2>
     <form id="form">
       <label for="file">Document (image or PDF)</label>
       <input id="file" name="file" type="file" accept=".png,.jpg,.jpeg,.tif,.tiff,.pdf" required />
@@ -40,16 +65,69 @@
   </div>
 
   <div class="card">
-    <h2 style="font-size:1.05rem">Jobs <button type="button" onclick="refresh()" style="font-size:0.75rem;padding:0.2rem 0.6rem">↻</button></h2>
+    <h2>Jobs <button class="ghost" type="button" onclick="refresh()" style="font-size:0.75rem;padding:0.2rem 0.6rem">↻</button></h2>
     <table>
       <thead><tr><th>#</th><th>File</th><th>Status</th><th>Output</th></tr></thead>
       <tbody id="jobs"></tbody>
     </table>
+    <div id="job-out"></div>
   </div>
 
   <script>
     const form = document.getElementById('form');
     const msg = document.getElementById('msg');
+
+    function esc(s) { return (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+    // Render an array of records into `container` as parallel Han↔Vietnamese cards.
+    function renderRecords(records, container) {
+      if (!records || !records.length) { container.innerHTML = '<p class="muted">No records.</p>'; return; }
+      container.innerHTML = records.map(r => {
+        const m = r.entry_meta || {};
+        const metaRows = [
+          ['Ngày', m.ngay], ['Tờ/Tập', m.to_tap], ['Loại', m.loai],
+          ['Xuất xứ', m.xuat_xu], ['Đề tài', m.de_tai],
+        ].filter(([, v]) => v).map(([k, v]) => `<b>${k}:</b> ${esc(v)}`).join(' &nbsp;·&nbsp; ');
+        const src = r.source_of || {};
+        const meaning = r.meaning ? esc(r.meaning) : '<span class="empty">(no meaning)</span>';
+        return `
+          <div class="rec">
+            <div class="rec-head">
+              ${r.entry_no != null ? `<span class="badge">entry ${esc(r.entry_no)}</span>` : ''}
+              <span class="badge grey">${esc(r.layout_type)}</span>
+              ${src.meaning ? `<span class="badge green">meaning: ${esc(src.meaning)}</span>` : ''}
+              <span class="muted">${esc(r.id)}</span>
+            </div>
+            <div class="rec-body">
+              <div class="han">${esc(r.han) || '<span class="empty">(no han)</span>'}</div>
+              <div class="meaning">${meaning}</div>
+            </div>
+            ${metaRows ? `<div class="meta">${metaRows}</div>` : ''}
+          </div>`;
+      }).join('');
+    }
+
+    async function runDemo() {
+      const out = document.getElementById('demo-out');
+      out.innerHTML = '<p class="muted">Running…</p>';
+      try {
+        const r = await fetch('/demo/two_column');
+        const j = await r.json();
+        renderRecords(j.records, out);
+      } catch (err) { out.innerHTML = '<p class="muted">Demo failed: ' + esc(err) + '</p>'; }
+    }
+
+    async function viewJob(id) {
+      const out = document.getElementById('job-out');
+      out.innerHTML = '<p class="muted">Loading job ' + id + '…</p>';
+      try {
+        const r = await fetch('/jobs/' + id + '/records');
+        const j = await r.json();
+        out.innerHTML = '<h2>Job #' + id + ' records</h2>';
+        const div = document.createElement('div'); out.appendChild(div);
+        renderRecords(j.records, div);
+      } catch (err) { out.innerHTML = '<p class="muted">Could not load records: ' + esc(err) + '</p>'; }
+    }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -72,10 +150,13 @@
       tbody.innerHTML = '';
       for (const job of j.jobs) {
         const tr = document.createElement('tr');
-        const out = job.status === 'done'
-          ? `<a href="/jobs/${job.id}/output">download .jsonl</a>`
-          : (job.status === 'failed' ? `<span class="muted">${job.error || 'failed'}</span>` : '—');
-        tr.innerHTML = `<td>${job.id}</td><td>${job.filename}</td>` +
+        let out = '—';
+        if (job.status === 'done') {
+          out = `<a onclick="viewJob(${job.id})">view</a> · <a href="/jobs/${job.id}/output">.jsonl</a>`;
+        } else if (job.status === 'failed') {
+          out = `<span class="muted">${esc(job.error) || 'failed'}</span>`;
+        }
+        tr.innerHTML = `<td>${job.id}</td><td>${esc(job.filename)}</td>` +
           `<td class="status ${job.status}">${job.status}</td><td>${out}</td>`;
         tbody.appendChild(tr);
       }

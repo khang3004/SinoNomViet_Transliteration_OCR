@@ -9,6 +9,7 @@ Run:  uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -86,6 +87,51 @@ def get_output(job_id: int):
         media_type="application/x-ndjson",
         filename=os.path.basename(job.output_path),
     )
+
+
+@app.get("/jobs/{job_id}/records")
+def get_records(job_id: int) -> dict:
+    """Return a finished job's JSONL parsed into records, for inline viewing."""
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if not job.output_path or not os.path.exists(job.output_path):
+        raise HTTPException(status_code=409, detail=f"output not ready (status={job.status})")
+    records = []
+    with open(job.output_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    return {"job_id": job_id, "records": records}
+
+
+@app.get("/demo/two_column")
+def demo_two_column() -> dict:
+    """Run the PRIMARY two_column extraction on synthetic mock data (no GPU/PDF).
+
+    Lets the browser show the full Han↔Vietnamese parallel records — the same
+    proof as scripts/dryrun_two_column.py, served live. Han comes from MOCK OCR,
+    Vietnamese from MOCK PDF text spans; the watermark is filtered, metadata
+    parsed, and pairing done by y-overlap.
+    """
+    # Imported here so the heavy registries load lazily, only when the demo runs.
+    from pipeline import layouts
+    from pipeline.demo_data import PAGE_WIDTH, demo_han_ocr, demo_text_spans
+    from pipeline.page_context import PageContext
+
+    ctx = PageContext(
+        source_doc="ChauBan",
+        page=43,
+        image_path="ChauBan_p0043.png",
+        config=config,
+        page_width=PAGE_WIDTH,
+        mock_text_spans=demo_text_spans(),
+        mock_han_ocr=demo_han_ocr(),
+    )
+    handler = layouts.route(ctx)
+    records = [r.to_dict() for r in handler.extract(ctx)]
+    return {"layout": handler.name, "records": records}
 
 
 def _unique_path(path: str) -> str:
