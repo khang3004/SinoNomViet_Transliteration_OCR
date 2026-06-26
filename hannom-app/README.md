@@ -85,6 +85,14 @@ the PRIMARY handler on synthetic mock data and renders the parallel
 Han↔Vietnamese records with parsed metadata — no GPU, no PDF. Completed upload
 jobs also have a **view** link that renders their records inline.
 
+### Share it with a friend (public URL, no GPU)
+
+Want someone else to upload images and try it? See **[SHARE.md](SHARE.md)** — it
+sets up CPU PaddleOCR + a free cloudflared tunnel so you get a public
+`https://…trycloudflare.com` URL in a few minutes (live while your PC runs).
+Note: image uploads run `han_only` OCR; the full `two_column` pairing needs a
+text-layer PDF or the in-app demo.
+
 ### Run with Docker Compose
 
 ```bash

@@ -1,0 +1,22 @@
+# worker deps for a CPU-only host (e.g. sharing the app from a laptop, no GPU).
+# Same as requirements-worker.txt but with the CPU build of PaddlePaddle.
+#
+# Install ORDER matters (numpy pin): numpy first, then the rest, then
+# force-reinstall numpy last so PaddleOCR cannot leave a newer numpy behind:
+#
+#   pip install numpy==1.26.4
+#   pip install -r requirements-worker-cpu.txt
+#   pip install --force-reinstall numpy==1.26.4
+#
+# Then run the worker with CPU OCR:  OCR_BACKEND=paddle OCR_USE_GPU=0
+
+numpy==1.26.4
+pdfplumber==0.11.4
+pdf2image==1.17.0
+Pillow==10.4.0
+
+paddleocr==2.8.1
+paddlepaddle==2.6.1        # CPU build (no -gpu)
+
+# Optional: Gemini translation (TRANSLATE_BACKEND=api) to also fill Vietnamese meaning
+# google-generativeai==0.8.3
