@@ -42,6 +42,18 @@
     .page-img img { width: 100%; border: 1px solid #ddd; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
     .page-label { font-size: 0.78rem; color: #777; margin-bottom: 0.3rem; }
     @media (max-width: 720px) { .page-row { grid-template-columns: 1fr; } .page-img { position: static; } }
+
+    /* block overlays drawn on the page image */
+    .overlay-wrap { position: relative; display: block; line-height: 0; }
+    .box { position: absolute; box-sizing: border-box; pointer-events: none; transition: background .1s; }
+    .box-han { border: 2px solid rgba(179,18,42,.85); background: rgba(179,18,42,.06); }
+    .box-vi  { border: 2px solid rgba(21,101,192,.85); background: rgba(21,101,192,.05); }
+    .box.hl  { background: rgba(255,214,0,.35); }
+    .box-num { position: absolute; top: 0; left: 0; transform: translateY(-100%);
+               font-size: 0.62rem; background: rgba(179,18,42,.85); color: #fff; padding: 0 4px; border-radius: 3px 3px 0 0; }
+    .legend { font-size: 0.72rem; color: #555; margin: 0.2rem 0 0.4rem; }
+    .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 0.2rem 0 0.6rem; vertical-align: middle; }
+    .rec.hl { outline: 2px solid #ffd600; }
   </style>
 </head>
 <body>
@@ -96,7 +108,7 @@
       const src = r.source_of || {};
       const meaning = r.meaning ? esc(r.meaning) : '<span class="empty">(no meaning)</span>';
       return `
-        <div class="rec">
+        <div class="rec" data-rec="${esc(r.id)}">
           <div class="rec-head">
             ${r.entry_no != null ? `<span class="badge">entry ${esc(r.entry_no)}</span>` : ''}
             <span class="badge grey">${esc(r.layout_type)}</span>
@@ -121,25 +133,76 @@
         ? recordsHTML(records) : '<p class="muted">No records.</p>';
     }
 
-    // Render records grouped by page, each page's SOURCE IMAGE beside its records.
+    // Render records grouped by page, each page's SOURCE IMAGE (with block
+    // overlays) beside its records.
     function renderJobPages(records, container) {
+      container.innerHTML = '';
       if (!records || !records.length) { container.innerHTML = '<p class="muted">No records.</p>'; return; }
       const byPage = new Map();
       for (const r of records) {
         if (!byPage.has(r.page)) byPage.set(r.page, { img: r.image_path, recs: [] });
         byPage.get(r.page).recs.push(r);
       }
-      let html = '';
+      const legend = '<div class="legend">blocks:' +
+        '<span class="sw" style="background:rgba(179,18,42,.85)"></span>Hán' +
+        '<span class="sw" style="background:rgba(21,101,192,.85)"></span>Việt</div>';
+
       for (const [page, info] of [...byPage.entries()].sort((a, b) => a[0] - b[0])) {
-        const img = info.img
-          ? `<img src="/pages/${encodeURIComponent(info.img)}" alt="page ${page}" onerror="this.replaceWith(Object.assign(document.createElement('p'),{className:'muted',textContent:'(source image unavailable)'}))"/>`
-          : '<p class="muted">(no source image)</p>';
-        html += `<div class="page-row">
-          <div class="page-img"><div class="page-label">page ${page} — ${esc(info.img || '')}</div>${img}</div>
-          <div class="page-recs">${recordsHTML(info.recs)}</div>
-        </div>`;
+        const row = document.createElement('div'); row.className = 'page-row';
+        const left = document.createElement('div'); left.className = 'page-img';
+        left.innerHTML = `<div class="page-label">page ${page} — ${esc(info.img || '')}</div>` + legend;
+
+        if (info.img) {
+          const wrap = document.createElement('div'); wrap.className = 'overlay-wrap';
+          const img = document.createElement('img');
+          img.className = 'page-pic'; img.alt = 'page ' + page;
+          img.onload = () => drawBoxes(wrap, img, info.recs);
+          img.onerror = () => { wrap.innerHTML = '<p class="muted">(source image unavailable)</p>'; };
+          img.src = '/pages/' + encodeURIComponent(info.img);
+          wrap.appendChild(img); left.appendChild(wrap);
+        } else {
+          left.insertAdjacentHTML('beforeend', '<p class="muted">(no source image)</p>');
+        }
+
+        const right = document.createElement('div'); right.className = 'page-recs';
+        right.innerHTML = recordsHTML(info.recs);
+        row.append(left, right); container.appendChild(row);
+
+        // hover a record card → highlight its blocks, and vice-versa.
+        right.querySelectorAll('.rec').forEach(card => {
+          const id = card.getAttribute('data-rec');
+          card.addEventListener('mouseenter', () => toggleHl(left, id, card, true));
+          card.addEventListener('mouseleave', () => toggleHl(left, id, card, false));
+        });
       }
-      container.innerHTML = html;
+    }
+
+    function drawBoxes(wrap, img, recs) {
+      const nw = img.naturalWidth, nh = img.naturalHeight;
+      if (!nw || !nh) return;
+      wrap.querySelectorAll('.box').forEach(b => b.remove());
+      const pct = (v, d) => (100 * v / d) + '%';
+      for (const r of recs) {
+        const specs = [['box-han', r.han_bbox, r.entry_no], ['box-vi', r.meaning_bbox, null]];
+        for (const [cls, bb, num] of specs) {
+          if (!bb || bb.length !== 4) continue;
+          const [x0, y0, x1, y1] = bb;
+          if (x1 <= x0 || y1 <= y0) continue;
+          const d = document.createElement('div');
+          d.className = 'box ' + cls;
+          d.dataset.rec = r.id;
+          d.style.left = pct(x0, nw); d.style.top = pct(y0, nh);
+          d.style.width = pct(x1 - x0, nw); d.style.height = pct(y1 - y0, nh);
+          if (num != null) d.innerHTML = `<span class="box-num">${esc(num)}</span>`;
+          wrap.appendChild(d);
+        }
+      }
+    }
+
+    function toggleHl(leftEl, id, card, on) {
+      leftEl.querySelectorAll('.box[data-rec="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]')
+        .forEach(b => b.classList.toggle('hl', on));
+      card.classList.toggle('hl', on);
     }
 
     async function runDemo() {

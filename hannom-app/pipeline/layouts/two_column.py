@@ -157,12 +157,18 @@ class TwoColumnHandler:
         han_dets = [d for d in han_dets if cjk_ratio(d.get("text", "")) >= 0.34]
 
         image_name = self._image_name(page_ctx)
+        right_edge = page_ctx.page_width or (max((s.x1 for s in spans), default=split_x))
         records: list[Record] = []
         for line_no, entry in enumerate(entries, start=1):
+            y0, y1 = entry["y0"], entry["y1"]
             # Step 4: pair Han tokens by y-overlap with this entry's y-band.
-            han_text = self._han_for_band(han_dets, entry["y0"], entry["y1"])
+            han_text = self._han_for_band(han_dets, y0, y1)
             # Step 5: parse metadata + build the parallel body (meaning).
             meta, meaning = self._parse_entry_body(entry["lines"])
+            # Block regions on the page image: Han (left of split), Vietnamese
+            # (right of split), spanning this entry's y-band.
+            han_bbox = [0.0, y0, split_x, y1]
+            meaning_bbox = [split_x, y0, right_edge, y1]
 
             rec = Record(
                 id=self._record_id(page_ctx, line_no),
@@ -180,6 +186,8 @@ class TwoColumnHandler:
                 layout_type=self.name,
                 source_of=SourceOf(han="ocr", phonetic="", meaning="pdf_text"),
                 review_status="pending",
+                han_bbox=han_bbox,
+                meaning_bbox=meaning_bbox,
             )
             records.append(rec)
         return records

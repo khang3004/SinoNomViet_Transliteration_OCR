@@ -64,6 +64,10 @@ class Record:
     phonetic_per_char: list[str] = field(default_factory=list)
     source_of: SourceOf = field(default_factory=SourceOf)
     review_status: str = "pending"
+    # Block regions on the rendered page image, [x0, y0, x1, y1] in page-pixel
+    # coords (at PDF_DPI). Used by the UI to overlay where each side came from.
+    han_bbox: list[float] = field(default_factory=list)
+    meaning_bbox: list[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Keep han_chars consistent with han unless caller set it explicitly.
