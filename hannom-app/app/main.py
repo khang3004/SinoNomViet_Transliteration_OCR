@@ -36,7 +36,8 @@ _INDEX = os.path.join(_HERE, "static", "index.html")
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     with open(_INDEX, encoding="utf-8") as fh:
-        return HTMLResponse(fh.read())
+        # no-store so browsers always fetch the latest UI (it changes often).
+        return HTMLResponse(fh.read(), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/healthz")
