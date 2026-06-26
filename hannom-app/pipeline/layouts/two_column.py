@@ -88,6 +88,10 @@ _MAX_LEFT_FRAC = 0.45
 # Fallback Han|Vietnamese split as a fraction of page width when no clean gutter
 # is found (the Han column occupies roughly the left third of a Mục lục page).
 _LEFT_COL_FRAC = 0.35
+# Han OCR crop width as a fraction of page width. Wider than the text-layer split
+# because the Han IMAGE extends further right than its garbled text-layer twin;
+# Vietnamese latin caught by the wider crop is dropped by the CJK filter.
+_HAN_CROP_FRAC = 0.48
 
 # Symbols that almost never appear in real Vietnamese but riddle the mangled Han
 # OCR tokens (e.g. "2E]Í#:", "X#3e&H])L"). A token containing any of these is
@@ -148,8 +152,14 @@ class TwoColumnHandler:
             logger.warning("two_column.extract: no entries detected.")
             return []
 
-        # Han side: OCR the left-column crop (mocked in dev/testing).
-        han_dets = self._han_detections(page_ctx, split_x)
+        # Han side: OCR the left-column crop. The Han IMAGE extends further right
+        # than its (garbled) text-layer twin, so the text-layer split is too
+        # narrow and would clip the right of each Han line. Crop wider — out to a
+        # fraction of the page — and rely on the CJK filter below to discard any
+        # Vietnamese latin that the wider crop picks up.
+        page_w = page_ctx.page_width or (max((s.x1 for s in spans), default=split_x))
+        han_crop_x = max(split_x, _HAN_CROP_FRAC * page_w)
+        han_dets = self._han_detections(page_ctx, han_crop_x)
         # Step 6: drop watermark / noise tokens, then keep only CJK-majority
         # detections (removes Latin label-bleed like "NgTaXuDe" that the OCR
         # picks up at the crop's right edge).
@@ -157,7 +167,7 @@ class TwoColumnHandler:
         han_dets = [d for d in han_dets if cjk_ratio(d.get("text", "")) >= 0.34]
 
         image_name = self._image_name(page_ctx)
-        right_edge = page_ctx.page_width or (max((s.x1 for s in spans), default=split_x))
+        right_edge = page_w
         records: list[Record] = []
         for line_no, entry in enumerate(entries, start=1):
             y0, y1 = entry["y0"], entry["y1"]
@@ -413,9 +423,16 @@ class TwoColumnHandler:
 
     @staticmethod
     def _han_for_band(han_dets: list[dict], y0: float, y1: float) -> str:
-        """Step 4: concatenate Han tokens whose centre-y falls in [y0, y1]."""
+        """Step 4: assemble the Han tokens in this entry's y-band in reading order.
+
+        In this "Mục lục" the Hán summary is typeset HORIZONTALLY (a few lines
+        read top-to-bottom, left-to-right within each line) — not vertical
+        right-to-left woodblock columns. So order detections by row (y) then by
+        column (x). (A vertical-column reader would mis-order this layout.)
+        """
         in_band = [d for d in han_dets if y0 <= (d["bbox"][1] + d["bbox"][3]) / 2.0 <= y1]
-        in_band.sort(key=lambda d: (d["bbox"][1], d["bbox"][0]))  # top→bottom
+        # Group into rows by y proximity, then read each row left-to-right.
+        in_band.sort(key=lambda d: ((d["bbox"][1] + d["bbox"][3]) / 2.0, d["bbox"][0]))
         return "".join(d["text"] for d in in_band)
 
     # --- ids / names ---------------------------------------------------
