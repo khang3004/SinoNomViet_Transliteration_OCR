@@ -88,6 +88,11 @@ job go `pending → running → done`, then click **view** to see the OCR record
 - **Want Vietnamese meaning too?** Set `TRANSLATE_BACKEND=api` and
   `GOOGLE_API_KEY=…` in Terminal 1 to have Gemini fill the `meaning` field for
   `han_only` records (otherwise meaning stays empty for image uploads).
+- **Want the Hán OCR errors corrected?** Set `CORRECT_BACKEND=api` +
+  `GOOGLE_API_KEY=…` (Gemini proofreads classical Hán; best quality). The raw OCR
+  is always kept in `han_raw`. `CORRECT_BACKEND=mock` demos the flow with no key;
+  `=dict` uses `dicts/` (only as good as those dictionaries); `=skip` (default)
+  leaves Hán exactly as OCR'd.
 - **Quick UI check without installing Paddle:** use `OCR_BACKEND=mock` in
   Terminal 1 — returns canned data so you can test the upload→job→view flow, but
   it won't actually read the image.
