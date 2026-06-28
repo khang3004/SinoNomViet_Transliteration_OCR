@@ -43,7 +43,6 @@ def get_corrector(config) -> Corrector:
 # --- built-in registrations (side-effect imports) -------------------------
 from pipeline.correct import api as _api  # noqa: E402,F401
 from pipeline.correct import dict_corrector as _dict  # noqa: E402,F401
-from pipeline.correct import mock as _mock  # noqa: E402,F401
 from pipeline.correct import offline_corrector as _offline  # noqa: E402,F401
 from pipeline.correct import skip as _skip  # noqa: E402,F401
 

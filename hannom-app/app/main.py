@@ -119,34 +119,6 @@ def get_page_image(filename: str):
     raise HTTPException(status_code=404, detail="page image not found")
 
 
-@app.get("/demo/two_column")
-def demo_two_column() -> dict:
-    """Run the PRIMARY two_column extraction on synthetic mock data (no GPU/PDF).
-
-    Lets the browser show the full Han↔Vietnamese parallel records — the same
-    proof as scripts/dryrun_two_column.py, served live. Han comes from MOCK OCR,
-    Vietnamese from MOCK PDF text spans; the watermark is filtered, metadata
-    parsed, and pairing done by y-overlap.
-    """
-    # Imported here so the heavy registries load lazily, only when the demo runs.
-    from pipeline import layouts
-    from pipeline.demo_data import PAGE_WIDTH, demo_han_ocr, demo_text_spans
-    from pipeline.page_context import PageContext
-
-    ctx = PageContext(
-        source_doc="ChauBan",
-        page=43,
-        image_path="ChauBan_p0043.png",
-        config=config,
-        page_width=PAGE_WIDTH,
-        mock_text_spans=demo_text_spans(),
-        mock_han_ocr=demo_han_ocr(),
-    )
-    handler = layouts.route(ctx)
-    records = [r.to_dict() for r in handler.extract(ctx)]
-    return {"layout": handler.name, "records": records}
-
-
 def _unique_path(path: str) -> str:
     if not os.path.exists(path):
         return path

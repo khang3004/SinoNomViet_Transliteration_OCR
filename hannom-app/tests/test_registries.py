@@ -11,14 +11,8 @@ from pipeline.config import Config
 
 
 def test_builtin_ocr_engines_registered():
-    for name in ("paddle", "vision", "kandianguji", "mock"):
+    for name in ("paddle", "vision"):
         assert name in ocr.available()
-
-
-def test_kandianguji_stub_registers_but_not_implemented():
-    engine = ocr.get_engine("kandianguji")
-    with pytest.raises(NotImplementedError):
-        engine.ocr("x.png")
 
 
 def test_new_engine_added_with_single_call():

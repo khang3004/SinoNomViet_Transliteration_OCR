@@ -95,14 +95,6 @@ def test_bug3_dict_corrector_loads():
     assert c.correct("拜詣") == "拜詣"
 
 
-def test_bug3_mock_corrector_repairs_and_keeps_raw():
-    # Keyless demo backend: applies the flagged 調→詣 repair, raw preserved.
-    recs = [Record(id="x", source_doc="d", page=1, line_no=1, han="拜調", han_raw="拜調")]
-    _apply_correction(recs, Config(correct_backend="mock"))
-    assert recs[0].han == "拜詣"
-    assert recs[0].han_raw == "拜調"
-
-
 # --- Bug 4: watermark filtered; provenance accurate -----------------------
 def test_bug4_watermark_filtered_and_source():
     rec = _record()

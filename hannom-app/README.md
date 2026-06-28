@@ -34,7 +34,7 @@ Two decoupled services + a shared `data/` volume (AGENTS.md §3):
 
 | Registry | Package | Built-ins | Select via |
 | --- | --- | --- | --- |
-| OCR engines | `pipeline/ocr/` | `paddle` (default), `vision`, `kandianguji` (stub), `mock` | `OCR_BACKEND` |
+| OCR engines | `pipeline/ocr/` | `paddle` (default), `vision` | `OCR_BACKEND` |
 | Layout handlers | `pipeline/layouts/` | `two_column` (primary), `three_block`, `han_only` | router (priority order) |
 
 Add an engine: new file in `pipeline/ocr/` + `register("name", Cls)`.
@@ -61,29 +61,21 @@ python -m scripts.show_registries
 # 4. Unit tests (needs pytest):  pip install pytest && python -m pytest
 ```
 
-### Run the full app + worker locally (still no GPU)
-
-The `mock` OCR backend lets the whole stack run end-to-end on the sample image:
+### Run the full app + worker locally (CPU OCR)
 
 ```bash
 pip install -r requirements-app.txt        # app deps only
 
 # terminal A — web UI
 DATA_DIR=./data python -m uvicorn app.main:app --port 8000
-# open http://localhost:8000  and upload tests/assests/image.png
+# open http://localhost:8000  and upload a page
 
-# terminal B — worker with the GPU-free mock engine
-OCR_BACKEND=mock TRANSLATE_BACKEND=skip DATA_DIR=./data python -m worker.worker
+# terminal B — worker with CPU PaddleOCR (see SHARE.md for the full setup)
+OCR_BACKEND=paddle OCR_USE_GPU=0 TRANSLATE_BACKEND=skip DATA_DIR=./data python -m worker.worker
 ```
 
-The worker processes the upload (an image has no text layer, so the router falls
-back to `han_only` full-OCR) and writes JSONL you can download from the UI.
-
-**See the full `two_column` extraction in the browser** without any upload: click
-**▶ Run two_column demo** on the home page (or `GET /demo/two_column`). It runs
-the PRIMARY handler on synthetic mock data and renders the parallel
-Han↔Vietnamese records with parsed metadata — no GPU, no PDF. Completed upload
-jobs also have a **view** link that renders their records inline.
+Upload a page → the worker processes it and a completed job gets a **view** link
+that renders its records inline, beside the source page image with block overlays.
 
 ### Share it with a friend (public URL, no GPU)
 
@@ -91,7 +83,7 @@ Want someone else to upload images and try it? See **[SHARE.md](SHARE.md)** — 
 sets up CPU PaddleOCR + a free cloudflared tunnel so you get a public
 `https://…trycloudflare.com` URL in a few minutes (live while your PC runs).
 Note: image uploads run `han_only` OCR; the full `two_column` pairing needs a
-text-layer PDF or the in-app demo.
+text-layer PDF.
 
 ### Run with Docker Compose
 
@@ -109,10 +101,11 @@ on the GTX 2060.
 
 | Env | Values | Default | Notes |
 | --- | --- | --- | --- |
-| `OCR_BACKEND` | paddle / vision / kandianguji / mock | `paddle` | paddle fits the 2060 |
-| `TRANSLATE_BACKEND` | api / offline / mock / skip | `api` | api = Gemini flash (cheap) |
+| `OCR_BACKEND` | paddle / vision | `paddle` | paddle fits the 2060; `OCR_USE_GPU=0` for CPU |
+| `OCR_LANG` | paddle lang | `chinese_cht` | Traditional — best for Sino-Nom |
+| `TRANSLATE_BACKEND` | api / offline / skip | `api` | api = Gemini flash (cheap) |
 | `TRANSLATE_MODEL` | gemini model id | `gemini-2.0-flash` | used when backend=api |
-| `CORRECT_BACKEND` | skip / api / offline | `skip` | |
+| `CORRECT_BACKEND` | skip / api / dict / offline | `skip` | api = Gemini proofread |
 | `QWEN_MODEL` | hf id | `Qwen2.5-3B-Instruct` | only if offline + bigger GPU |
 | `DSG_FFF` | str | `HVB_001` | work id |
 | `PDF_DPI` | int | `300` | Han crop render dpi |
@@ -120,9 +113,9 @@ on the GTX 2060.
 Translation defaults to the **API** because the 6 GB 2060 cannot host OCR + a
 3B LLM together; offline LLM translation stays behind a flag for bigger GPUs.
 The runner fills empty `meaning` fields via the selected translator (registry in
-`pipeline/translate/`: `api`=Gemini, `offline`=Qwen stub, `mock`=key-free
-placeholder, `skip`=no-op). Records that already carry a higher-trust meaning
-(two_column's `pdf_text`) are never overwritten.
+`pipeline/translate/`: `api`=Gemini, `offline`=Qwen stub, `skip`=no-op). Records
+that already carry a higher-trust meaning (two_column's `pdf_text`) are never
+overwritten.
 
 ### Secrets (AGENTS.md §7)
 
@@ -201,11 +194,13 @@ hannom-app/
 ├── pipeline/
 │   ├── config.py        env-driven config + secret-safe validation
 │   ├── schema.py        JSONL Record / EntryMeta / SourceOf
-│   ├── pdf_text.py      PDF text-layer spans + has_text_layer (+ mock seam)
+│   ├── pdf_text.py      PDF text-layer spans + render + has_text_layer
 │   ├── page_context.py  unit of work passed to handlers
-│   ├── runner.py        file → records glue
+│   ├── runner.py        file → records glue (+ correction/translation passes)
 │   ├── jobstore/        SQLite job queue (scheduler-friendly API)
-│   ├── ocr/             OCR registry: base, paddle, vision, kandianguji, mock
+│   ├── ocr/             OCR registry: base, paddle, vision
+│   ├── translate/       translation registry: api (Gemini), offline, skip
+│   ├── correct/         Han correction registry: api, dict, offline, skip
 │   └── layouts/         layout registry/router: two_column, three_block,
 │                        han_only, _spatial (vendored existing engine)
 ├── scripts/             dryrun_two_column, dryrun_three_block, show_registries

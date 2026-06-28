@@ -8,10 +8,9 @@ terminals are running.
 > (CPU) of the page, returned via the `han_only` handler — i.e. the Han columns
 > are OCR'd. Because a plain image has **no PDF text layer**, the hybrid
 > `two_column` Han↔Vietnamese pairing does NOT run on image uploads (that needs a
-> text-layer PDF). To show the full parallel experience, have them click
-> **▶ Run two_column demo** on the page. Image OCR also picks up the Vietnamese
-> text and any watermark, so `han_only` output on these pages is rough — that's
-> expected for image input.
+> text-layer PDF). The full parallel experience requires uploading a text-layer
+> Mục lục PDF. Image OCR also picks up the Vietnamese text and any watermark, so
+> `han_only` output on these pages is rough — that's expected for image input.
 
 All commands are PowerShell, run from the `hannom-app/` folder.
 
@@ -77,9 +76,9 @@ cloudflared prints a line like:
 https://random-words-1234.trycloudflare.com
 ```
 
-Send that URL to your friend. They open it, upload a two-column image, watch the
-job go `pending → running → done`, then click **view** to see the OCR records (or
-**Run two_column demo** for the full parallel example).
+Send that URL to your friend. They open it, upload a page (or a text-layer Mục
+lục PDF), watch the job go `pending → running → done`, then click **view** to see
+the records beside the source page image with block overlays.
 
 ## Notes
 
@@ -90,11 +89,7 @@ job go `pending → running → done`, then click **view** to see the OCR record
   `han_only` records (otherwise meaning stays empty for image uploads).
 - **Want the Hán OCR errors corrected?** Set `CORRECT_BACKEND=api` +
   `GOOGLE_API_KEY=…` (Gemini proofreads classical Hán; best quality). The raw OCR
-  is always kept in `han_raw`. `CORRECT_BACKEND=mock` demos the flow with no key;
-  `=dict` uses `dicts/` (only as good as those dictionaries); `=skip` (default)
-  leaves Hán exactly as OCR'd.
-- **Quick UI check without installing Paddle:** use `OCR_BACKEND=mock` in
-  Terminal 1 — returns canned data so you can test the upload→job→view flow, but
-  it won't actually read the image.
+  is always kept in `han_raw`. `=dict` uses `dicts/` (only as good as those
+  dictionaries); `=skip` (default) leaves Hán exactly as OCR'd.
 - **ngrok instead of cloudflared:** `ngrok http 8000` also works (needs a free
   ngrok account/token).

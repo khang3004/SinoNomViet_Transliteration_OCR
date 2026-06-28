@@ -57,8 +57,6 @@ def get_engine(name: str) -> OCREngine:
 # --- built-in engine registrations ----------------------------------------
 # Imported for their register() side effects. Each module guards its heavy
 # imports so importing this package never pulls in Paddle/Vision unless used.
-from pipeline.ocr import kandianguji as _kandianguji  # noqa: E402,F401
-from pipeline.ocr import mock as _mock  # noqa: E402,F401
 from pipeline.ocr import paddle as _paddle  # noqa: E402,F401
 from pipeline.ocr import vision as _vision  # noqa: E402,F401
 

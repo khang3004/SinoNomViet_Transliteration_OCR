@@ -1,10 +1,8 @@
 """Registry demonstration (AGENTS.md §11.6) — prove single-call extensibility.
 
-Prints the OCR-engine and layout-handler registries, then demonstrates that:
-  * the ``kandianguji`` engine REGISTERS (proving the plug-in path) but raises
-    NotImplementedError when actually used, and
-  * a brand-new engine can be added with a SINGLE ``register(...)`` call at
-    runtime — no existing code touched.
+Prints the OCR-engine and layout-handler registries, then demonstrates that a
+brand-new engine/layout can be added with a SINGLE ``register(...)`` call at
+runtime — no existing code touched.
 
 Also confirms no secret values are logged (only key-present booleans).
 
@@ -30,14 +28,6 @@ def main() -> int:
     print("OCR ENGINE REGISTRY")
     print("=" * 72)
     print("Registered OCR engines:", ocr.available())
-
-    print("\n-- kandianguji stub proves the plug-in path --")
-    stub = ocr.get_engine("kandianguji")
-    try:
-        stub.ocr("anything.png")
-    except NotImplementedError as e:
-        print("  kandianguji registered OK; using it raises NotImplementedError:")
-        print("   ", str(e).split(".")[0] + ".")
 
     print("\n-- adding a NEW engine = one register() call, no existing code touched --")
 
@@ -78,8 +68,7 @@ def main() -> int:
     print("TRANSLATION BACKEND REGISTRY")
     print("=" * 72)
     print("Registered translators:", translate.available())
-    print("  api=Gemini flash (default, needs GOOGLE_API_KEY) | offline=Qwen stub")
-    print("  mock=offline placeholder (no key) | skip=no-op")
+    print("  api=Gemini flash (default, needs GOOGLE_API_KEY) | offline=Qwen stub | skip=no-op")
 
     print("\n" + "=" * 72)
     print("SECRET HANDLING (startup logs booleans only — never values)")

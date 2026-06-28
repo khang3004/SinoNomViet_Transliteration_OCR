@@ -48,7 +48,6 @@ def get_translator(config) -> Translator:
 
 # --- built-in registrations (side-effect imports) -------------------------
 from pipeline.translate import gemini as _gemini  # noqa: E402,F401
-from pipeline.translate import mock as _mock  # noqa: E402,F401
 from pipeline.translate import offline_qwen as _offline  # noqa: E402,F401
 from pipeline.translate import skip as _skip  # noqa: E402,F401
 

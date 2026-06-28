@@ -62,15 +62,6 @@
     extracts parallel Han · Vietnamese records into JSONL.</p>
 
   <div class="card">
-    <h2>Try it — two_column demo</h2>
-    <p class="muted">Runs the PRIMARY <code>two_column</code> extraction on synthetic mock
-      data (no GPU, no PDF): Vietnamese from a mock PDF text layer, Han from mock OCR,
-      paired by position, watermark filtered, metadata parsed.</p>
-    <button onclick="runDemo()">▶ Run two_column demo</button>
-    <div id="demo-out"></div>
-  </div>
-
-  <div class="card">
     <h2>Upload</h2>
     <form id="form">
       <label for="file">Document (image or PDF)</label>
@@ -203,16 +194,6 @@
       leftEl.querySelectorAll('.box[data-rec="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]')
         .forEach(b => b.classList.toggle('hl', on));
       card.classList.toggle('hl', on);
-    }
-
-    async function runDemo() {
-      const out = document.getElementById('demo-out');
-      out.innerHTML = '<p class="muted">Running…</p>';
-      try {
-        const r = await fetch('/demo/two_column');
-        const j = await r.json();
-        renderRecords(j.records, out);
-      } catch (err) { out.innerHTML = '<p class="muted">Demo failed: ' + esc(err) + '</p>'; }
     }
 
     async function viewJob(id) {
