@@ -267,34 +267,65 @@ def get_reocr(rid: int) -> dict:
     return _poll_result(rid, "reocr")
 
 
-class CorrectRequest(BaseModel):
-    id: str  # record id to AI-correct
+class LLMRequest(BaseModel):
+    """Bring-your-own-key LLM request for one record."""
+
+    id: str
+    provider: str = "gemini"   # gemini | openai | anthropic
+    api_key: str               # the USER's own key — used per-request, never stored
+    model: str | None = None
+
+
+@app.get("/llm/providers")
+def llm_providers() -> dict:
+    """Available LLM providers + their default models (for the UI dropdown)."""
+    from pipeline import llm
+
+    return {
+        "providers": [
+            {"name": n, "default_model": llm.get_provider(n).default_model}
+            for n in llm.available()
+        ]
+    }
 
 
 @app.post("/jobs/{job_id}/correct")
-def enqueue_correct(job_id: int, req: CorrectRequest) -> dict:
-    """Enqueue an AI (Gemini) Han correction for one record; the worker runs it.
+def correct_record(job_id: int, req: LLMRequest) -> dict:
+    """AI-correct one record's Han with the USER's own key (synchronous).
 
-    Uses the record's raw OCR Han + its Vietnamese meaning as context. Needs
-    GOOGLE_API_KEY on the worker (the job fails with a clear message otherwise).
+    Uses the raw OCR Han + the entry's Vietnamese meaning as context. The key is
+    used only for this call — never persisted, never logged.
     """
-    job, records = _job_records(job_id)
+    _job, records = _job_records(job_id)
     rec = next((r for r in records if r.get("id") == req.id), None)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
-    payload = json.dumps({
-        "backend": "api",
-        "han": rec.get("han_raw") or rec.get("han", ""),
-        "context": rec.get("meaning", ""),
-    })
-    rid = store.create(filename="correct", input_path="", kind="correct", payload=payload)
-    return {"correct_job_id": rid}
+    from pipeline.llm.tasks import correct_han
+
+    try:
+        text = correct_han(
+            req.provider, req.api_key,
+            rec.get("han_raw") or rec.get("han", ""), rec.get("meaning", ""), req.model,
+        )
+    except Exception as exc:  # noqa: BLE001 - report a clean error to the UI
+        raise HTTPException(status_code=400, detail=f"correction failed: {exc}") from exc
+    return {"text": text}
 
 
-@app.get("/correct/{rid}")
-def get_correct(rid: int) -> dict:
-    """Poll an AI-correct job: returns status, and {text} when done."""
-    return _poll_result(rid, "correct")
+@app.post("/jobs/{job_id}/translate")
+def translate_record(job_id: int, req: LLMRequest) -> dict:
+    """Translate one record's Han to Vietnamese with the USER's own key."""
+    _job, records = _job_records(job_id)
+    rec = next((r for r in records if r.get("id") == req.id), None)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
+    from pipeline.llm.tasks import translate_han
+
+    try:
+        text = translate_han(req.provider, req.api_key, rec.get("han", ""), req.model)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"translation failed: {exc}") from exc
+    return {"text": text}
 
 
 def _poll_result(rid: int, kind: str) -> dict:

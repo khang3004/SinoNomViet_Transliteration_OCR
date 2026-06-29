@@ -16,7 +16,7 @@ import logging
 import os
 import time
 
-from pipeline import correct, ocr
+from pipeline import ocr
 from pipeline.config import load_config
 from pipeline.jobstore import JobStore
 from pipeline.runner import process_file, reocr_region
@@ -43,8 +43,6 @@ def run_once(store: JobStore, config, engine) -> bool:
     try:
         if job.kind == "reocr":
             _run_reocr(store, config, engine, job)
-        elif job.kind == "correct":
-            _run_correct(store, config, job)
         else:
             _run_extract(store, config, engine, job)
     except Exception as exc:  # noqa: BLE001 - record failure, keep the worker alive
@@ -75,21 +73,6 @@ def _run_reocr(store: JobStore, config, engine, job) -> None:
         json.dump(result, fh, ensure_ascii=False)
     store.mark_done(job.id, out_path)
     logger.info("Reocr job %d done: %r (conf=%.2f)", job.id, result["text"], result["conf"])
-
-
-def _run_correct(store: JobStore, config, job) -> None:
-    """AI-correct one record's Han via Gemini (uses the Vietnamese as context)."""
-    args = json.loads(job.payload or "{}")
-    backend = args.get("backend", "api")
-    logger.info("Claimed correct job %d (backend=%s).", job.id, backend)
-    corrector = correct.build(backend, config)  # api needs GOOGLE_API_KEY
-    fixed = corrector.correct(args.get("han", ""), context=args.get("context", ""))
-    out_path = os.path.join(config.output_dir, "correct", f"correct_{job.id}.json")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as fh:
-        json.dump({"text": fixed}, fh, ensure_ascii=False)
-    store.mark_done(job.id, out_path)
-    logger.info("Correct job %d done: %r", job.id, fixed)
 
 
 def main() -> None:
