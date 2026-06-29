@@ -222,13 +222,22 @@ class TwoColumnHandler:
         records: list[Record] = []
         for line_no, entry in enumerate(entries, start=1):
             y0, y1 = entry["y0"], entry["y1"]
-            # Step 4: pair Han tokens by y-overlap with this entry's y-band.
-            han_text = self._han_for_band(han_dets, y0, y1)
+            # The Han block starts BELOW "TRÍCH YẾU" (skip the metadata block
+            # above it). Fall back to the entry top if no heading was found.
+            han_y0 = entry.get("han_y0") or y0
+            # Step 4: pair Han tokens by y-overlap with the Han band (below
+            # TRÍCH YẾU). If that band has no Han (e.g. an entry whose TRÍCH line
+            # was detected low, or a layout without one), fall back to the full
+            # entry band so we never lose the Han.
+            han_text = self._han_for_band(han_dets, han_y0, y1)
+            if not han_text and han_y0 > y0:
+                han_text = self._han_for_band(han_dets, y0, y1)
+                han_y0 = y0
             # Step 5: parse metadata + build the parallel body (meaning).
             meta, meaning = self._parse_entry_body(entry["lines"])
-            # Block regions: the Han/Vietnamese boundary is the tightened crop x,
-            # so the Han box no longer overlaps the metadata column.
-            han_bbox = [0.0, y0, han_crop_x, y1]
+            # Block regions: Han box = below TRÍCH YẾU, left of the column split;
+            # Vietnamese box spans the whole entry (it includes the metadata).
+            han_bbox = [0.0, han_y0, han_crop_x, y1]
             meaning_bbox = [han_crop_x, y0, page_w, y1]
 
             rec = Record(
@@ -387,7 +396,7 @@ class TwoColumnHandler:
             if starts:
                 if current is not None:
                     entries.append(current)
-                current = {"y0": ly0, "y1": ly1, "lines": [], "entry_no_hint": hint}
+                current = {"y0": ly0, "y1": ly1, "lines": [], "entry_no_hint": hint, "han_y0": None}
                 if hint is not None:  # bare-number mode: drop the leading number
                     remainder = re.sub(r"^\d{1,4}\.?\s*", "", t)
                     if remainder:
@@ -397,6 +406,10 @@ class TwoColumnHandler:
             elif current is not None:
                 current["y1"] = ly1
                 current["lines"].append(t)
+            # The Hán block begins just BELOW the "TRÍCH YẾU" heading; record its
+            # bottom y so Han OCR skips the metadata block above it.
+            if current is not None and t.startswith("TRÍCH"):
+                current["han_y0"] = ly1
             # lines before the first entry anchor (page title) are ignored.
         if current is not None:
             entries.append(current)
