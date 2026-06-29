@@ -63,7 +63,8 @@ def _run_extract(store: JobStore, config, engine, job) -> None:
 def _run_reocr(store: JobStore, config, engine, job) -> None:
     """Re-OCR one box region; write {text, conf} JSON for the app to poll."""
     args = json.loads(job.payload or "{}")
-    page_image = os.path.join(config.output_dir, "pages", os.path.basename(args["page_image"]))
+    img_name = args.get("image_path") or args.get("page_image") or ""
+    page_image = os.path.join(config.output_dir, "pages", os.path.basename(img_name))
     logger.info("Claimed reocr job %d (%s bbox=%s).", job.id, os.path.basename(page_image), args.get("bbox"))
     result = reocr_region(page_image, args["bbox"], config, engine=engine)
     out_path = os.path.join(config.output_dir, "reocr", f"reocr_{job.id}.json")

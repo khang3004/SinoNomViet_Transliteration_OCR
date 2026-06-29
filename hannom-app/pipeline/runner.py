@@ -78,7 +78,12 @@ def reocr_region(page_image_path: str, bbox, config: Config, engine=None) -> dic
     os.makedirs(work_dir, exist_ok=True)
     crop_path = os.path.join(work_dir, "reocr_crop.png")
     crop.save(crop_path)
+    from pipeline.layouts.base import cjk_ratio
+
     dets = engine.ocr(crop_path) or []
+    # Keep CJK-majority detections (this targets the Hán column), dropping any
+    # Latin label-bleed grazed at the box edges. Read top→bottom, left→right.
+    dets = [d for d in dets if cjk_ratio(d.get("text", "")) >= 0.34]
     dets.sort(key=lambda d: ((d["bbox"][1] + d["bbox"][3]) / 2.0, d["bbox"][0]))
     text = "".join(d.get("text", "") for d in dets)
     conf = sum(float(d.get("conf", 0.0)) for d in dets) / len(dets) if dets else 0.0

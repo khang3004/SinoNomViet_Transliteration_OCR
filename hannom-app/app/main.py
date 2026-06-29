@@ -130,6 +130,7 @@ class NewRecord(BaseModel):
     meaning_bbox: list[float] | None = None
     han: str = ""
     meaning: str = ""
+    image_path: str = ""  # page image; falls back to a same-page record's image
 
 
 class DeleteRecord(BaseModel):
@@ -204,6 +205,10 @@ def create_record(job_id: int, new: NewRecord) -> dict:
     job, records = _job_records(job_id)
     prefix = (records[0]["id"].rsplit(".", 2)[0] if records else "HVB_001")
     line_no = max([r["line_no"] for r in records if r.get("page") == new.page] + [0]) + 1
+    # Page image: prefer the value the UI sent, else any record on the SAME page,
+    # else the first record's image (single-page fallback).
+    same_page = next((r for r in records if r.get("page") == new.page), None)
+    image_path = new.image_path or (same_page or (records[0] if records else {})).get("image_path", "")
     rec = {
         "id": f"{prefix}.{new.page:03d}.{line_no:02d}",
         "source_doc": records[0].get("source_doc", "") if records else "",
@@ -215,7 +220,7 @@ def create_record(job_id: int, new: NewRecord) -> dict:
         "phonetic": "",
         "meaning": new.meaning,
         "layout_type": "two_column",
-        "image_path": records[0].get("image_path", "") if records else "",
+        "image_path": image_path,
         "entry_no": None,
         "entry_meta": {"ngay": "", "to_tap": "", "loai": "", "xuat_xu": "", "de_tai": ""},
         "han_chars": list(new.han),

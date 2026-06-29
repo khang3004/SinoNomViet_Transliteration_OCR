@@ -279,8 +279,9 @@
         document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up);
         temp.remove();
         if (!draw.box || (draw.box[2]-draw.box[0]) < 8 || (draw.box[3]-draw.box[1]) < 8) return;
+        const pageImg = (pageRecords()[0] || {}).image_path || '';
         const res = await fetch(`/jobs/${R.jobId}/record/new`, { method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ page: R.page, han_bbox: draw.box }) });
+          body: JSON.stringify({ page: R.page, han_bbox: draw.box, image_path: pageImg }) });
         const j = await res.json(); R.records.push(j.record);
         toggleDraw(); drawBoxes(); selectRecord(j.record.id); updateProgress();
       };
