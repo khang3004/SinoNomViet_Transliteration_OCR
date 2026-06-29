@@ -118,6 +118,49 @@ class RecordEdit(BaseModel):
     page: int | None = None
     entry_meta: dict | None = None
     review_status: str | None = None
+    han_bbox: list[float] | None = None
+    meaning_bbox: list[float] | None = None
+
+
+class NewRecord(BaseModel):
+    """A user-drawn box → new record on a page."""
+
+    page: int
+    han_bbox: list[float]
+    meaning_bbox: list[float] | None = None
+    han: str = ""
+    meaning: str = ""
+
+
+class DeleteRecord(BaseModel):
+    id: str
+
+
+class ReocrRequest(BaseModel):
+    """Re-OCR one box region of a page image."""
+
+    image_path: str
+    bbox: list[float]
+    page: int = 1
+
+
+def _job_records(job_id: int):
+    """Return (job, records list) or raise the appropriate HTTP error."""
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if not job.output_path or not os.path.exists(job.output_path):
+        raise HTTPException(status_code=409, detail="output not ready")
+    with open(job.output_path, encoding="utf-8") as fh:
+        return job, [json.loads(ln) for ln in fh if ln.strip()]
+
+
+def _save_records(job, records) -> None:
+    tmp = job.output_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as out:
+        for r in records:
+            out.write(json.dumps(r, ensure_ascii=False) + "\n")
+    os.replace(tmp, job.output_path)
 
 
 @app.post("/jobs/{job_id}/record")
@@ -127,15 +170,7 @@ def update_record(job_id: int, edit: RecordEdit) -> dict:
     Marks the record ``review_status="verified"`` (unless overridden), keeps the
     raw OCR in ``han_raw``, and rewrites the JSONL atomically.
     """
-    job = store.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    if not job.output_path or not os.path.exists(job.output_path):
-        raise HTTPException(status_code=409, detail="output not ready")
-
-    with open(job.output_path, encoding="utf-8") as fh:
-        records = [json.loads(ln) for ln in fh if ln.strip()]
-
+    job, records = _job_records(job_id)
     target = next((r for r in records if r.get("id") == edit.id), None)
     if target is None:
         raise HTTPException(status_code=404, detail=f"record {edit.id!r} not found")
@@ -152,15 +187,88 @@ def update_record(job_id: int, edit: RecordEdit) -> dict:
         target["page"] = edit.page
     if edit.entry_meta is not None:
         target.setdefault("entry_meta", {}).update(edit.entry_meta)
+    if edit.han_bbox is not None:
+        target["han_bbox"] = edit.han_bbox
+    if edit.meaning_bbox is not None:
+        target["meaning_bbox"] = edit.meaning_bbox
     target["review_status"] = edit.review_status or "verified"
 
-    tmp = job.output_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as out:
-        for r in records:
-            out.write(json.dumps(r, ensure_ascii=False) + "\n")
-    os.replace(tmp, job.output_path)
+    _save_records(job, records)
     logger.info("Job %d: record %s updated (status=%s).", job_id, edit.id, target["review_status"])
     return {"ok": True, "record": target}
+
+
+@app.post("/jobs/{job_id}/record/new")
+def create_record(job_id: int, new: NewRecord) -> dict:
+    """Append a new record for a user-drawn box."""
+    job, records = _job_records(job_id)
+    prefix = (records[0]["id"].rsplit(".", 2)[0] if records else "HVB_001")
+    line_no = max([r["line_no"] for r in records if r.get("page") == new.page] + [0]) + 1
+    rec = {
+        "id": f"{prefix}.{new.page:03d}.{line_no:02d}",
+        "source_doc": records[0].get("source_doc", "") if records else "",
+        "page": new.page,
+        "line_no": line_no,
+        "han": new.han,
+        "han_raw": new.han,
+        "han_conf": [],
+        "phonetic": "",
+        "meaning": new.meaning,
+        "layout_type": "two_column",
+        "image_path": records[0].get("image_path", "") if records else "",
+        "entry_no": None,
+        "entry_meta": {"ngay": "", "to_tap": "", "loai": "", "xuat_xu": "", "de_tai": ""},
+        "han_chars": list(new.han),
+        "phonetic_per_char": [],
+        "source_of": {"han": "ocr", "phonetic": "", "meaning": "manual"},
+        "review_status": "pending",
+        "han_bbox": new.han_bbox,
+        "meaning_bbox": new.meaning_bbox or new.han_bbox,
+    }
+    records.append(rec)
+    _save_records(job, records)
+    logger.info("Job %d: created record %s (manual box).", job_id, rec["id"])
+    return {"ok": True, "record": rec}
+
+
+@app.post("/jobs/{job_id}/record/delete")
+def delete_record(job_id: int, req: DeleteRecord) -> dict:
+    """Remove a record (e.g. a spurious detection)."""
+    job, records = _job_records(job_id)
+    kept = [r for r in records if r.get("id") != req.id]
+    if len(kept) == len(records):
+        raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
+    _save_records(job, kept)
+    logger.info("Job %d: deleted record %s.", job_id, req.id)
+    return {"ok": True, "deleted": req.id}
+
+
+@app.post("/jobs/{job_id}/reocr")
+def enqueue_reocr(job_id: int, req: ReocrRequest) -> dict:
+    """Enqueue a re-OCR of one box region; the worker (with OCR) runs it."""
+    if store.get(job_id) is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    payload = json.dumps({"image_path": os.path.basename(req.image_path), "bbox": req.bbox})
+    rid = store.create(
+        filename=f"reocr p{req.page}", input_path="", source_doc="",
+        kind="reocr", payload=payload,
+    )
+    return {"reocr_job_id": rid}
+
+
+@app.get("/reocr/{rid}")
+def get_reocr(rid: int) -> dict:
+    """Poll a re-OCR job: returns status, and {text, conf} when done."""
+    job = store.get(rid)
+    if job is None or job.kind != "reocr":
+        raise HTTPException(status_code=404, detail="reocr job not found")
+    out = {"status": job.status}
+    if job.status == "done" and job.output_path and os.path.exists(job.output_path):
+        with open(job.output_path, encoding="utf-8") as fh:
+            out.update(json.load(fh))
+    elif job.status == "failed":
+        out["error"] = job.error
+    return out
 
 
 @app.get("/pages/{filename}")

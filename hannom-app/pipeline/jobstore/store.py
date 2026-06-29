@@ -38,6 +38,8 @@ class Job:
     error: str
     created_at: float
     updated_at: float
+    kind: str = "extract"   # "extract" (whole file) or "reocr" (one region)
+    payload: str = ""        # JSON args for non-extract jobs (e.g. reocr bbox)
 
 
 _SCHEMA = """
@@ -50,7 +52,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     output_path TEXT NOT NULL DEFAULT '',
     error       TEXT NOT NULL DEFAULT '',
     created_at  REAL NOT NULL,
-    updated_at  REAL NOT NULL
+    updated_at  REAL NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'extract',
+    payload     TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -72,16 +76,29 @@ class JobStore:
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            # Migrate older DBs that predate the kind/payload columns.
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+            if "kind" not in cols:
+                conn.execute("ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'extract'")
+            if "payload" not in cols:
+                conn.execute("ALTER TABLE jobs ADD COLUMN payload TEXT NOT NULL DEFAULT ''")
 
     # ------------------------------------------------------------------
-    def create(self, filename: str, input_path: str, source_doc: str = "") -> int:
+    def create(
+        self,
+        filename: str,
+        input_path: str,
+        source_doc: str = "",
+        kind: str = "extract",
+        payload: str = "",
+    ) -> int:
         """Enqueue a new job; returns its id."""
         now = time.time()
         with self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO jobs (filename, input_path, source_doc, status, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (filename, input_path, source_doc, JobStatus.PENDING.value, now, now),
+                "created_at, updated_at, kind, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (filename, input_path, source_doc, JobStatus.PENDING.value, now, now, kind, payload),
             )
             return int(cur.lastrowid)
 
@@ -163,4 +180,6 @@ class JobStore:
             error=data["error"],
             created_at=data["created_at"],
             updated_at=data["updated_at"],
+            kind=data.get("kind", "extract"),
+            payload=data.get("payload", ""),
         )

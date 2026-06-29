@@ -11,13 +11,15 @@ Run:  python -m worker.worker
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 
+from pipeline import ocr
 from pipeline.config import load_config
 from pipeline.jobstore import JobStore
-from pipeline.runner import process_file
+from pipeline.runner import process_file, reocr_region
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -33,22 +35,43 @@ def _ensure_dirs(config) -> None:
         os.makedirs(d, exist_ok=True)
 
 
-def run_once(store: JobStore, config) -> bool:
+def run_once(store: JobStore, config, engine) -> bool:
     """Claim and process one job. Returns True if a job was handled."""
     job = store.claim_next()
     if job is None:
         return False
-    logger.info("Claimed job %d (%s).", job.id, job.filename)
-    out_name = f"job_{job.id}_{os.path.splitext(job.filename)[0]}.jsonl"
-    out_path = os.path.join(config.output_dir, out_name)
     try:
-        records = process_file(job.input_path, out_path, config, source_doc=job.source_doc)
-        store.mark_done(job.id, out_path)
-        logger.info("Job %d done: %d record(s) → %s", job.id, len(records), out_path)
+        if job.kind == "reocr":
+            _run_reocr(store, config, engine, job)
+        else:
+            _run_extract(store, config, engine, job)
     except Exception as exc:  # noqa: BLE001 - record failure, keep the worker alive
-        logger.exception("Job %d failed.", job.id)
+        logger.exception("Job %d (%s) failed.", job.id, job.kind)
         store.mark_failed(job.id, str(exc))
     return True
+
+
+def _run_extract(store: JobStore, config, engine, job) -> None:
+    logger.info("Claimed extract job %d (%s).", job.id, job.filename)
+    out_name = f"job_{job.id}_{os.path.splitext(job.filename)[0]}.jsonl"
+    out_path = os.path.join(config.output_dir, out_name)
+    records = process_file(job.input_path, out_path, config, source_doc=job.source_doc, engine=engine)
+    store.mark_done(job.id, out_path)
+    logger.info("Job %d done: %d record(s) → %s", job.id, len(records), out_path)
+
+
+def _run_reocr(store: JobStore, config, engine, job) -> None:
+    """Re-OCR one box region; write {text, conf} JSON for the app to poll."""
+    args = json.loads(job.payload or "{}")
+    page_image = os.path.join(config.output_dir, "pages", os.path.basename(args["page_image"]))
+    logger.info("Claimed reocr job %d (%s bbox=%s).", job.id, os.path.basename(page_image), args.get("bbox"))
+    result = reocr_region(page_image, args["bbox"], config, engine=engine)
+    out_path = os.path.join(config.output_dir, "reocr", f"reocr_{job.id}.json")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as fh:
+        json.dump(result, fh, ensure_ascii=False)
+    store.mark_done(job.id, out_path)
+    logger.info("Reocr job %d done: %r (conf=%.2f)", job.id, result["text"], result["conf"])
 
 
 def main() -> None:
@@ -59,6 +82,10 @@ def main() -> None:
     config.log_key_presence()  # booleans only — never key values
     config.validate()  # fail fast if a selected api backend lacks its key
 
+    # Build the OCR engine ONCE and keep it warm for both extract & reocr jobs.
+    engine = ocr.get_engine(config.ocr_backend)
+    logger.info("OCR engine %r loaded.", config.ocr_backend)
+
     store = JobStore(config.jobs_db)
     requeued = store.requeue_running()
     if requeued:
@@ -66,7 +93,7 @@ def main() -> None:
     logger.info("Polling for jobs every %.1fs …", POLL_INTERVAL_S)
     while True:
         try:
-            handled = run_once(store, config)
+            handled = run_once(store, config, engine)
         except Exception:  # noqa: BLE001 - never let the loop die
             logger.exception("Unexpected error in worker loop.")
             handled = False

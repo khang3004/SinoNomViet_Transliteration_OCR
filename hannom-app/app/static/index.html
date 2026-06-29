@@ -5,67 +5,58 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>hannom-app — Han-Nom OCR corpus builder</title>
   <style>
-    :root { --accent: #b3122a; --primary: #2563eb; }
+    :root { --accent: #b3122a; --primary: #2563eb; --amber: #f59e0b; }
     body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 1.5rem auto; max-width: 1400px; color: #1e293b; }
     h1 { font-size: 1.4rem; } h2 { font-size: 1.05rem; }
     .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; background: #fff; }
     label { display: block; margin: 0.4rem 0 0.2rem; font-weight: 600; font-size: 0.82rem; }
-    input, select, textarea { font-size: 0.95rem; padding: 0.45rem; border: 1px solid #e5e7eb; border-radius: 4px; font-family: inherit; box-sizing: border-box; }
+    input, select, textarea { font-size: 0.95rem; padding: 0.45rem; border: 1px solid #e5e7eb; border-radius: 4px; font-family: inherit; box-sizing: border-box; width: 100%; }
     button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; font-size: 0.9rem; }
-    button.ghost { background: #eee; color: #333; }
+    button.ghost { background: #eee; color: #333; } button.blue { background: var(--primary); } button.amber { background: var(--amber); } button.danger { background: #dc2626; }
     button:hover { filter: brightness(0.95); }
+    button:disabled { background: #94a3b8; cursor: not-allowed; }
     table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
     th, td { border-bottom: 1px solid #eee; text-align: left; padding: 0.4rem 0.5rem; }
     .status { font-weight: 600; }
-    .pending { color: #b07900; } .running { color: #1565c0; }
-    .done { color: #2e7d32; } .failed { color: #c62828; }
-    a { color: var(--accent); cursor: pointer; }
-    .muted { color: #777; font-size: 0.8rem; }
+    .pending { color: #b07900; } .running { color: #1565c0; } .done { color: #2e7d32; } .failed { color: #c62828; }
+    a { color: var(--accent); cursor: pointer; } .muted { color: #777; font-size: 0.8rem; }
 
-    /* ===== review workspace ===== */
-    .review-head { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
-    .progress { font-size: 0.85rem; color: #334155; }
+    .review-head { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
     .progress b { color: #2e7d32; }
-    .pagesel { font-size: 0.85rem; }
+    .toolbar { display: flex; gap: 0.5rem; align-items: center; margin: 0.3rem 0 0.5rem; font-size: 0.8rem; }
     .workspace { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items: start; }
     @media (max-width: 860px) { .workspace { grid-template-columns: 1fr; } }
 
-    .overlay-wrap { position: relative; display: block; line-height: 0; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+    .overlay-wrap { position: relative; display: block; line-height: 0; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; user-select: none; }
     .overlay-wrap img { width: 100%; display: block; }
-    .box { position: absolute; box-sizing: border-box; cursor: pointer; transition: background .12s, border-color .12s; }
+    .overlay-wrap.draw { cursor: crosshair; }
+    .box { position: absolute; box-sizing: border-box; cursor: pointer; }
     .box-han { border: 2px solid rgba(179,18,42,.55); background: rgba(179,18,42,.06); }
     .box-vi  { border: 2px solid rgba(21,101,192,.5); background: rgba(21,101,192,.04); }
     .box:hover { background: rgba(245,158,11,.28); }
-    .box.sel { border-color: #f59e0b; background: rgba(245,158,11,.32); z-index: 5; box-shadow: 0 0 8px rgba(245,158,11,.5); }
-    .box.ok { border-color: #22c55e; }
-    .box.ok.box-han, .box.ok.box-vi { background: rgba(34,197,94,.16); }
-    .box-num { position: absolute; top: 0; left: 0; transform: translateY(-100%); font-size: 0.62rem;
-               background: rgba(179,18,42,.85); color: #fff; padding: 0 4px; border-radius: 3px 3px 0 0; pointer-events: none; }
-    .legend { font-size: 0.72rem; color: #555; margin: 0.3rem 0; }
+    .box.sel { border-color: var(--amber); background: rgba(245,158,11,.28); z-index: 5; box-shadow: 0 0 8px rgba(245,158,11,.5); }
+    .box.edit { cursor: move; }
+    .box.ok { border-color: #22c55e; } .box.ok.box-han, .box.ok.box-vi { background: rgba(34,197,94,.16); }
+    .box-num { position: absolute; top: 0; left: 0; transform: translateY(-100%); font-size: 0.62rem; background: rgba(179,18,42,.85); color: #fff; padding: 0 4px; border-radius: 3px 3px 0 0; pointer-events: none; }
+    .handle { position: absolute; width: 11px; height: 11px; background: #fff; border: 2px solid var(--amber); border-radius: 2px; z-index: 20; }
+    .legend { font-size: 0.72rem; color: #555; margin: 0.2rem 0; }
     .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 0.2rem 0 0.6rem; vertical-align: middle; }
 
-    .editor { display: flex; flex-direction: column; gap: 0.7rem; }
+    .editor { display: flex; flex-direction: column; gap: 0.6rem; }
     .editor.disabled { opacity: 0.5; pointer-events: none; }
-    .row { display: flex; gap: 0.75rem; }
-    .row > div { flex: 1; }
-    textarea { resize: vertical; width: 100%; }
-    .ta-han { font-family: "MingLiU", "Noto Serif CJK TC", "SimSun", serif; font-size: 20px; min-height: 130px; line-height: 1.7; }
-    .ta-vi { min-height: 90px; font-size: 15px; }
-    .raw { font-size: 0.75rem; color: #94a3b8; }
-    .raw .d { color: #c62828; }
-    .verify { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; padding: 0.6rem; border-radius: 6px; background: #fee2e2; color: #b91c1c; }
-    .verify.on { background: #dcfce7; color: #166534; }
-    .verify input { width: auto; }
+    .row { display: flex; gap: 0.75rem; } .row > div { flex: 1; }
+    .ta-han { font-family: "MingLiU", "Noto Serif CJK TC", "SimSun", serif; font-size: 20px; min-height: 120px; line-height: 1.7; resize: vertical; }
+    .ta-vi { min-height: 80px; font-size: 15px; resize: vertical; }
+    .raw { font-size: 0.75rem; color: #94a3b8; } .raw .d { color: #c62828; }
+    .verify { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; padding: 0.55rem; border-radius: 6px; background: #fee2e2; color: #b91c1c; }
+    .verify.on { background: #dcfce7; color: #166534; } .verify input { width: auto; }
     .btn-save { background: var(--primary); padding: 0.7rem; font-size: 1rem; font-weight: 700; }
-    .btn-save:disabled { background: #94a3b8; cursor: not-allowed; }
-    .nav { display: flex; gap: 0.5rem; justify-content: space-between; }
-    .nav button { background: #eef2ff; color: #1e3a8a; }
+    .btnrow { display: flex; gap: 0.5rem; } .btnrow button { flex: 1; }
   </style>
 </head>
 <body>
   <h1>🏮 hannom-app — Han-Nom OCR corpus builder</h1>
-  <p class="muted">Upload a Châu bản page (image, or a text-layer Mục lục PDF). The worker
-    extracts parallel Han · Vietnamese records; review &amp; verify them below.</p>
+  <p class="muted">Upload a page (image, or a text-layer Mục lục PDF). Review, fix boxes, re-OCR, and verify.</p>
 
   <div class="card">
     <h2>Upload</h2>
@@ -82,10 +73,7 @@
 
   <div class="card">
     <h2>Jobs <button class="ghost" type="button" onclick="refresh()" style="font-size:0.75rem;padding:0.2rem 0.6rem">↻</button></h2>
-    <table>
-      <thead><tr><th>#</th><th>File</th><th>Status</th><th>Output</th></tr></thead>
-      <tbody id="jobs"></tbody>
-    </table>
+    <table><thead><tr><th>#</th><th>File</th><th>Status</th><th>Output</th></tr></thead><tbody id="jobs"></tbody></table>
   </div>
 
   <div class="card" id="review-card" style="display:none">
@@ -96,13 +84,17 @@
       <span style="flex:1"></span>
       <button class="ghost" onclick="closeReview()" style="font-size:0.75rem;padding:0.2rem 0.6rem">✕ close</button>
     </div>
-    <div class="legend">blocks:
-      <span class="sw" style="background:rgba(179,18,42,.85)"></span>Hán
-      <span class="sw" style="background:rgba(21,101,192,.85)"></span>Việt
-      <span class="sw" style="background:#22c55e"></span>verified — click a box to edit</div>
     <div class="workspace">
       <div>
-        <div class="overlay-wrap" id="wrap"><p class="muted" style="padding:1rem">(loading image…)</p></div>
+        <div class="toolbar">
+          <button class="ghost" id="draw-btn" onclick="toggleDraw()">🖊 Draw box</button>
+          <span class="muted" id="draw-hint">Click a box to edit · drag its handles to resize · drag body to move</span>
+        </div>
+        <div class="legend">
+          <span class="sw" style="background:rgba(179,18,42,.85)"></span>Hán
+          <span class="sw" style="background:rgba(21,101,192,.85)"></span>Việt
+          <span class="sw" style="background:#22c55e"></span>verified</div>
+        <div class="overlay-wrap" id="wrap"><p class="muted" style="padding:1rem">(loading…)</p></div>
       </div>
       <div class="editor disabled" id="editor">
         <div class="row">
@@ -113,6 +105,10 @@
           <label>Hán tự (Traditional)</label>
           <textarea class="ta-han" id="f-han"></textarea>
           <div class="raw" id="f-raw"></div>
+          <div class="btnrow" style="margin-top:0.4rem">
+            <button class="amber" id="btn-reocr" onclick="reocrBox()">🔁 Re-OCR this box</button>
+            <button class="danger" id="btn-del" onclick="deleteBox()">🗑 Delete box</button>
+          </div>
         </div>
         <div>
           <label>Quốc ngữ (phiên âm / dịch nghĩa)</label>
@@ -128,177 +124,235 @@
           <div><label>Đề tài</label><input type="text" id="m-de_tai" /></div>
         </div>
         <label class="verify" id="verify-box">
-          <input type="checkbox" id="f-verify" onchange="onVerify()" />
-          I confirm this record is correct (isHumanVerified)
+          <input type="checkbox" id="f-verify" onchange="onVerify()" /> I confirm this record is correct
         </label>
         <button class="btn-save" id="btn-save" disabled onclick="saveRecord()">💾 Save to corpus</button>
-        <div class="nav">
-          <button onclick="step(-1)">← Prev</button>
-          <button onclick="step(1)">Next →</button>
-        </div>
+        <div class="btnrow"><button class="ghost" onclick="step(-1)">← Prev</button><button class="ghost" onclick="step(1)">Next →</button></div>
       </div>
     </div>
   </div>
 
   <script>
-    const form = document.getElementById('form');
-    const msg = document.getElementById('msg');
+    const form = document.getElementById('form'), msg = document.getElementById('msg');
     const esc = s => (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
     const cssEsc = s => (window.CSS && CSS.escape) ? CSS.escape(s) : s;
-
-    let R = { jobId: null, records: [], pages: [], page: null, selId: null };
+    let R = { jobId: null, records: [], pages: [], page: null, selId: null, img: null, wrap: null, drawMode: false };
 
     async function viewJob(id) {
       const card = document.getElementById('review-card');
-      card.style.display = '';
-      document.getElementById('review-title').textContent = `Review — job #${id}`;
-      document.getElementById('wrap').innerHTML = '<p class="muted" style="padding:1rem">(loading…)</p>';
+      card.style.display = ''; document.getElementById('review-title').textContent = `Review — job #${id}`;
       card.scrollIntoView({ behavior: 'smooth' });
-      try {
-        const j = await (await fetch('/jobs/' + id + '/records')).json();
-        R = { jobId: id, records: j.records || [], pages: [], page: null, selId: null };
-        R.pages = [...new Set(R.records.map(r => r.page))].sort((a, b) => a - b);
-        R.page = R.pages[0];
-        renderPageSelector();
-        renderPage();
-      } catch (err) {
-        document.getElementById('wrap').innerHTML = '<p class="muted">Could not load: ' + esc(err) + '</p>';
-      }
+      const j = await (await fetch('/jobs/' + id + '/records')).json();
+      R = { jobId: id, records: j.records || [], pages: [], page: null, selId: null, img: null, wrap: null, drawMode: false };
+      R.pages = [...new Set(R.records.map(r => r.page))].sort((a, b) => a - b);
+      R.page = R.pages[0]; renderPageSelector(); renderPage();
     }
-
     function closeReview() { document.getElementById('review-card').style.display = 'none'; }
-
     function pageRecords() { return R.records.filter(r => r.page === R.page); }
+    function getRec(id) { return R.records.find(r => r.id === id); }
 
     function updateProgress() {
       const v = R.records.filter(r => r.review_status === 'verified').length;
-      document.getElementById('progress').innerHTML =
-        `verified <b>${v}</b> / ${R.records.length}`;
+      document.getElementById('progress').innerHTML = `verified <b>${v}</b> / ${R.records.length}`;
     }
-
     function renderPageSelector() {
       const el = document.getElementById('pagesel');
-      if (R.pages.length <= 1) { el.textContent = ''; updateProgress(); return; }
-      el.innerHTML = 'page: ' + R.pages.map(p =>
+      el.innerHTML = R.pages.length <= 1 ? '' : 'page: ' + R.pages.map(p =>
         p === R.page ? `<b>${p}</b>` : `<a onclick="gotoPage(${p})">${p}</a>`).join(' · ');
       updateProgress();
     }
     function gotoPage(p) { R.page = p; R.selId = null; renderPageSelector(); renderPage(); }
 
     function renderPage() {
-      const recs = pageRecords();
-      const wrap = document.getElementById('wrap');
-      wrap.innerHTML = '';
-      const img = document.createElement('img');
-      img.alt = 'page ' + R.page;
-      img.onload = () => drawBoxes(wrap, img, recs);
+      const recs = pageRecords(), wrap = document.getElementById('wrap');
+      wrap.innerHTML = ''; R.wrap = wrap;
+      const img = document.createElement('img'); R.img = img; img.alt = 'page ' + R.page;
+      img.onload = () => { drawBoxes(); if (recs.length) selectRecord(recs[0].id); else fillEditor(null); };
       img.onerror = () => { wrap.innerHTML = '<p class="muted" style="padding:1rem">(source image unavailable)</p>'; };
       img.src = '/pages/' + encodeURIComponent(recs[0]?.image_path || '');
       wrap.appendChild(img);
-      if (recs.length) selectRecord(recs[0].id); else fillEditor(null);
     }
 
-    function drawBoxes(wrap, img, recs) {
-      const nw = img.naturalWidth, nh = img.naturalHeight;
+    function pct(v, d) { return (100 * v / d) + '%'; }
+
+    function drawBoxes() {
+      const wrap = R.wrap, img = R.img, nw = img.naturalWidth, nh = img.naturalHeight;
       wrap.querySelectorAll('.box').forEach(b => b.remove());
       if (!nw || !nh) return;
-      const pct = (v, d) => (100 * v / d) + '%';
-      for (const r of recs) {
-        const verified = r.review_status === 'verified';
+      for (const r of pageRecords()) {
+        const verified = r.review_status === 'verified', sel = r.id === R.selId;
         for (const [cls, bb, num] of [['box-han', r.han_bbox, r.entry_no], ['box-vi', r.meaning_bbox, null]]) {
-          if (!bb || bb.length !== 4) continue;
-          const [x0, y0, x1, y1] = bb;
-          if (x1 <= x0 || y1 <= y0) continue;
+          if (!bb || bb.length !== 4 || bb[2] <= bb[0] || bb[3] <= bb[1]) continue;
           const d = document.createElement('div');
-          d.className = 'box ' + cls + (verified ? ' ok' : '') + (r.id === R.selId ? ' sel' : '');
-          d.dataset.id = r.id;
-          d.style.left = pct(x0, nw); d.style.top = pct(y0, nh);
-          d.style.width = pct(x1 - x0, nw); d.style.height = pct(y1 - y0, nh);
+          d.className = 'box ' + cls + (verified ? ' ok' : '') + (sel ? ' sel' : '');
+          d.dataset.id = r.id; d.dataset.kind = cls;
+          d.style.left = pct(bb[0], nw); d.style.top = pct(bb[1], nh);
+          d.style.width = pct(bb[2] - bb[0], nw); d.style.height = pct(bb[3] - bb[1], nh);
           if (num != null) d.innerHTML = `<span class="box-num">${esc(num)}${verified ? ' ✓' : ''}</span>`;
-          d.onclick = () => selectRecord(r.id);
+          d.addEventListener('mousedown', (e) => onBoxDown(e, r, cls));
+          // The selected Hán box is editable (move + resize handles).
+          if (sel && cls === 'box-han') { d.classList.add('edit'); addHandles(d); }
           wrap.appendChild(d);
         }
       }
     }
 
-    function refreshBoxHl() {
-      document.querySelectorAll('#wrap .box').forEach(b =>
-        b.classList.toggle('sel', b.dataset.id === R.selId));
+    const HANDLES = ['nw','n','ne','e','se','s','sw','w'];
+    function addHandles(box) {
+      for (const dir of HANDLES) {
+        const h = document.createElement('div'); h.className = 'handle'; h.dataset.dir = dir;
+        const v = { n: ['50%', '0'], s: ['50%', '100%'], e: ['100%', '50%'], w: ['0', '50%'],
+                    nw: ['0','0'], ne: ['100%','0'], sw: ['0','100%'], se: ['100%','100%'] }[dir];
+        h.style.left = `calc(${v[0]} - 5px)`; h.style.top = `calc(${v[1]} - 5px)`;
+        h.style.cursor = (dir==='n'||dir==='s')?'ns-resize':(dir==='e'||dir==='w')?'ew-resize':(dir==='nw'||dir==='se')?'nwse-resize':'nesw-resize';
+        h.addEventListener('mousedown', (e) => onResizeDown(e, dir));
+        box.appendChild(h);
+      }
     }
 
-    function selectRecord(id) {
-      R.selId = id;
-      refreshBoxHl();
-      fillEditor(R.records.find(r => r.id === id));
+    // ----- coordinate helpers -----
+    function toNatural(clientX, clientY) {
+      const rect = R.wrap.getBoundingClientRect();
+      const sx = R.img.naturalWidth / rect.width, sy = R.img.naturalHeight / rect.height;
+      return [(clientX - rect.left) * sx, (clientY - rect.top) * sy];
     }
 
+    // ----- box selection & drag/move -----
+    function onBoxDown(e, rec, cls) {
+      if (rec.id !== R.selId) { selectRecord(rec.id); return; }
+      if (cls !== 'box-han') return;            // only the Hán box is editable
+      e.preventDefault(); e.stopPropagation();
+      startDrag('move', rec, e);
+    }
+    function onResizeDown(e, dir) {
+      e.preventDefault(); e.stopPropagation();
+      startDrag(dir, getRec(R.selId), e);
+    }
+
+    let drag = null;
+    function startDrag(mode, rec, e) {
+      drag = { mode, rec, start: toNatural(e.clientX, e.clientY), box: [...rec.han_bbox] };
+      document.addEventListener('mousemove', onDragMove);
+      document.addEventListener('mouseup', onDragUp);
+    }
+    function onDragMove(e) {
+      if (!drag) return;
+      const [mx, my] = toNatural(e.clientX, e.clientY);
+      const dx = mx - drag.start[0], dy = my - drag.start[1];
+      let [x0, y0, x1, y1] = drag.box;
+      if (drag.mode === 'move') { x0 += dx; x1 += dx; y0 += dy; y1 += dy; }
+      else { const d = drag.mode;
+        if (d.includes('n')) y0 = my; if (d.includes('s')) y1 = my;
+        if (d.includes('w')) x0 = mx; if (d.includes('e')) x1 = mx; }
+      x0 = Math.max(0, Math.min(x0, x1 - 8)); y0 = Math.max(0, Math.min(y0, y1 - 8));
+      x1 = Math.min(R.img.naturalWidth, x1); y1 = Math.min(R.img.naturalHeight, y1);
+      drag.rec.han_bbox = [x0, y0, x1, y1];
+      drawBoxes();  // re-render with live geometry + handles
+    }
+    function onDragUp() {
+      document.removeEventListener('mousemove', onDragMove);
+      document.removeEventListener('mouseup', onDragUp);
+      drag = null;  // geometry kept in local state; persisted on Save / used by Re-OCR
+    }
+
+    // ----- draw a new box -----
+    function toggleDraw() {
+      R.drawMode = !R.drawMode;
+      document.getElementById('draw-btn').classList.toggle('blue', R.drawMode);
+      R.wrap.classList.toggle('draw', R.drawMode);
+      document.getElementById('draw-hint').textContent = R.drawMode
+        ? 'Draw mode ON — drag on the page to create a new box' : 'Click a box to edit · drag handles to resize';
+    }
+    document.addEventListener('mousedown', (e) => {
+      if (!R.drawMode || !R.wrap) return;
+      if (e.target !== R.img && e.target !== R.wrap) return;
+      e.preventDefault();
+      const [sx, sy] = toNatural(e.clientX, e.clientY);
+      const temp = document.createElement('div'); temp.className = 'box box-han sel'; R.wrap.appendChild(temp);
+      const draw = { sx, sy };
+      const mv = (ev) => { const [mx, my] = toNatural(ev.clientX, ev.clientY);
+        const x0 = Math.min(sx, mx), y0 = Math.min(sy, my), x1 = Math.max(sx, mx), y1 = Math.max(sy, my);
+        draw.box = [x0, y0, x1, y1];
+        temp.style.left = pct(x0, R.img.naturalWidth); temp.style.top = pct(y0, R.img.naturalHeight);
+        temp.style.width = pct(x1 - x0, R.img.naturalWidth); temp.style.height = pct(y1 - y0, R.img.naturalHeight); };
+      const up = async () => {
+        document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up);
+        temp.remove();
+        if (!draw.box || (draw.box[2]-draw.box[0]) < 8 || (draw.box[3]-draw.box[1]) < 8) return;
+        const res = await fetch(`/jobs/${R.jobId}/record/new`, { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ page: R.page, han_bbox: draw.box }) });
+        const j = await res.json(); R.records.push(j.record);
+        toggleDraw(); drawBoxes(); selectRecord(j.record.id); updateProgress();
+      };
+      document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+    });
+
+    // ----- editor -----
+    function selectRecord(id) { R.selId = id; drawBoxes(); fillEditor(getRec(id)); }
     function fillEditor(rec) {
       const ed = document.getElementById('editor');
       if (!rec) { ed.classList.add('disabled'); return; }
       ed.classList.remove('disabled');
       const m = rec.entry_meta || {};
-      document.getElementById('f-entry').value = rec.entry_no ?? '';
-      document.getElementById('f-page').value = rec.page ?? '';
-      document.getElementById('f-han').value = rec.han || '';
-      document.getElementById('f-meaning').value = rec.meaning || '';
-      for (const k of ['ngay', 'to_tap', 'loai', 'xuat_xu', 'de_tai'])
-        document.getElementById('m-' + k).value = m[k] || '';
+      f('f-entry', rec.entry_no ?? ''); f('f-page', rec.page ?? '');
+      f('f-han', rec.han || ''); f('f-meaning', rec.meaning || '');
+      for (const k of ['ngay','to_tap','loai','xuat_xu','de_tai']) f('m-' + k, m[k] || '');
       const raw = document.getElementById('f-raw');
-      raw.innerHTML = (rec.han_raw && rec.han_raw !== rec.han)
-        ? `raw OCR: <span class="d">${esc(rec.han_raw)}</span>` : '';
-      const verified = rec.review_status === 'verified';
-      document.getElementById('f-verify').checked = verified;
-      onVerify();
+      raw.innerHTML = (rec.han_raw && rec.han_raw !== rec.han) ? `raw OCR: <span class="d">${esc(rec.han_raw)}</span>` : '';
+      document.getElementById('f-verify').checked = rec.review_status === 'verified'; onVerify();
     }
-
+    function f(id, v) { document.getElementById(id).value = v; }
     function onVerify() {
       const on = document.getElementById('f-verify').checked;
       document.getElementById('btn-save').disabled = !on;
       document.getElementById('verify-box').classList.toggle('on', on);
     }
 
-    async function saveRecord() {
-      const rec = R.records.find(r => r.id === R.selId);
-      if (!rec) return;
-      const body = {
-        id: rec.id,
-        han: document.getElementById('f-han').value,
-        meaning: document.getElementById('f-meaning').value,
-        entry_no: parseInt(document.getElementById('f-entry').value) || null,
-        entry_meta: Object.fromEntries(['ngay', 'to_tap', 'loai', 'xuat_xu', 'de_tai']
-          .map(k => [k, document.getElementById('m-' + k).value])),
-        review_status: 'verified',
-      };
-      const btn = document.getElementById('btn-save');
-      btn.disabled = true; btn.textContent = 'Saving…';
+    async function reocrBox() {
+      const rec = getRec(R.selId); if (!rec) return;
+      const btn = document.getElementById('btn-reocr'); btn.disabled = true; btn.textContent = '⏳ OCR…';
       try {
-        const res = await fetch(`/jobs/${R.jobId}/record`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        });
-        if (!res.ok) throw new Error((await res.json()).detail || res.status);
-        const j = await res.json();
-        Object.assign(rec, j.record);  // update local state
-        btn.textContent = '✓ Saved'; updateProgress(); refreshBoxState(rec);
-        setTimeout(() => { btn.textContent = '💾 Save to corpus'; }, 1200);
-        step(1);  // advance to next record
-      } catch (err) {
-        btn.textContent = '💾 Save to corpus'; btn.disabled = false;
-        alert('Save failed: ' + err);
-      }
+        const r = await (await fetch(`/jobs/${R.jobId}/reocr`, { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ image_path: rec.image_path, bbox: rec.han_bbox, page: rec.page }) })).json();
+        const rid = r.reocr_job_id;
+        for (let i = 0; i < 40; i++) {
+          await new Promise(s => setTimeout(s, 700));
+          const p = await (await fetch('/reocr/' + rid)).json();
+          if (p.status === 'done') { document.getElementById('f-han').value = p.text || ''; rec.han = p.text || ''; break; }
+          if (p.status === 'failed') { alert('Re-OCR failed: ' + (p.error||'')); break; }
+        }
+      } catch (err) { alert('Re-OCR error: ' + err); }
+      btn.disabled = false; btn.textContent = '🔁 Re-OCR this box';
     }
 
-    function refreshBoxState(rec) {
-      document.querySelectorAll(`#wrap .box[data-id="${cssEsc(rec.id)}"]`).forEach(b => {
-        b.classList.add('ok');
-        const num = b.querySelector('.box-num');
-        if (num && !num.textContent.includes('✓')) num.textContent += ' ✓';
-      });
+    async function deleteBox() {
+      const rec = getRec(R.selId); if (!rec) return;
+      if (!confirm('Delete this box/record?')) return;
+      await fetch(`/jobs/${R.jobId}/record/delete`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id: rec.id }) });
+      R.records = R.records.filter(x => x.id !== rec.id); R.selId = null;
+      drawBoxes(); const recs = pageRecords(); if (recs.length) selectRecord(recs[0].id); else fillEditor(null);
+      updateProgress();
+    }
+
+    async function saveRecord() {
+      const rec = getRec(R.selId); if (!rec) return;
+      const body = { id: rec.id, han: document.getElementById('f-han').value, meaning: document.getElementById('f-meaning').value,
+        entry_no: parseInt(document.getElementById('f-entry').value) || null,
+        entry_meta: Object.fromEntries(['ngay','to_tap','loai','xuat_xu','de_tai'].map(k => [k, document.getElementById('m-'+k).value])),
+        han_bbox: rec.han_bbox, meaning_bbox: rec.meaning_bbox, review_status: 'verified' };
+      const btn = document.getElementById('btn-save'); btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const res = await fetch(`/jobs/${R.jobId}/record`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        if (!res.ok) throw new Error((await res.json()).detail || res.status);
+        Object.assign(rec, (await res.json()).record);
+        btn.textContent = '✓ Saved'; updateProgress(); drawBoxes();
+        setTimeout(() => { btn.textContent = '💾 Save to corpus'; }, 1000);
+        step(1);
+      } catch (err) { btn.textContent = '💾 Save to corpus'; btn.disabled = false; alert('Save failed: ' + err); }
     }
 
     function step(delta) {
-      const recs = pageRecords();
-      const i = recs.findIndex(r => r.id === R.selId);
-      const next = recs[i + delta];
+      const recs = pageRecords(), i = recs.findIndex(r => r.id === R.selId), next = recs[i + delta];
       if (next) selectRecord(next.id);
     }
 
@@ -309,32 +363,23 @@
       data.append('source_doc', document.getElementById('source_doc').value);
       msg.textContent = 'Uploading…';
       try {
-        const r = await fetch('/upload', { method: 'POST', body: data });
-        const j = await r.json();
-        msg.textContent = r.ok ? `Enqueued job #${j.job_id} (${j.filename}).` : `Error: ${j.detail}`;
-        refresh();
+        const r = await fetch('/upload', { method: 'POST', body: data }); const j = await r.json();
+        msg.textContent = r.ok ? `Enqueued job #${j.job_id} (${j.filename}).` : `Error: ${j.detail}`; refresh();
       } catch (err) { msg.textContent = 'Upload failed: ' + err; }
     });
 
     async function refresh() {
-      const j = await (await fetch('/jobs')).json();
-      const tbody = document.getElementById('jobs');
-      tbody.innerHTML = '';
+      const j = await (await fetch('/jobs')).json(); const tbody = document.getElementById('jobs'); tbody.innerHTML = '';
       for (const job of j.jobs) {
-        const tr = document.createElement('tr');
-        let out = '—';
-        if (job.status === 'done')
-          out = `<a onclick="viewJob(${job.id})">review</a> · <a href="/jobs/${job.id}/output">.jsonl</a>`;
-        else if (job.status === 'failed')
-          out = `<span class="muted">${esc(job.error) || 'failed'}</span>`;
-        tr.innerHTML = `<td>${job.id}</td><td>${esc(job.filename)}</td>` +
-          `<td class="status ${job.status}">${job.status}</td><td>${out}</td>`;
+        if (job.filename && job.filename.startsWith('reocr')) continue;  // hide internal reocr jobs
+        const tr = document.createElement('tr'); let out = '—';
+        if (job.status === 'done') out = `<a onclick="viewJob(${job.id})">review</a> · <a href="/jobs/${job.id}/output">.jsonl</a>`;
+        else if (job.status === 'failed') out = `<span class="muted">${esc(job.error) || 'failed'}</span>`;
+        tr.innerHTML = `<td>${job.id}</td><td>${esc(job.filename)}</td><td class="status ${job.status}">${job.status}</td><td>${out}</td>`;
         tbody.appendChild(tr);
       }
     }
-
-    refresh();
-    setInterval(refresh, 3000);
+    refresh(); setInterval(refresh, 3000);
   </script>
 </body>
 </html>

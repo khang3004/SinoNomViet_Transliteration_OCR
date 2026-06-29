@@ -23,13 +23,17 @@ logger = logging.getLogger("hannom.runner")
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 
 
-def process_file(input_path: str, output_path: str, config: Config, source_doc: str = "") -> list[Record]:
+def process_file(
+    input_path: str, output_path: str, config: Config, source_doc: str = "", engine=None
+) -> list[Record]:
     """Process one uploaded file and write its records to ``output_path``.
 
-    Returns the records (also written to disk).
+    Returns the records (also written to disk). ``engine`` may be a pre-built,
+    warm OCR engine (the worker keeps one loaded); if None it is built here.
     """
     config.validate()  # fail fast if a selected api backend lacks its key
-    engine = ocr.get_engine(config.ocr_backend)
+    if engine is None:
+        engine = ocr.get_engine(config.ocr_backend)
     logger.info("Using OCR backend %r.", config.ocr_backend)
 
     doc = source_doc or _infer_source_doc(input_path)
@@ -49,6 +53,36 @@ def process_file(input_path: str, output_path: str, config: Config, source_doc: 
     write_jsonl(records, output_path)
     logger.info("Wrote %d record(s) → %s", len(records), output_path)
     return records
+
+
+def reocr_region(page_image_path: str, bbox, config: Config, engine=None) -> dict:
+    """Re-OCR one region of a rendered page image (Bug/feature: box re-OCR).
+
+    Crops ``page_image_path`` to ``bbox`` ([x0,y0,x1,y1] in page-pixel coords)
+    and runs the OCR engine on the crop. Returns ``{text, conf}`` with the text
+    assembled in reading order (top→bottom, left→right). Used by the worker to
+    serve interactive re-OCR of user-edited boxes.
+    """
+    from PIL import Image
+
+    if engine is None:
+        engine = ocr.get_engine(config.ocr_backend)
+    x0, y0, x1, y1 = (int(round(v)) for v in bbox)
+    img = Image.open(page_image_path)
+    x0, y0 = max(x0, 0), max(y0, 0)
+    x1, y1 = min(x1, img.width), min(y1, img.height)
+    if x1 <= x0 or y1 <= y0:
+        return {"text": "", "conf": 0.0}
+    crop = img.crop((x0, y0, x1, y1))
+    work_dir = getattr(config, "work_dir", None) or "."
+    os.makedirs(work_dir, exist_ok=True)
+    crop_path = os.path.join(work_dir, "reocr_crop.png")
+    crop.save(crop_path)
+    dets = engine.ocr(crop_path) or []
+    dets.sort(key=lambda d: ((d["bbox"][1] + d["bbox"][3]) / 2.0, d["bbox"][0]))
+    text = "".join(d.get("text", "") for d in dets)
+    conf = sum(float(d.get("conf", 0.0)) for d in dets) / len(dets) if dets else 0.0
+    return {"text": text, "conf": round(conf, 4)}
 
 
 def _apply_correction(records: list[Record], config: Config) -> None:
