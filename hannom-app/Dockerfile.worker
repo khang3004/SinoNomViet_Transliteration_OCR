@@ -28,6 +28,11 @@ RUN pip install --no-cache-dir numpy==1.26.4 \
         google-generativeai==0.8.3 \
     && pip install --no-cache-dir --force-reinstall numpy==1.26.4
 
+# libgomp1 = OpenMP runtime that PaddlePaddle's libpaddle links against (the
+# slim base lacks it). Separate layer so the large paddle pip layer stays cached.
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Worker code (pipeline + worker; not the web app).
 COPY pipeline/ ./pipeline/
 COPY worker/ ./worker/
