@@ -74,6 +74,9 @@ def reocr_region(page_image_path: str, bbox, config: Config, engine=None) -> dic
     if x1 <= x0 or y1 <= y0:
         return {"text": "", "conf": 0.0}
     crop = img.crop((x0, y0, x1, y1))
+    from pipeline.imageproc import clean_for_ocr
+
+    crop = clean_for_ocr(crop)  # drop watermark before OCR
     work_dir = getattr(config, "work_dir", None) or "."
     os.makedirs(work_dir, exist_ok=True)
     crop_path = os.path.join(work_dir, "reocr_crop.png")

@@ -116,6 +116,10 @@ class PageContext:
                 )
             crop_x = max(int(split_x), 1)
             crop = image.crop((0, 0, min(crop_x, image.width), image.height))
+            # Drop the watermark / lighten background before OCR (big accuracy win).
+            from pipeline.imageproc import clean_for_ocr
+
+            crop = clean_for_ocr(crop)
             # Save the crop to the work dir and OCR by path (works for every engine).
             work_dir = getattr(self.config, "work_dir", None) or "."
             os.makedirs(work_dir, exist_ok=True)
