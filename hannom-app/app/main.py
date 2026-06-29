@@ -15,6 +15,7 @@ import os
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from pydantic import BaseModel
 
 from pipeline.config import load_config
 from pipeline.jobstore import JobStore
@@ -105,6 +106,61 @@ def get_records(job_id: int) -> dict:
             if line:
                 records.append(json.loads(line))
     return {"job_id": job_id, "records": records}
+
+
+class RecordEdit(BaseModel):
+    """Human edits to one record (all optional; only provided fields change)."""
+
+    id: str
+    han: str | None = None
+    meaning: str | None = None
+    entry_no: int | None = None
+    page: int | None = None
+    entry_meta: dict | None = None
+    review_status: str | None = None
+
+
+@app.post("/jobs/{job_id}/record")
+def update_record(job_id: int, edit: RecordEdit) -> dict:
+    """Edit-in-place: apply human corrections to one record in the job's JSONL.
+
+    Marks the record ``review_status="verified"`` (unless overridden), keeps the
+    raw OCR in ``han_raw``, and rewrites the JSONL atomically.
+    """
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if not job.output_path or not os.path.exists(job.output_path):
+        raise HTTPException(status_code=409, detail="output not ready")
+
+    with open(job.output_path, encoding="utf-8") as fh:
+        records = [json.loads(ln) for ln in fh if ln.strip()]
+
+    target = next((r for r in records if r.get("id") == edit.id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"record {edit.id!r} not found")
+
+    if edit.han is not None:
+        target.setdefault("han_raw", target.get("han", ""))
+        target["han"] = edit.han
+        target["han_chars"] = list(edit.han)
+    if edit.meaning is not None:
+        target["meaning"] = edit.meaning
+    if edit.entry_no is not None:
+        target["entry_no"] = edit.entry_no
+    if edit.page is not None:
+        target["page"] = edit.page
+    if edit.entry_meta is not None:
+        target.setdefault("entry_meta", {}).update(edit.entry_meta)
+    target["review_status"] = edit.review_status or "verified"
+
+    tmp = job.output_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as out:
+        for r in records:
+            out.write(json.dumps(r, ensure_ascii=False) + "\n")
+    os.replace(tmp, job.output_path)
+    logger.info("Job %d: record %s updated (status=%s).", job_id, edit.id, target["review_status"])
+    return {"ok": True, "record": target}
 
 
 @app.get("/pages/{filename}")
