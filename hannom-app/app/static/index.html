@@ -190,22 +190,22 @@
           d.style.width = pct(bb[2] - bb[0], nw); d.style.height = pct(bb[3] - bb[1], nh);
           if (num != null) d.innerHTML = `<span class="box-num">${esc(num)}${verified ? ' ✓' : ''}</span>`;
           d.addEventListener('mousedown', (e) => onBoxDown(e, r, cls));
-          // The selected Hán box is editable (move + resize handles).
-          if (sel && cls === 'box-han') { d.classList.add('edit'); addHandles(d); }
+          // The selected record's boxes (Hán + Việt) are both editable.
+          if (sel) { d.classList.add('edit'); addHandles(d, cls); }
           wrap.appendChild(d);
         }
       }
     }
 
     const HANDLES = ['nw','n','ne','e','se','s','sw','w'];
-    function addHandles(box) {
+    function addHandles(box, cls) {
       for (const dir of HANDLES) {
         const h = document.createElement('div'); h.className = 'handle'; h.dataset.dir = dir;
         const v = { n: ['50%', '0'], s: ['50%', '100%'], e: ['100%', '50%'], w: ['0', '50%'],
                     nw: ['0','0'], ne: ['100%','0'], sw: ['0','100%'], se: ['100%','100%'] }[dir];
         h.style.left = `calc(${v[0]} - 5px)`; h.style.top = `calc(${v[1]} - 5px)`;
         h.style.cursor = (dir==='n'||dir==='s')?'ns-resize':(dir==='e'||dir==='w')?'ew-resize':(dir==='nw'||dir==='se')?'nwse-resize':'nesw-resize';
-        h.addEventListener('mousedown', (e) => onResizeDown(e, dir));
+        h.addEventListener('mousedown', (e) => onResizeDown(e, dir, cls));
         box.appendChild(h);
       }
     }
@@ -217,22 +217,22 @@
       return [(clientX - rect.left) * sx, (clientY - rect.top) * sy];
     }
 
-    // ----- box selection & drag/move -----
+    // ----- box selection & drag/move (works on the Hán OR Việt box) -----
+    const fieldFor = (cls) => cls === 'box-vi' ? 'meaning_bbox' : 'han_bbox';
     function onBoxDown(e, rec, cls) {
       if (rec.id !== R.selId) { selectRecord(rec.id); return; }
-      if (cls !== 'box-han') return;            // only the Hán box is editable
       e.preventDefault(); e.stopPropagation();
-      startDrag('move', rec, e);
+      startDrag('move', rec, e, fieldFor(cls));
     }
-    function onResizeDown(e, dir) {
+    function onResizeDown(e, dir, cls) {
       e.preventDefault(); e.stopPropagation();
-      startDrag(dir, getRec(R.selId), e);
+      startDrag(dir, getRec(R.selId), e, fieldFor(cls));
     }
 
     let drag = null;
-    function startDrag(mode, rec, e) {
-      drag = { mode, rec, start: toNatural(e.clientX, e.clientY),
-               startClient: { x: e.clientX, y: e.clientY }, box: [...rec.han_bbox], armed: false };
+    function startDrag(mode, rec, e, field) {
+      drag = { mode, rec, field, start: toNatural(e.clientX, e.clientY),
+               startClient: { x: e.clientX, y: e.clientY }, box: [...(rec[field] || rec.han_bbox)], armed: false };
       document.addEventListener('mousemove', onDragMove);
       document.addEventListener('mouseup', onDragUp);
     }
@@ -253,7 +253,7 @@
         if (d.includes('w')) x0 = mx; if (d.includes('e')) x1 = mx; }
       x0 = Math.max(0, Math.min(x0, x1 - 8)); y0 = Math.max(0, Math.min(y0, y1 - 8));
       x1 = Math.min(R.img.naturalWidth, x1); y1 = Math.min(R.img.naturalHeight, y1);
-      drag.rec.han_bbox = [x0, y0, x1, y1];
+      drag.rec[drag.field] = [x0, y0, x1, y1];
       drawBoxes();  // re-render with live geometry + handles
     }
     function onDragUp() {
