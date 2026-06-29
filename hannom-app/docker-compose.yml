@@ -17,8 +17,10 @@ services:
       - "8000:8000"
     environment:
       DATA_DIR: /data
+      JOBS_DB: /db/jobs.db          # SQLite on a named volume (not the bind mount)
     volumes:
       - ./data:/data
+      - jobsdb:/db
       # Live source mounts: code edits apply on restart, and app/worker always
       # run the SAME pipeline code (no per-image rebuild for code changes).
       - ./pipeline:/srv/pipeline:ro
@@ -32,6 +34,7 @@ services:
       dockerfile: Dockerfile.worker
     environment:
       DATA_DIR: /data
+      JOBS_DB: /db/jobs.db          # shared SQLite on the named volume
       DICTS_DIR: /dicts
       OCR_BACKEND: ${OCR_BACKEND:-paddle}
       OCR_USE_GPU: ${OCR_USE_GPU:-0}          # 0 = CPU (default); 1 = GPU (see below)
@@ -46,6 +49,7 @@ services:
         required: false
     volumes:
       - ./data:/data
+      - jobsdb:/db
       - ./dicts:/dicts:ro
       - ./pipeline:/srv/pipeline:ro
       - ./worker:/srv/worker:ro
@@ -61,5 +65,9 @@ services:
     #           count: 1
     #           capabilities: [gpu]
 
-# State (jobs.db, uploads/, output/) lives in this bind-mounted volume, not in
-# the containers — exactly what makes a future K8s PVC move trivial.
+volumes:
+  jobsdb:   # SQLite job queue on a real Linux FS (bind-mount SQLite is flaky on Windows)
+
+# Files (uploads/, output/ JSONL + page images) live in the bind-mounted ./data
+# so the host can read them; only the SQLite DB moves to the named volume.
+

@@ -86,7 +86,10 @@ class Config:
 
     @property
     def jobs_db(self) -> str:
-        return os.path.join(self.data_dir, "jobs.db")
+        # JOBS_DB override lets the SQLite file live OFF the bind mount (e.g. a
+        # named Docker volume) — SQLite locking/journals are unreliable on the
+        # Docker Desktop Windows bind-mount filesystem.
+        return os.environ.get("JOBS_DB", "").strip() or os.path.join(self.data_dir, "jobs.db")
 
     # ----------------------------------------------------------------------
     def required_api_keys(self) -> list[tuple[str, str]]:
