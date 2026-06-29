@@ -2,9 +2,11 @@
 # Two decoupled services sharing the ./data volume (jobs.db + uploads + output).
 #
 # Usage:
-#   cp .env.example .env   # fill GOOGLE_API_KEY etc.
-#   docker compose up --build
+#   docker compose up --build          # CPU OCR, no API key needed
 #   open http://localhost:8000
+#
+# Optional: create a .env with GOOGLE_API_KEY and set TRANSLATE_BACKEND=api /
+# CORRECT_BACKEND=api to enable Gemini translation/correction.
 
 services:
   app:
@@ -28,18 +30,23 @@ services:
       DATA_DIR: /data
       DICTS_DIR: /dicts
       OCR_BACKEND: ${OCR_BACKEND:-paddle}
-      TRANSLATE_BACKEND: ${TRANSLATE_BACKEND:-api}
+      OCR_USE_GPU: ${OCR_USE_GPU:-0}          # 0 = CPU (default); 1 = GPU (see below)
+      OCR_LANG: ${OCR_LANG:-chinese_cht}      # Traditional — best for Sino-Nom
+      TRANSLATE_BACKEND: ${TRANSLATE_BACKEND:-skip}   # set "api" + GOOGLE_API_KEY for Gemini
       CORRECT_BACKEND: ${CORRECT_BACKEND:-skip}
       DSG_FFF: ${DSG_FFF:-HVB_001}
       PDF_DPI: ${PDF_DPI:-300}
-    # Secrets injected from .env (worker only). Maps 1:1 to a K8s Secret later.
+    # Optional secrets (Gemini etc). Won't fail if .env is absent.
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./data:/data
       - ./dicts:/dicts:ro
     restart: unless-stopped
-    # --- GPU (GTX 2060) — UNCOMMENT on a GPU host to run PaddleOCR on the GPU ---
+    # --- GPU (GTX 2060) — to run PaddleOCR on the GPU: install the NVIDIA
+    # Container Toolkit, set OCR_USE_GPU=1, swap Dockerfile.worker's paddle wheel
+    # to a CUDA build (…/stable/cu118/  paddlepaddle-gpu==2.6.1), and uncomment: ---
     # deploy:
     #   resources:
     #     reservations:
