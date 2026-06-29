@@ -79,7 +79,7 @@ def test_bug3_correction_stub_runs_and_keeps_raw():
         def __init__(self, config=None):
             pass
 
-        def correct(self, han: str) -> str:
+        def correct(self, han: str, context: str = "") -> str:  # noqa: ARG002
             return han.replace("調", "詣")  # repair a known OCR confusion
 
     register("stub_fix", _Stub)

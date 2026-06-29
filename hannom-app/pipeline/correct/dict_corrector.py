@@ -57,7 +57,7 @@ class DictCorrector:
                 dicts_dir,
             )
 
-    def correct(self, han: str) -> str:
+    def correct(self, han: str, context: str = "") -> str:  # noqa: ARG002
         if not self._valid:
             return han
         out: list[str] = []

@@ -16,7 +16,7 @@ class OfflineCorrector:
     def __init__(self, config=None) -> None:  # noqa: ARG002
         pass
 
-    def correct(self, han: str) -> str:
+    def correct(self, han: str, context: str = "") -> str:  # noqa: ARG002
         raise NotImplementedError(
             "Offline LLM Han correction is a stub (CORRECT_BACKEND=offline is for "
             "bigger GPUs). Use CORRECT_BACKEND=dict (dictionary S1∩S2) or =api "

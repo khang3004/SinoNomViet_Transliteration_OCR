@@ -33,10 +33,15 @@ def available() -> list[str]:
 
 
 def get_corrector(config) -> Corrector:
-    name = getattr(config, "correct_backend", "skip")
+    return build(getattr(config, "correct_backend", "skip"), config)
+
+
+def build(name: str, config) -> Corrector:
+    """Build a corrector by explicit backend name (e.g. force 'api' for the
+    interactive AI-correct button regardless of CORRECT_BACKEND)."""
     key = str(name).lower()
     if key not in _REGISTRY:
-        raise KeyError(f"Unknown CORRECT_BACKEND {name!r}. Registered: {available()}")
+        raise KeyError(f"Unknown corrector {name!r}. Registered: {available()}")
     return _REGISTRY[key](config)
 
 
@@ -46,4 +51,4 @@ from pipeline.correct import dict_corrector as _dict  # noqa: E402,F401
 from pipeline.correct import offline_corrector as _offline  # noqa: E402,F401
 from pipeline.correct import skip as _skip  # noqa: E402,F401
 
-__all__ = ["register", "available", "get_corrector", "Corrector"]
+__all__ = ["register", "available", "get_corrector", "build", "Corrector"]

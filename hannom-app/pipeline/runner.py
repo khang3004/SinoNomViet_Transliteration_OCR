@@ -111,7 +111,7 @@ def _apply_correction(records: list[Record], config: Config) -> None:
     for rec in targets:
         if not rec.han_raw:
             rec.han_raw = rec.han
-        fixed = corrector.correct(rec.han_raw)
+        fixed = corrector.correct(rec.han_raw, context=rec.meaning)
         if fixed and fixed != rec.han:
             rec.han = fixed
             rec.han_chars = list(fixed)

@@ -106,8 +106,9 @@
           <textarea class="ta-han" id="f-han"></textarea>
           <div class="raw" id="f-raw"></div>
           <div class="btnrow" style="margin-top:0.4rem">
-            <button class="amber" id="btn-reocr" onclick="reocrBox()">🔁 Re-OCR this box</button>
-            <button class="danger" id="btn-del" onclick="deleteBox()">🗑 Delete box</button>
+            <button class="amber" id="btn-reocr" onclick="reocrBox()">🔁 Re-OCR box</button>
+            <button class="blue" id="btn-ai" onclick="aiCorrect()">✨ AI-correct</button>
+            <button class="danger" id="btn-del" onclick="deleteBox()">🗑 Delete</button>
           </div>
         </div>
         <div>
@@ -331,6 +332,23 @@
         }
       } catch (err) { alert('Re-OCR error: ' + err); }
       btn.disabled = false; btn.textContent = '🔁 Re-OCR this box';
+    }
+
+    async function aiCorrect() {
+      const rec = getRec(R.selId); if (!rec) return;
+      const btn = document.getElementById('btn-ai'); btn.disabled = true; btn.textContent = '✨ …';
+      try {
+        const r = await (await fetch(`/jobs/${R.jobId}/correct`, { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ id: rec.id }) })).json();
+        const rid = r.correct_job_id;
+        for (let i = 0; i < 40; i++) {
+          await new Promise(s => setTimeout(s, 700));
+          const p = await (await fetch('/correct/' + rid)).json();
+          if (p.status === 'done') { if (p.text) { document.getElementById('f-han').value = p.text; rec.han = p.text; } break; }
+          if (p.status === 'failed') { alert('AI-correct failed: ' + (p.error || '') + '\\n(Set GOOGLE_API_KEY on the worker.)'); break; }
+        }
+      } catch (err) { alert('AI-correct error: ' + err); }
+      btn.disabled = false; btn.textContent = '✨ AI-correct';
     }
 
     async function deleteBox() {

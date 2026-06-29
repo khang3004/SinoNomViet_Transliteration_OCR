@@ -264,9 +264,43 @@ def enqueue_reocr(job_id: int, req: ReocrRequest) -> dict:
 @app.get("/reocr/{rid}")
 def get_reocr(rid: int) -> dict:
     """Poll a re-OCR job: returns status, and {text, conf} when done."""
+    return _poll_result(rid, "reocr")
+
+
+class CorrectRequest(BaseModel):
+    id: str  # record id to AI-correct
+
+
+@app.post("/jobs/{job_id}/correct")
+def enqueue_correct(job_id: int, req: CorrectRequest) -> dict:
+    """Enqueue an AI (Gemini) Han correction for one record; the worker runs it.
+
+    Uses the record's raw OCR Han + its Vietnamese meaning as context. Needs
+    GOOGLE_API_KEY on the worker (the job fails with a clear message otherwise).
+    """
+    job, records = _job_records(job_id)
+    rec = next((r for r in records if r.get("id") == req.id), None)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
+    payload = json.dumps({
+        "backend": "api",
+        "han": rec.get("han_raw") or rec.get("han", ""),
+        "context": rec.get("meaning", ""),
+    })
+    rid = store.create(filename="correct", input_path="", kind="correct", payload=payload)
+    return {"correct_job_id": rid}
+
+
+@app.get("/correct/{rid}")
+def get_correct(rid: int) -> dict:
+    """Poll an AI-correct job: returns status, and {text} when done."""
+    return _poll_result(rid, "correct")
+
+
+def _poll_result(rid: int, kind: str) -> dict:
     job = store.get(rid)
-    if job is None or job.kind != "reocr":
-        raise HTTPException(status_code=404, detail="reocr job not found")
+    if job is None or job.kind != kind:
+        raise HTTPException(status_code=404, detail=f"{kind} job not found")
     out = {"status": job.status}
     if job.status == "done" and job.output_path and os.path.exists(job.output_path):
         with open(job.output_path, encoding="utf-8") as fh:

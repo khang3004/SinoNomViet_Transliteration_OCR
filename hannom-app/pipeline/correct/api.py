@@ -18,9 +18,10 @@ logger = logging.getLogger("hannom.correct.api")
 _SYSTEM = (
     "You are a classical Hán-Nôm proofreader. The input is OCR output of "
     "classical Han text from Nguyễn-dynasty Châu bản (Vietnamese royal records). "
-    "Correct obvious OCR character errors using context. Return ONLY the corrected "
-    "Han text — no explanation, no punctuation changes, no romanization. Keep the "
-    "same number of characters where possible."
+    "Correct obvious OCR character errors (shape-similar mis-reads). When a "
+    "Vietnamese translation is provided, use it to choose the correct characters. "
+    "Return ONLY the corrected Han text — no explanation, no punctuation changes, "
+    "no romanization. Keep the same number of characters where possible."
 )
 
 
@@ -40,12 +41,16 @@ class ApiCorrector:
         self._model = genai.GenerativeModel(model_id, system_instruction=_SYSTEM)
         logger.info("Gemini Han corrector ready (model=%s).", model_id)
 
-    def correct(self, han: str) -> str:
+    def correct(self, han: str, context: str = "") -> str:
         han = (han or "").strip()
         if not han:
             return han
+        prompt = f"OCR Han:\n{han}\n"
+        if context and context.strip():
+            prompt += f"\nVietnamese translation (use to disambiguate):\n{context.strip()}\n"
+        prompt += "\nCorrected Han:"
         try:
-            resp = self._model.generate_content(f"OCR Han:\n{han}\n\nCorrected Han:")
+            resp = self._model.generate_content(prompt)
             fixed = (resp.text or "").strip()
             return fixed or han
         except Exception:  # noqa: BLE001 - never fail the job on a proofread error

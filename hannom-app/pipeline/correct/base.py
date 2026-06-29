@@ -17,6 +17,10 @@ class Corrector(Protocol):
 
     name: str
 
-    def correct(self, han: str) -> str:
-        """Return corrected Han for ``han`` (same characters if no change)."""
+    def correct(self, han: str, context: str = "") -> str:
+        """Return corrected Han for ``han``.
+
+        ``context`` is an optional hint — for Châu bản, the entry's Vietnamese
+        meaning, which strongly disambiguates the classical Han.
+        """
         ...

@@ -11,7 +11,7 @@ class SkipCorrector:
     def __init__(self, config=None) -> None:  # noqa: ARG002
         pass
 
-    def correct(self, han: str) -> str:
+    def correct(self, han: str, context: str = "") -> str:  # noqa: ARG002
         return han
 
 
