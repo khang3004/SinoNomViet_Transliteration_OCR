@@ -22,3 +22,7 @@ __pycache__/
 coverage.xml
 .mypy_cache/
 .ruff_cache/
+
+# Keep project docs under hannom-app (root .gitignore ignores docs/)
+!docs/
+!docs/**
