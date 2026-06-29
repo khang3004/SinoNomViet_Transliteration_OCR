@@ -27,6 +27,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+def _require(module: str):
+    """Import a worker-only module with an actionable error if it's missing."""
+    import importlib
+
+    try:
+        return importlib.import_module(module)
+    except ModuleNotFoundError as exc:  # pragma: no cover - env-specific
+        raise ModuleNotFoundError(
+            f"'{module}' is required to process PDFs but is not installed in this "
+            "Python environment. Run the WORKER in its dedicated env, e.g. "
+            r".\.venv-worker\Scripts\python.exe -m worker.worker  (see SHARE.md). "
+            "The project's default venv (Python 3.14) cannot install PaddleOCR/"
+            "pdfplumber — that's why the worker has its own Python 3.11 env."
+        ) from exc
+
+
 @dataclass(frozen=True)
 class TextSpan:
     """A word/token from the PDF text layer with its bounding box.
@@ -85,7 +101,7 @@ def extract_spans(pdf_path: str, page_index: int = 0, scale: float = 1.0) -> lis
     Raises:
         ImportError: if pdfplumber is not installed (worker-only dependency).
     """
-    import pdfplumber  # lazy: worker-only dependency
+    pdfplumber = _require("pdfplumber")  # lazy: worker-only dependency
 
     spans: list[TextSpan] = []
     with pdfplumber.open(pdf_path) as pdf:
@@ -105,7 +121,7 @@ def extract_spans(pdf_path: str, page_index: int = 0, scale: float = 1.0) -> lis
 
 def page_size_points(pdf_path: str, page_index: int = 0) -> tuple[float, float]:
     """Return (width, height) of a PDF page in points (72 dpi)."""
-    import pdfplumber  # lazy: worker-only dependency
+    pdfplumber = _require("pdfplumber")  # lazy: worker-only dependency
 
     with pdfplumber.open(pdf_path) as pdf:
         page = pdf.pages[page_index]
@@ -127,7 +143,7 @@ def render_page(pdf_path: str, page_index: int = 0, dpi: int = 300):
     """
     import os
 
-    from pdf2image import convert_from_path  # lazy: worker-only dependency
+    convert_from_path = _require("pdf2image").convert_from_path  # lazy: worker-only
 
     # Allow a portable poppler install (no admin) via POPPLER_PATH=<...>/bin.
     poppler_path = os.environ.get("POPPLER_PATH", "").strip() or None
