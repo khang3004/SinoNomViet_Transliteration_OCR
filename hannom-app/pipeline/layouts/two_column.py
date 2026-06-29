@@ -417,9 +417,32 @@ class TwoColumnHandler:
 
     @staticmethod
     def _resolve_entry_no(entry: dict) -> int | None:
-        """Entry number: the bare-number hint (mock) or the digits before Loại:."""
+        """Entry number ("Bài số"): the standalone integer just LEFT of "Loại:".
+
+        On a real Mục lục line the entry number sits to the left of the ``Loại:``
+        label, sometimes with OCR-bleed punctuation ("; 11 Loại: Chiếu",
+        ": 21 Loại: …", "41 Loại: …") or a mangled glyph ("7n Loại:" → 7). It must
+        NOT be confused with the Tờ/Tập FOLIO number, which can also share that
+        line ("TờITập: 7/1 Loại: Sai" → that "1" is the folio, not the entry).
+
+        Strategy: scan the entry's lines for the one containing ``Loại``; take the
+        text BEFORE it. If a Tờ/Tập folio is present there, the leading number is
+        the folio → no entry number (leave None for the reviewer). Otherwise the
+        first digit-run before ``Loại`` is the entry number.
+        """
         if entry.get("entry_no_hint") is not None:
             return entry["entry_no_hint"]
+        for line in entry["lines"]:
+            m = re.search(r"Lo[aạáàảãăắằ]i", line)  # tolerate OCR diacritic drift
+            if not m:
+                continue
+            before = line[: m.start()]
+            # A Tờ/Tập folio on this line ("TờITập: 7/1") owns the digits → skip.
+            if re.search(r"Tờ|Tập|/\s*\d", before):
+                return None
+            nums = re.findall(r"\d{1,4}", before)
+            return int(nums[0]) if nums else None
+        # No "Loại:" line found — fall back to the old whole-entry scan.
         m = _NUM_LOAI_RE.search(" ".join(entry["lines"]))
         return int(m.group(1)) if m else None
 
