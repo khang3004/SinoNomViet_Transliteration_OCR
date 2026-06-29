@@ -19,8 +19,10 @@ services:
       DATA_DIR: /data
     volumes:
       - ./data:/data
-      # Live-serve the UI so index.html edits show on refresh (no rebuild).
-      - ./app/static:/srv/app/static:ro
+      # Live source mounts: code edits apply on restart, and app/worker always
+      # run the SAME pipeline code (no per-image rebuild for code changes).
+      - ./pipeline:/srv/pipeline:ro
+      - ./app:/srv/app:ro
     # The app is stateless and needs NO API keys (AGENTS.md §7).
     restart: unless-stopped
 
@@ -45,6 +47,8 @@ services:
     volumes:
       - ./data:/data
       - ./dicts:/dicts:ro
+      - ./pipeline:/srv/pipeline:ro
+      - ./worker:/srv/worker:ro
     restart: unless-stopped
     # --- GPU (GTX 2060) — to run PaddleOCR on the GPU: install the NVIDIA
     # Container Toolkit, set OCR_USE_GPU=1, swap Dockerfile.worker's paddle wheel

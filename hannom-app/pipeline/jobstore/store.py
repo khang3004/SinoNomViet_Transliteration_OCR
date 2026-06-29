@@ -69,8 +69,13 @@ class JobStore:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
-        # WAL lets the app read while the worker writes.
-        conn.execute("PRAGMA journal_mode=WAL;")
+        # WAL lets the app read while the worker writes — but its -wal/-shm files
+        # can't be created on some bind-mounted filesystems (Docker Desktop on
+        # Windows). Fall back to the default journal there instead of crashing.
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+        except sqlite3.OperationalError:
+            pass
         return conn
 
     def _init_db(self) -> None:
