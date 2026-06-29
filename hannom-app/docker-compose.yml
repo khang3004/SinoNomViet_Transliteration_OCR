@@ -19,6 +19,8 @@ services:
       DATA_DIR: /data
     volumes:
       - ./data:/data
+      # Live-serve the UI so index.html edits show on refresh (no rebuild).
+      - ./app/static:/srv/app/static:ro
     # The app is stateless and needs NO API keys (AGENTS.md §7).
     restart: unless-stopped
 
