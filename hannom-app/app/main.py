@@ -614,6 +614,41 @@ def translate_record(job_id: int, req: LLMRequest) -> dict:
     return {"text": text}
 
 
+class VisionRequest(BaseModel):
+    """Vision LLM read of a cropped box (bring-your-own-key)."""
+
+    id: str = ""               # record id (for logging only)
+    provider: str = "gemini"
+    api_key: str               # the USER's own key — used per-request, never stored
+    model: str | None = None
+    image_b64: str             # base64 PNG of the cropped box (may be a data URL)
+    ocr_text: str = ""         # current OCR text (may be blank/wrong)
+
+
+@app.post("/jobs/{job_id}/vision_correct")
+def vision_correct(job_id: int, req: VisionRequest) -> dict:
+    """Read Han from a cropped box IMAGE with the USER's own multimodal key.
+
+    The browser crops the box and sends the PNG; we forward it + the current OCR
+    text to the chosen provider. Key is used only for this call — never stored.
+    """
+    import base64
+
+    from pipeline.llm.tasks import vision_read_han
+
+    try:
+        img = base64.b64decode(req.image_b64.split(",", 1)[-1])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"invalid image data: {exc}") from exc
+    if not img:
+        raise HTTPException(status_code=400, detail="empty image")
+    try:
+        text = vision_read_han(req.provider, req.api_key, img, req.ocr_text, req.model)
+    except Exception as exc:  # noqa: BLE001 - clean error to the UI
+        raise HTTPException(status_code=400, detail=f"vision read failed: {exc}") from exc
+    return {"text": text}
+
+
 def _poll_result(rid: int, kind: str) -> dict:
     job = store.get(rid)
     if job is None or job.kind != kind:

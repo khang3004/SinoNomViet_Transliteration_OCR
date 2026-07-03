@@ -16,9 +16,25 @@ class LLMProvider(Protocol):
 
     name: str
     default_model: str
+    default_vision_model: str
 
     def complete(
         self, prompt: str, api_key: str, model: str | None = None, system: str | None = None
     ) -> str:
         """Return the model's text response for ``prompt`` using ``api_key``."""
+        ...
+
+    def complete_vision(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        api_key: str,
+        model: str | None = None,
+        system: str | None = None,
+    ) -> str:
+        """Return the model's text response for ``prompt`` + a PNG image.
+
+        Used to read Han characters straight from a cropped page region when OCR
+        is wrong or missing. ``image_bytes`` is raw PNG bytes.
+        """
         ...

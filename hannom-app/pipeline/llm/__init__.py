@@ -43,9 +43,27 @@ def complete(
     return get_provider(name).complete(prompt, api_key=api_key, model=model, system=system)
 
 
+def complete_vision(
+    name: str,
+    prompt: str,
+    image_bytes: bytes,
+    api_key: str,
+    model: str | None = None,
+    system: str | None = None,
+) -> str:
+    """Run one multimodal (text + image) completion with a per-call ``api_key``."""
+    if not (api_key or "").strip():
+        raise ValueError("An API key is required (paste your own provider key).")
+    return get_provider(name).complete_vision(
+        prompt, image_bytes, api_key=api_key, model=model, system=system
+    )
+
+
 # --- built-in provider registrations (lazy SDK imports inside each) ---------
 from pipeline.llm import anthropic_provider as _anthropic  # noqa: E402,F401
 from pipeline.llm import gemini as _gemini  # noqa: E402,F401
 from pipeline.llm import openai_provider as _openai  # noqa: E402,F401
 
-__all__ = ["register", "available", "get_provider", "complete", "LLMProvider"]
+__all__ = [
+    "register", "available", "get_provider", "complete", "complete_vision", "LLMProvider",
+]

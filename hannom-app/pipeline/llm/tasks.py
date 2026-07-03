@@ -27,6 +27,15 @@ _TRANSLATE_SYSTEM = (
     "Vietnamese meaning — no transliteration, no quotes, no Han characters."
 )
 
+_VISION_SYSTEM = (
+    "You are a classical Hán-Nôm expert reading a CROPPED image from a "
+    "Nguyễn-dynasty Châu bản (Vietnamese royal record) 'Mục lục' page. Read the "
+    "Han/Nôm characters visible in the image, in natural reading order. An OCR "
+    "guess may be provided (it may be empty or wrong) — trust the IMAGE over the "
+    "guess. Return ONLY the Han characters you see — no romanization, no "
+    "translation, no explanation, no punctuation you don't see in the image."
+)
+
 
 def correct_han(provider: str, api_key: str, han: str, meaning: str = "", model: str | None = None) -> str:
     """Proofread ``han`` (optionally using its Vietnamese ``meaning`` as context)."""
@@ -53,3 +62,24 @@ def translate_han(provider: str, api_key: str, han: str, model: str | None = Non
     prompt = f"Han text:\n{han}\n\nModern Vietnamese meaning:"
     out = llm.complete(provider, prompt, api_key=api_key, model=model, system=_TRANSLATE_SYSTEM)
     return out
+
+
+def vision_read_han(
+    provider: str, api_key: str, image_bytes: bytes, ocr_text: str = "", model: str | None = None
+) -> str:
+    """Read Han characters directly from a cropped page image (PNG bytes).
+
+    Used when PaddleOCR is wrong or missed a region: the reviewer draws a box and
+    we send the crop + the current OCR text (which may be blank) to the model.
+    """
+    prompt = "Read the Han characters in this cropped image."
+    if (ocr_text or "").strip():
+        prompt += f"\nCurrent OCR guess (may be wrong or blank): {ocr_text.strip()}"
+    prompt += "\nHan characters:"
+    try:
+        return llm.complete_vision(
+            provider, prompt, image_bytes, api_key=api_key, model=model, system=_VISION_SYSTEM
+        )
+    except Exception:  # noqa: BLE001 - surface a clean failure to the caller
+        logger.exception("LLM vision read failed (provider=%s).", provider)
+        raise
