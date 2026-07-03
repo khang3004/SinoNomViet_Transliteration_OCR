@@ -18,5 +18,8 @@ Pillow==10.4.0
 paddleocr==2.8.1
 paddlepaddle==2.6.1        # CPU build (no -gpu)
 
+# Postgres job queue + records
+psycopg[binary]==3.2.3
+
 # Optional: Gemini translation (TRANSLATE_BACKEND=api) to also fill Vietnamese meaning
 # google-generativeai==0.8.3

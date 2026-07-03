@@ -18,7 +18,7 @@ import time
 
 from pipeline import ocr
 from pipeline.config import load_config
-from pipeline.jobstore import JobStore
+from pipeline.jobstore import get_store
 from pipeline.runner import process_file, reocr_region
 
 logging.basicConfig(
@@ -35,7 +35,7 @@ def _ensure_dirs(config) -> None:
         os.makedirs(d, exist_ok=True)
 
 
-def run_once(store: JobStore, config, engine) -> bool:
+def run_once(store, config, engine) -> bool:
     """Claim and process one job. Returns True if a job was handled."""
     job = store.claim_next()
     if job is None:
@@ -51,7 +51,7 @@ def run_once(store: JobStore, config, engine) -> bool:
     return True
 
 
-def _run_extract(store: JobStore, config, engine, job) -> None:
+def _run_extract(store, config, engine, job) -> None:
     logger.info("Claimed extract job %d (%s).", job.id, job.filename)
     out_name = f"job_{job.id}_{os.path.splitext(job.filename)[0]}.jsonl"
     out_path = os.path.join(config.output_dir, out_name)
@@ -60,7 +60,7 @@ def _run_extract(store: JobStore, config, engine, job) -> None:
     logger.info("Job %d done: %d record(s) → %s", job.id, len(records), out_path)
 
 
-def _run_reocr(store: JobStore, config, engine, job) -> None:
+def _run_reocr(store, config, engine, job) -> None:
     """Re-OCR one box region; write {text, conf} JSON for the app to poll."""
     args = json.loads(job.payload or "{}")
     img_name = args.get("image_path") or args.get("page_image") or ""
@@ -87,7 +87,7 @@ def main() -> None:
     engine = ocr.get_engine(config.ocr_backend)
     logger.info("OCR engine %r loaded.", config.ocr_backend)
 
-    store = JobStore(config.jobs_db)
+    store = get_store(config)
     requeued = store.requeue_running()
     if requeued:
         logger.info("Requeued %d orphaned 'running' job(s) from a prior worker.", requeued)

@@ -22,3 +22,6 @@ paddlepaddle-gpu==2.6.1   # GPU build for the GTX 2060; swap to paddlepaddle for
 
 # Optional: Gemini translation client (TRANSLATE_BACKEND=api)
 google-generativeai==0.8.3
+
+# Postgres job queue + records (worker writes records here after extraction).
+psycopg[binary]==3.2.3

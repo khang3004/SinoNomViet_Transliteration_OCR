@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir numpy==1.26.4 \
         Pillow==10.4.0 \
         setuptools \
         google-generativeai==0.8.3 \
+        "psycopg[binary]==3.2.3" \
     && pip install --no-cache-dir --force-reinstall numpy==1.26.4
 
 # libgomp1 = OpenMP runtime that PaddlePaddle's libpaddle links against (the
@@ -41,7 +42,7 @@ COPY worker/ ./worker/
 ENV DATA_DIR=/data \
     DICTS_DIR=/dicts \
     OCR_BACKEND=paddle \
-    OCR_USE_GPU=0 \
+    OCR_USE_GPU=1 \
     OCR_LANG=chinese_cht
 
 CMD ["python", "-m", "worker.worker"]

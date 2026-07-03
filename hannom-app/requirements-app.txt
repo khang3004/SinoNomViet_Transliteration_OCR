@@ -3,6 +3,11 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 python-multipart==0.0.9
 
+# Postgres (job queue + records) and self-hosted login (JWT cookie + bcrypt).
+psycopg[binary]==3.2.3
+PyJWT==2.9.0
+passlib[bcrypt]==1.7.4
+
 # LLM provider SDKs — the app makes translation/correction calls with the
 # USER's own key (per request). Each is imported lazily, only when used.
 google-generativeai==0.8.3

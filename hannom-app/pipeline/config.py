@@ -91,6 +91,27 @@ class Config:
         # Docker Desktop Windows bind-mount filesystem.
         return os.environ.get("JOBS_DB", "").strip() or os.path.join(self.data_dir, "jobs.db")
 
+    @property
+    def database_url(self) -> str:
+        """Postgres DSN. When set, the queue + records live in Postgres (multi-
+        user); when empty, the app falls back to SQLite + JSONL (dev/tests)."""
+        return os.environ.get("DATABASE_URL", "").strip()
+
+    # --- auth (self-hosted login) -----------------------------------------
+    @property
+    def auth_secret(self) -> str:
+        """HMAC secret for signing session JWTs. Read from env, never logged."""
+        return os.environ.get("AUTH_SECRET", "").strip()
+
+    @property
+    def admin_username(self) -> str:
+        return os.environ.get("ADMIN_USERNAME", "admin").strip()
+
+    @property
+    def admin_password(self) -> str:
+        """Initial admin password, used only to seed the first account."""
+        return os.environ.get("ADMIN_PASSWORD", "").strip()
+
     # ----------------------------------------------------------------------
     def required_api_keys(self) -> list[tuple[str, str]]:
         """Return [(env_var, label)] for keys required by the selected backends."""

@@ -1,14 +1,31 @@
 # Local dev stack (AGENTS.md §8). K8s is FUTURE/out of scope — no YAML manifests.
-# Two decoupled services sharing the ./data volume (jobs.db + uploads + output).
+# Three services: postgres (queue + records + users), app (FastAPI UI), worker
+# (OCR). app + worker share the ./data bind mount for uploads/page images and
+# Postgres for all state (jobs, records, users, assignments).
 #
 # Usage:
 #   docker compose up --build          # CPU OCR, no API key needed
 #   open http://localhost:8000
 #
-# Optional: create a .env with GOOGLE_API_KEY and set TRANSLATE_BACKEND=api /
-# CORRECT_BACKEND=api to enable Gemini translation/correction.
+# Secrets (AUTH_SECRET, ADMIN_PASSWORD, optional GOOGLE_API_KEY) come from a .env
+# file (untracked). See .env.example.
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hannom}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hannom}
+      POSTGRES_DB: ${POSTGRES_DB:-hannom}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hannom} -d ${POSTGRES_DB:-hannom}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   app:
     build:
       context: .
@@ -17,15 +34,23 @@ services:
       - "8000:8000"
     environment:
       DATA_DIR: /data
-      JOBS_DB: /db/jobs.db          # SQLite on a named volume (not the bind mount)
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hannom}:${POSTGRES_PASSWORD:-hannom}@postgres:5432/${POSTGRES_DB:-hannom}
+      AUTH_SECRET: ${AUTH_SECRET:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    # Secrets (AUTH_SECRET, ADMIN_PASSWORD). Won't fail if .env is absent.
+    env_file:
+      - path: .env
+        required: false
     volumes:
       - ./data:/data
-      - jobsdb:/db
       # Live source mounts: code edits apply on restart, and app/worker always
       # run the SAME pipeline code (no per-image rebuild for code changes).
       - ./pipeline:/srv/pipeline:ro
       - ./app:/srv/app:ro
-    # The app is stateless and needs NO API keys (AGENTS.md §7).
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   worker:
@@ -34,7 +59,7 @@ services:
       dockerfile: Dockerfile.worker
     environment:
       DATA_DIR: /data
-      JOBS_DB: /db/jobs.db          # shared SQLite on the named volume
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hannom}:${POSTGRES_PASSWORD:-hannom}@postgres:5432/${POSTGRES_DB:-hannom}
       DICTS_DIR: /dicts
       OCR_BACKEND: ${OCR_BACKEND:-paddle}
       OCR_USE_GPU: ${OCR_USE_GPU:-0}          # 0 = CPU (default); 1 = GPU (see below)
@@ -49,10 +74,12 @@ services:
         required: false
     volumes:
       - ./data:/data
-      - jobsdb:/db
       - ./dicts:/dicts:ro
       - ./pipeline:/srv/pipeline:ro
       - ./worker:/srv/worker:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     # --- GPU (GTX 2060) — to run PaddleOCR on the GPU: install the NVIDIA
     # Container Toolkit, set OCR_USE_GPU=1, swap Dockerfile.worker's paddle wheel
@@ -66,8 +93,7 @@ services:
     #           capabilities: [gpu]
 
 volumes:
-  jobsdb:   # SQLite job queue on a real Linux FS (bind-mount SQLite is flaky on Windows)
+  pgdata:   # Postgres data (queue + records + users). Real Linux FS via named volume.
 
 # Files (uploads/, output/ JSONL + page images) live in the bind-mounted ./data
-# so the host can read them; only the SQLite DB moves to the named volume.
-
+# so the host can read them; all structured state lives in Postgres.

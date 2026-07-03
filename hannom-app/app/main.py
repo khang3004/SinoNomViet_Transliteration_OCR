@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from pipeline.config import load_config
-from pipeline.jobstore import JobStore
+from pipeline.jobstore import get_store
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("hannom.app")
@@ -26,7 +26,7 @@ logger = logging.getLogger("hannom.app")
 config = load_config()
 for _d in (config.data_dir, config.uploads_dir, config.output_dir):
     os.makedirs(_d, exist_ok=True)
-store = JobStore(config.jobs_db)
+store = get_store(config)
 
 app = FastAPI(title="hannom-app", version="0.1.0")
 
