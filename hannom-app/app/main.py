@@ -96,11 +96,79 @@ def auth_logout() -> JSONResponse:
 
 @app.get("/auth/me")
 def auth_me(request: Request) -> dict:
-    """Return the logged-in user (401 if no valid session)."""
+    """Return the logged-in user + their page-range assignments (401 if none)."""
     user = auth.user_from_request(request)
     if user is None:
         raise HTTPException(status_code=401, detail="not authenticated")
-    return {"user": user}
+    assignments = []
+    if DATABASE_URL and user.get("role") != "admin":
+        from pipeline.db import assignments_repo
+
+        assignments = assignments_repo.list_for_user(DATABASE_URL, user["id"])
+    return {"user": user, "assignments": assignments}
+
+
+# --- admin: users + page-range assignments ----------------------------
+class NewUser(BaseModel):
+    username: str
+    password: str
+    role: str = "reviewer"
+
+
+class NewAssignment(BaseModel):
+    user_id: int
+    job_id: int
+    page_start: int
+    page_end: int
+
+
+@app.post("/admin/users")
+def admin_create_user(body: NewUser, _admin: dict = Depends(auth.require_admin)) -> dict:
+    from pipeline.db import users_repo
+
+    if body.role not in ("admin", "reviewer"):
+        raise HTTPException(status_code=400, detail="role must be admin or reviewer")
+    if users_repo.get_by_username(DATABASE_URL, body.username):
+        raise HTTPException(status_code=409, detail="username already exists")
+    u = users_repo.create(
+        DATABASE_URL, body.username, auth.hash_password(body.password), body.role
+    )
+    return {"ok": True, "user": {"id": u["id"], "username": u["username"], "role": u["role"]}}
+
+
+@app.get("/admin/users")
+def admin_list_users(_admin: dict = Depends(auth.require_admin)) -> dict:
+    from pipeline.db import users_repo
+
+    return {"users": users_repo.list_users(DATABASE_URL)}
+
+
+@app.post("/admin/assignments")
+def admin_create_assignment(body: NewAssignment, _admin: dict = Depends(auth.require_admin)) -> dict:
+    from pipeline.db import assignments_repo
+
+    if store.get(body.job_id) is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    a = assignments_repo.create(
+        DATABASE_URL, body.user_id, body.job_id, body.page_start, body.page_end
+    )
+    return {"ok": True, "assignment": a}
+
+
+@app.get("/admin/assignments")
+def admin_list_assignments(_admin: dict = Depends(auth.require_admin)) -> dict:
+    from pipeline.db import assignments_repo
+
+    return {"assignments": assignments_repo.list_all(DATABASE_URL)}
+
+
+@app.delete("/admin/assignments/{assignment_id}")
+def admin_delete_assignment(assignment_id: int, _admin: dict = Depends(auth.require_admin)) -> dict:
+    from pipeline.db import assignments_repo
+
+    if not assignments_repo.delete(DATABASE_URL, assignment_id):
+        raise HTTPException(status_code=404, detail="assignment not found")
+    return {"ok": True}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -174,15 +242,22 @@ def get_output(job_id: int):
 
 
 @app.get("/jobs/{job_id}/records")
-def get_records(job_id: int) -> dict:
-    """Return a finished job's records for the review editor."""
+def get_records(job_id: int, request: Request) -> dict:
+    """Return a finished job's records for the review editor.
+
+    Every record is tagged ``editable`` for the current viewer (view-all,
+    edit-own): admins edit all, reviewers only their assigned page ranges.
+    """
     job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if DATABASE_URL:
         from pipeline.db import records_repo
 
-        return {"job_id": job_id, "records": records_repo.list_by_job(DATABASE_URL, job_id)}
+        recs = records_repo.list_by_job(DATABASE_URL, job_id)
+        user = getattr(request.state, "user", None)
+        _annotate_editable(recs, user, job_id)
+        return {"job_id": job_id, "records": recs, "role": (user or {}).get("role")}
     if not job.output_path or not os.path.exists(job.output_path):
         raise HTTPException(status_code=409, detail=f"output not ready (status={job.status})")
     records = []
@@ -250,6 +325,39 @@ def _save_records(job, records) -> None:
     os.replace(tmp, job.output_path)
 
 
+def _editable(user: dict | None, job_id: int, page) -> bool:
+    """Whether ``user`` may edit a record on ``page`` of ``job_id``.
+
+    Admins (and the auth-off dev mode, user=None) edit everything; reviewers only
+    their assigned page ranges.
+    """
+    if user is None or user.get("role") == "admin":
+        return True
+    from pipeline.db import assignments_repo
+
+    return assignments_repo.covers(DATABASE_URL, user["id"], job_id, page)
+
+
+def _require_can_edit(request: Request, job_id: int, page) -> None:
+    user = getattr(request.state, "user", None)
+    if not _editable(user, job_id, page):
+        raise HTTPException(status_code=403, detail="page not in your assigned range")
+
+
+def _annotate_editable(recs: list[dict], user: dict | None, job_id: int) -> None:
+    """Tag each record with an ``editable`` flag for the current viewer."""
+    if user is None or user.get("role") == "admin":
+        for r in recs:
+            r["editable"] = True
+        return
+    from pipeline.db import assignments_repo
+
+    ranges = assignments_repo.ranges_for(DATABASE_URL, user["id"], job_id)
+    for r in recs:
+        p = r.get("page")
+        r["editable"] = p is not None and any(lo <= p <= hi for (lo, hi) in ranges)
+
+
 def _find_record(job_id: int, record_id: str) -> dict:
     """Return one record dict (from Postgres or JSONL) or raise 404."""
     if DATABASE_URL:
@@ -267,7 +375,7 @@ def _find_record(job_id: int, record_id: str) -> dict:
 
 
 @app.post("/jobs/{job_id}/record")
-def update_record(job_id: int, edit: RecordEdit) -> dict:
+def update_record(job_id: int, edit: RecordEdit, request: Request) -> dict:
     """Edit-in-place: apply human corrections to one record in the job's JSONL.
 
     Marks the record ``review_status="verified"`` (unless overridden), keeps the
@@ -279,6 +387,7 @@ def update_record(job_id: int, edit: RecordEdit) -> dict:
         rec = records_repo.get(DATABASE_URL, job_id, edit.id)
         if rec is None:
             raise HTTPException(status_code=404, detail=f"record {edit.id!r} not found")
+        _require_can_edit(request, job_id, rec.get("page"))
         changes: dict = {}
         if edit.han is not None:
             changes["han"] = edit.han
@@ -354,13 +463,14 @@ def _new_record_dict(prefix, line_no, image_path, source_doc, new: "NewRecord") 
 
 
 @app.post("/jobs/{job_id}/record/new")
-def create_record(job_id: int, new: NewRecord) -> dict:
+def create_record(job_id: int, new: NewRecord, request: Request) -> dict:
     """Append a new record for a user-drawn box."""
     if DATABASE_URL:
         from pipeline.db import records_repo
 
         if store.get(job_id) is None:
             raise HTTPException(status_code=404, detail="job not found")
+        _require_can_edit(request, job_id, new.page)
         existing = records_repo.list_by_job(DATABASE_URL, job_id)
         prefix = records_repo.id_prefix(DATABASE_URL, job_id)
         line_no = records_repo.next_line_no(DATABASE_URL, job_id, new.page)
@@ -407,11 +517,15 @@ def create_record(job_id: int, new: NewRecord) -> dict:
 
 
 @app.post("/jobs/{job_id}/record/delete")
-def delete_record(job_id: int, req: DeleteRecord) -> dict:
+def delete_record(job_id: int, req: DeleteRecord, request: Request) -> dict:
     """Remove a record (e.g. a spurious detection)."""
     if DATABASE_URL:
         from pipeline.db import records_repo
 
+        existing = records_repo.get(DATABASE_URL, job_id, req.id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
+        _require_can_edit(request, job_id, existing.get("page"))
         if not records_repo.delete(DATABASE_URL, job_id, req.id):
             raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
         logger.info("Job %d: deleted record %s.", job_id, req.id)

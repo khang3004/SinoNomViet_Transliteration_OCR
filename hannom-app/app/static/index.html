@@ -93,6 +93,36 @@
     <table><thead><tr><th>#</th><th>File</th><th>Status</th><th>Output</th></tr></thead><tbody id="jobs"></tbody></table>
   </div>
 
+  <div class="card" id="admin-card" style="display:none">
+    <h2>👑 Admin — reviewers &amp; page ranges</h2>
+    <div class="workspace">
+      <div>
+        <h3 style="font-size:0.9rem">Create reviewer</h3>
+        <label for="au-user">Username</label><input id="au-user" />
+        <label for="au-pass">Password</label><input id="au-pass" type="password" />
+        <label for="au-role">Role</label>
+        <select id="au-role"><option value="reviewer">reviewer</option><option value="admin">admin</option></select>
+        <br /><br /><button onclick="adminCreateUser()">Create user</button>
+        <p id="au-msg" class="muted"></p>
+        <h3 style="font-size:0.9rem;margin-top:0.8rem">Users</h3>
+        <table><tbody id="admin-users"></tbody></table>
+      </div>
+      <div>
+        <h3 style="font-size:0.9rem">Assign a page range</h3>
+        <label for="as-user">Reviewer</label><select id="as-user"></select>
+        <div class="row">
+          <div><label for="as-job">Job #</label><input id="as-job" type="number" min="1" /></div>
+          <div><label for="as-start">From page</label><input id="as-start" type="number" min="1" /></div>
+          <div><label for="as-end">To page</label><input id="as-end" type="number" min="1" /></div>
+        </div>
+        <br /><button onclick="adminAssign()">Assign range</button>
+        <p id="as-msg" class="muted"></p>
+        <h3 style="font-size:0.9rem;margin-top:0.8rem">Assignments</h3>
+        <table><thead><tr><th>Reviewer</th><th>Job</th><th>Pages</th><th></th></tr></thead><tbody id="admin-assigns"></tbody></table>
+      </div>
+    </div>
+  </div>
+
   <div class="card" id="review-card" style="display:none">
     <div class="review-head">
       <h2 id="review-title" style="margin:0">Review</h2>
@@ -144,6 +174,9 @@
           <div><label>Xuất xứ</label><input type="text" id="m-xuat_xu" /></div>
           <div><label>Đề tài</label><input type="text" id="m-de_tai" /></div>
         </div>
+        <div id="ro-note" style="display:none;padding:0.55rem;border-radius:6px;background:#fef3c7;color:#92400e;font-weight:600;font-size:0.85rem">
+          🔒 Read-only — this page isn't in your assigned range.
+        </div>
         <label class="verify" id="verify-box">
           <input type="checkbox" id="f-verify" onchange="onVerify()" /> I confirm this record is correct
         </label>
@@ -193,6 +226,8 @@
 
     function renderPage() {
       const recs = pageRecords(), wrap = document.getElementById('wrap');
+      R.pageEditable = (ME && ME.role === 'admin') || recs.some(r => r.editable !== false);
+      document.getElementById('draw-btn').disabled = !R.pageEditable;
       wrap.innerHTML = ''; R.wrap = wrap;
       const img = document.createElement('img'); R.img = img; img.alt = 'page ' + R.page;
       img.onload = () => { drawBoxes(); if (recs.length) selectRecord(recs[0].id); else fillEditor(null); };
@@ -218,8 +253,9 @@
           d.style.width = pct(bb[2] - bb[0], nw); d.style.height = pct(bb[3] - bb[1], nh);
           if (num != null) d.innerHTML = `<span class="box-num">${esc(num)}${verified ? ' ✓' : ''}</span>`;
           d.addEventListener('mousedown', (e) => onBoxDown(e, r, cls));
-          // The selected record's boxes (Hán + Việt) are both editable.
-          if (sel) { d.classList.add('edit'); addHandles(d, cls); }
+          // The selected record's boxes (Hán + Việt) are draggable only if the
+          // viewer may edit this record (admin, or their assigned range).
+          if (sel && r.editable !== false) { d.classList.add('edit'); addHandles(d, cls); }
           wrap.appendChild(d);
         }
       }
@@ -299,7 +335,7 @@
         ? 'Draw mode ON — drag on the page to create a new box' : 'Click a box to edit · drag handles to resize';
     }
     document.addEventListener('mousedown', (e) => {
-      if (!R.drawMode || !R.wrap) return;
+      if (!R.drawMode || !R.wrap || R.pageEditable === false) return;
       if (e.target !== R.img && e.target !== R.wrap) return;
       e.preventDefault();
       const [sx, sy] = toNatural(e.clientX, e.clientY);
@@ -335,12 +371,22 @@
       for (const k of ['ngay','to_tap','loai','xuat_xu','de_tai']) f('m-' + k, m[k] || '');
       const raw = document.getElementById('f-raw');
       raw.innerHTML = (rec.han_raw && rec.han_raw !== rec.han) ? `raw OCR: <span class="d">${esc(rec.han_raw)}</span>` : '';
-      document.getElementById('f-verify').checked = rec.review_status === 'verified'; onVerify();
+      document.getElementById('f-verify').checked = rec.review_status === 'verified';
+      applyEditable(rec); onVerify();
     }
     function f(id, v) { document.getElementById(id).value = v; }
+    // View-all / edit-own: reviewers can only edit records the API marked editable.
+    function applyEditable(rec) {
+      const canEdit = !rec || rec.editable !== false;
+      R.selEditable = canEdit;
+      ['f-entry','f-page','f-han','f-meaning','m-ngay','m-to_tap','m-loai','m-xuat_xu','m-de_tai']
+        .forEach(id => { document.getElementById(id).readOnly = !canEdit; });
+      ['btn-reocr','btn-ai','btn-del','f-verify'].forEach(id => { document.getElementById(id).disabled = !canEdit; });
+      document.getElementById('ro-note').style.display = canEdit ? 'none' : '';
+    }
     function onVerify() {
       const on = document.getElementById('f-verify').checked;
-      document.getElementById('btn-save').disabled = !on;
+      document.getElementById('btn-save').disabled = !on || R.selEditable === false;
       document.getElementById('verify-box').classList.toggle('on', on);
     }
 
@@ -441,6 +487,39 @@
         tbody.appendChild(tr);
       }
     }
+    // ----- admin panel (users + page-range assignments) -----
+    async function loadAdmin() {
+      if (!ME || ME.role !== 'admin') return;
+      document.getElementById('admin-card').style.display = '';
+      const us = ((await (await fetch('/admin/users')).json()).users) || [];
+      document.getElementById('admin-users').innerHTML =
+        us.map(u => `<tr><td>${esc(u.username)}</td><td class="muted">${esc(u.role)}</td></tr>`).join('');
+      document.getElementById('as-user').innerHTML =
+        us.filter(u => u.role === 'reviewer').map(u => `<option value="${u.id}">${esc(u.username)}</option>`).join('');
+      const as = ((await (await fetch('/admin/assignments')).json()).assignments) || [];
+      document.getElementById('admin-assigns').innerHTML = as.map(a =>
+        `<tr><td>${esc(a.username)}</td><td>${a.job_id}</td><td>${a.page_start}–${a.page_end}</td>` +
+        `<td><a onclick="adminDelAssign(${a.id})">remove</a></td></tr>`).join('');
+    }
+    async function adminCreateUser() {
+      const b = { username: document.getElementById('au-user').value.trim(),
+        password: document.getElementById('au-pass').value, role: document.getElementById('au-role').value };
+      const m = document.getElementById('au-msg'); m.textContent = '';
+      const r = await fetch('/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+      const j = await r.json().catch(() => ({}));
+      m.textContent = r.ok ? `created ${b.username}` : (j.detail || 'failed');
+      if (r.ok) { document.getElementById('au-user').value = ''; document.getElementById('au-pass').value = ''; loadAdmin(); }
+    }
+    async function adminAssign() {
+      const b = { user_id: +document.getElementById('as-user').value, job_id: +document.getElementById('as-job').value,
+        page_start: +document.getElementById('as-start').value, page_end: +document.getElementById('as-end').value };
+      const m = document.getElementById('as-msg'); m.textContent = '';
+      const r = await fetch('/admin/assignments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+      const j = await r.json().catch(() => ({}));
+      m.textContent = r.ok ? 'assigned' : (j.detail || 'failed'); if (r.ok) loadAdmin();
+    }
+    async function adminDelAssign(id) { await fetch('/admin/assignments/' + id, { method: 'DELETE' }); loadAdmin(); }
+
     // ----- auth / login gate -----
     let ME = null;
     function showLogin() { document.getElementById('login-view').style.display = 'flex'; }
@@ -463,7 +542,7 @@
       document.getElementById('ub-name').textContent = ME.username;
       document.getElementById('ub-role').textContent = ME.role;
       document.body.dataset.role = ME.role;
-      refresh(); if (!window._poll) window._poll = setInterval(refresh, 3000); loadProviders();
+      refresh(); if (!window._poll) window._poll = setInterval(refresh, 3000); loadProviders(); loadAdmin();
     }
     (async function init() {
       try {

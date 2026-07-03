@@ -69,3 +69,18 @@ CREATE TABLE IF NOT EXISTS records (
 
 CREATE INDEX IF NOT EXISTS idx_records_job ON records (job_id);
 CREATE INDEX IF NOT EXISTS idx_records_job_page ON records (job_id, page);
+
+-- Page-range assignments: an admin gives each reviewer an inclusive [start,end]
+-- page range on a job. A reviewer may VIEW everything but only EDIT/verify
+-- records whose page falls in one of their ranges for that job.
+CREATE TABLE IF NOT EXISTS assignments (
+    id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    job_id     BIGINT  NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    page_start INTEGER NOT NULL,
+    page_end   INTEGER NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_assignments_user ON assignments (user_id);
+CREATE INDEX IF NOT EXISTS idx_assignments_job ON assignments (job_id);
