@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 
 import psycopg
@@ -32,8 +33,9 @@ def connect(dsn: str) -> psycopg.Connection:
 def init_db(dsn: str) -> None:
     """Apply schema.sql idempotently. Runs once per DSN per process.
 
-    schema.sql is plain ``CREATE TABLE/INDEX IF NOT EXISTS`` (no function bodies),
-    so splitting on ``;`` is safe. Guarded by a lock + a seen-set so concurrent
+    schema.sql is plain ``CREATE TABLE/INDEX IF NOT EXISTS`` (no function bodies).
+    We strip ``--`` line comments first so a ``;`` inside a comment can't split a
+    statement, then split on ``;``. Guarded by a lock + a seen-set so concurrent
     startup (app + worker) doesn't race or repeat the work.
     """
     with _init_lock:
@@ -41,6 +43,7 @@ def init_db(dsn: str) -> None:
             return
         with open(_SCHEMA_PATH, encoding="utf-8") as fh:
             script = fh.read()
+        script = re.sub(r"--[^\n]*", "", script)  # drop line comments
         statements = [s.strip() for s in script.split(";") if s.strip()]
         with connect(dsn) as conn:
             with conn.cursor() as cur:

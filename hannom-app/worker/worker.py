@@ -56,6 +56,14 @@ def _run_extract(store, config, engine, job) -> None:
     out_name = f"job_{job.id}_{os.path.splitext(job.filename)[0]}.jsonl"
     out_path = os.path.join(config.output_dir, out_name)
     records = process_file(job.input_path, out_path, config, source_doc=job.source_doc, engine=engine)
+    # When Postgres is configured it is the source of truth for the review editor;
+    # persist the extracted records there (the JSONL at out_path is kept as an
+    # export/debug artifact). Without a DB, the JSONL alone is used (dev/tests).
+    if getattr(config, "database_url", ""):
+        from pipeline.db.records_repo import insert_many
+
+        n = insert_many(config.database_url, job.id, [r.to_dict() for r in records])
+        logger.info("Job %d: inserted %d record(s) into Postgres.", job.id, n)
     store.mark_done(job.id, out_path)
     logger.info("Job %d done: %d record(s) → %s", job.id, len(records), out_path)
 

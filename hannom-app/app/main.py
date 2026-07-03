@@ -14,7 +14,7 @@ import logging
 import os
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from pipeline.config import load_config
@@ -27,6 +27,10 @@ config = load_config()
 for _d in (config.data_dir, config.uploads_dir, config.output_dir):
     os.makedirs(_d, exist_ok=True)
 store = get_store(config)
+
+# When set, records live in Postgres (source of truth); when empty, the app
+# falls back to the per-job JSONL files (dev / tests, no psycopg needed).
+DATABASE_URL = config.database_url
 
 app = FastAPI(title="hannom-app", version="0.1.0")
 
@@ -79,9 +83,22 @@ def get_job(job_id: int) -> dict:
 
 @app.get("/jobs/{job_id}/output")
 def get_output(job_id: int):
+    """Download the job's records as JSONL. Regenerated from Postgres (so human
+    edits are reflected) when a DB is configured; else the on-disk JSONL file."""
     job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    if DATABASE_URL:
+        from pipeline.db import records_repo
+
+        recs = records_repo.list_by_job(DATABASE_URL, job_id)
+        body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs)
+        fname = os.path.basename(job.output_path) or f"job_{job_id}.jsonl"
+        return Response(
+            content=body,
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
     if not job.output_path or not os.path.exists(job.output_path):
         raise HTTPException(status_code=409, detail=f"output not ready (status={job.status})")
     return FileResponse(
@@ -93,10 +110,14 @@ def get_output(job_id: int):
 
 @app.get("/jobs/{job_id}/records")
 def get_records(job_id: int) -> dict:
-    """Return a finished job's JSONL parsed into records, for inline viewing."""
+    """Return a finished job's records for the review editor."""
     job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    if DATABASE_URL:
+        from pipeline.db import records_repo
+
+        return {"job_id": job_id, "records": records_repo.list_by_job(DATABASE_URL, job_id)}
     if not job.output_path or not os.path.exists(job.output_path):
         raise HTTPException(status_code=409, detail=f"output not ready (status={job.status})")
     records = []
@@ -164,6 +185,22 @@ def _save_records(job, records) -> None:
     os.replace(tmp, job.output_path)
 
 
+def _find_record(job_id: int, record_id: str) -> dict:
+    """Return one record dict (from Postgres or JSONL) or raise 404."""
+    if DATABASE_URL:
+        from pipeline.db import records_repo
+
+        rec = records_repo.get(DATABASE_URL, job_id, record_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"record {record_id!r} not found")
+        return rec
+    _job, records = _job_records(job_id)
+    rec = next((r for r in records if r.get("id") == record_id), None)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"record {record_id!r} not found")
+    return rec
+
+
 @app.post("/jobs/{job_id}/record")
 def update_record(job_id: int, edit: RecordEdit) -> dict:
     """Edit-in-place: apply human corrections to one record in the job's JSONL.
@@ -171,6 +208,33 @@ def update_record(job_id: int, edit: RecordEdit) -> dict:
     Marks the record ``review_status="verified"`` (unless overridden), keeps the
     raw OCR in ``han_raw``, and rewrites the JSONL atomically.
     """
+    if DATABASE_URL:
+        from pipeline.db import records_repo
+
+        rec = records_repo.get(DATABASE_URL, job_id, edit.id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"record {edit.id!r} not found")
+        changes: dict = {}
+        if edit.han is not None:
+            changes["han"] = edit.han
+            changes["han_chars"] = list(edit.han)
+        if edit.meaning is not None:
+            changes["meaning"] = edit.meaning
+        if edit.entry_no is not None:
+            changes["entry_no"] = edit.entry_no
+        if edit.page is not None:
+            changes["page"] = edit.page
+        if edit.entry_meta is not None:
+            changes["entry_meta"] = {**(rec.get("entry_meta") or {}), **edit.entry_meta}
+        if edit.han_bbox is not None:
+            changes["han_bbox"] = edit.han_bbox
+        if edit.meaning_bbox is not None:
+            changes["meaning_bbox"] = edit.meaning_bbox
+        changes["review_status"] = edit.review_status or "verified"
+        updated = records_repo.update(DATABASE_URL, job_id, edit.id, changes)
+        logger.info("Job %d: record %s updated (status=%s).", job_id, edit.id, changes["review_status"])
+        return {"ok": True, "record": updated}
+
     job, records = _job_records(job_id)
     target = next((r for r in records if r.get("id") == edit.id), None)
     if target is None:
@@ -199,9 +263,50 @@ def update_record(job_id: int, edit: RecordEdit) -> dict:
     return {"ok": True, "record": target}
 
 
+def _new_record_dict(prefix, line_no, image_path, source_doc, new: "NewRecord") -> dict:
+    """Build a fresh record dict for a user-drawn box (shared DB + JSONL paths)."""
+    return {
+        "id": f"{prefix}.{new.page:03d}.{line_no:02d}",
+        "source_doc": source_doc,
+        "page": new.page,
+        "line_no": line_no,
+        "han": new.han,
+        "han_raw": new.han,
+        "han_conf": [],
+        "phonetic": "",
+        "meaning": new.meaning,
+        "layout_type": "two_column",
+        "image_path": image_path,
+        "entry_no": None,
+        "entry_meta": {"ngay": "", "to_tap": "", "loai": "", "xuat_xu": "", "de_tai": ""},
+        "han_chars": list(new.han),
+        "phonetic_per_char": [],
+        "source_of": {"han": "ocr", "phonetic": "", "meaning": "manual"},
+        "review_status": "pending",
+        "han_bbox": new.han_bbox,
+        "meaning_bbox": new.meaning_bbox or new.han_bbox,
+    }
+
+
 @app.post("/jobs/{job_id}/record/new")
 def create_record(job_id: int, new: NewRecord) -> dict:
     """Append a new record for a user-drawn box."""
+    if DATABASE_URL:
+        from pipeline.db import records_repo
+
+        if store.get(job_id) is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        existing = records_repo.list_by_job(DATABASE_URL, job_id)
+        prefix = records_repo.id_prefix(DATABASE_URL, job_id)
+        line_no = records_repo.next_line_no(DATABASE_URL, job_id, new.page)
+        same_page = next((r for r in existing if r.get("page") == new.page), None)
+        image_path = new.image_path or (same_page or (existing[0] if existing else {})).get("image_path", "")
+        source_doc = existing[0].get("source_doc", "") if existing else ""
+        rec = _new_record_dict(prefix, line_no, image_path, source_doc, new)
+        created = records_repo.create_one(DATABASE_URL, job_id, rec)
+        logger.info("Job %d: created record %s (manual box).", job_id, created["id"])
+        return {"ok": True, "record": created}
+
     job, records = _job_records(job_id)
     prefix = (records[0]["id"].rsplit(".", 2)[0] if records else "HVB_001")
     line_no = max([r["line_no"] for r in records if r.get("page") == new.page] + [0]) + 1
@@ -239,6 +344,14 @@ def create_record(job_id: int, new: NewRecord) -> dict:
 @app.post("/jobs/{job_id}/record/delete")
 def delete_record(job_id: int, req: DeleteRecord) -> dict:
     """Remove a record (e.g. a spurious detection)."""
+    if DATABASE_URL:
+        from pipeline.db import records_repo
+
+        if not records_repo.delete(DATABASE_URL, job_id, req.id):
+            raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
+        logger.info("Job %d: deleted record %s.", job_id, req.id)
+        return {"ok": True, "deleted": req.id}
+
     job, records = _job_records(job_id)
     kept = [r for r in records if r.get("id") != req.id]
     if len(kept) == len(records):
@@ -296,10 +409,7 @@ def correct_record(job_id: int, req: LLMRequest) -> dict:
     Uses the raw OCR Han + the entry's Vietnamese meaning as context. The key is
     used only for this call — never persisted, never logged.
     """
-    _job, records = _job_records(job_id)
-    rec = next((r for r in records if r.get("id") == req.id), None)
-    if rec is None:
-        raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
+    rec = _find_record(job_id, req.id)
     from pipeline.llm.tasks import correct_han
 
     try:
@@ -315,10 +425,7 @@ def correct_record(job_id: int, req: LLMRequest) -> dict:
 @app.post("/jobs/{job_id}/translate")
 def translate_record(job_id: int, req: LLMRequest) -> dict:
     """Translate one record's Han to Vietnamese with the USER's own key."""
-    _job, records = _job_records(job_id)
-    rec = next((r for r in records if r.get("id") == req.id), None)
-    if rec is None:
-        raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
+    rec = _find_record(job_id, req.id)
     from pipeline.llm.tasks import translate_han
 
     try:
