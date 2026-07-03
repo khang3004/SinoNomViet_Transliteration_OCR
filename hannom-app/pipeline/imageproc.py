@@ -34,13 +34,13 @@ def clean_for_ocr(pil_img):
         import cv2
         import numpy as np
         from PIL import Image
-    except Exception:  # noqa: BLE001 - preprocessing is best-effort
-        logger.warning("OCR preprocessing unavailable (cv2/numpy missing); skipping.")
-        return pil_img
 
-    gray = np.array(pil_img.convert("L"))
-    gray = cv2.medianBlur(gray, 3)  # kill speckle without smearing strokes
-    # Otsu picks the threshold between dark text and the lighter watermark/paper:
-    # text → black, watermark + background → white.
-    _, binar = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return Image.fromarray(binar).convert("RGB")
+        gray = np.array(pil_img.convert("L"))
+        gray = cv2.medianBlur(gray, 3)  # kill speckle without smearing strokes
+        # Otsu picks the threshold between dark text and the lighter watermark/paper:
+        # text → black, watermark + background → white.
+        _, binar = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return Image.fromarray(binar).convert("RGB")
+    except Exception as exc:  # noqa: BLE001 - preprocessing is best-effort, never break OCR
+        logger.warning("OCR preprocessing skipped (%s: %s).", type(exc).__name__, exc)
+        return pil_img
