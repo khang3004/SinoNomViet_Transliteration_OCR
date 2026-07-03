@@ -75,6 +75,16 @@ _DATE_AFTER_NUM_RE = re.compile(r"^\d{1,4}\s+(tháng|năm|nhuận)\b", re.IGNORE
 # A standalone Vietnamese date line ("6 tháng 7 năm Gia Long 1") — on real Mục
 # lục pages each entry BEGINS with one, so it is the reliable entry anchor.
 _DATE_LINE_RE = re.compile(r"^\s*\d{1,3}\s+tháng\b.*\bnăm\b", re.IGNORECASE)
+# Entry-start anchor: like _DATE_LINE_RE but tolerant of a leading "Ngày:" /
+# "Ngày" prefix, because many entries write the date as "Ngày: 6 tháng 1 năm …"
+# or "Ngày 11 tháng 1 năm …" instead of a bare "6 tháng …". Without this those
+# entries lose their anchor and get MERGED into the previous one. The date_mode
+# DECISION still uses the strict _DATE_LINE_RE, so idealized/mock pages (whose
+# dates are all "Ngày:"-prefixed) stay in bare-number mode.
+_DATE_ANCHOR_RE = re.compile(
+    r"^\s*(?:Ngày\s*[:：]?\s*)?\d{1,3}\s+tháng\b.*\bnăm\b", re.IGNORECASE
+)
+_NGAY_PREFIX_RE = re.compile(r"^\s*Ngày\s*[:：]?\s*", re.IGNORECASE)
 # The entry number sits right before "Loại:" — e.g. "; 11 Loại: Chiếu" → 11.
 _NUM_LOAI_RE = re.compile(r"(\d{1,4})\s+Loại\s*[:：]", re.IGNORECASE)
 # Value after "Loại:", up to the next label keyword or end of line.
@@ -387,7 +397,7 @@ class TwoColumnHandler:
         for text, ly0, ly1, leftmost in lines:
             t = text.strip()
             if date_mode:
-                starts = bool(_DATE_LINE_RE.match(t))
+                starts = bool(_DATE_ANCHOR_RE.match(t))
                 hint = None
             else:
                 m_num = _ENTRY_NO_RE.match(leftmost.strip())
@@ -500,9 +510,9 @@ class TwoColumnHandler:
             line = raw.strip()
             if not line:
                 continue
-            if _DATE_LINE_RE.match(line):  # positional date → ngay
+            if _DATE_ANCHOR_RE.match(line):  # positional / "Ngày:"-prefixed date → ngay
                 if not meta.ngay:
-                    meta.ngay = line
+                    meta.ngay = _NGAY_PREFIX_RE.sub("", line).strip()
                 continue
             if re.search(r"\bLoại\s*[:：]", line):  # inline/labelled Loại
                 mv = _LOAI_VALUE_RE.search(line)
