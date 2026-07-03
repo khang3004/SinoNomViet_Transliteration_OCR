@@ -13,10 +13,11 @@ import json
 import logging
 import os
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
+from app import auth
 from pipeline.config import load_config
 from pipeline.jobstore import get_store
 
@@ -36,6 +37,70 @@ app = FastAPI(title="hannom-app", version="0.1.0")
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _INDEX = os.path.join(_HERE, "static", "index.html")
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    """Seed the initial admin (if configured) once Postgres is reachable."""
+    try:
+        auth.seed_admin()
+    except Exception:  # noqa: BLE001 - never block startup on seeding
+        logger.exception("Admin seeding failed.")
+
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    """Require a valid session for every non-public route.
+
+    Only active when auth is configured (DATABASE_URL + AUTH_SECRET). Public
+    paths (index, healthz, login/logout, static assets) always pass through.
+    """
+    if not (DATABASE_URL and config.auth_secret) or auth.is_public_path(request.url.path):
+        return await call_next(request)
+    user = auth.user_from_request(request)
+    if user is None:
+        return JSONResponse({"detail": "not authenticated"}, status_code=401)
+    request.state.user = user
+    return await call_next(request)
+
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/auth/login")
+def auth_login(body: LoginBody) -> JSONResponse:
+    """Verify credentials, set an httpOnly session cookie."""
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="auth requires DATABASE_URL")
+    from pipeline.db import users_repo
+
+    u = users_repo.get_by_username(DATABASE_URL, body.username)
+    if not u or not auth.verify_password(body.password, u["password_hash"]):
+        raise HTTPException(status_code=401, detail="invalid username or password")
+    token = auth.make_token(u)
+    resp = JSONResponse({"ok": True, "user": {"username": u["username"], "role": u["role"]}})
+    resp.set_cookie(
+        auth.COOKIE_NAME, token, httponly=True, samesite="lax", max_age=7 * 24 * 3600, path="/"
+    )
+    return resp
+
+
+@app.post("/auth/logout")
+def auth_logout() -> JSONResponse:
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.COOKIE_NAME, path="/")
+    return resp
+
+
+@app.get("/auth/me")
+def auth_me(request: Request) -> dict:
+    """Return the logged-in user (401 if no valid session)."""
+    user = auth.user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    return {"user": user}
 
 
 @app.get("/", response_class=HTMLResponse)

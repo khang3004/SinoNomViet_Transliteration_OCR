@@ -55,8 +55,25 @@
   </style>
 </head>
 <body>
+  <div id="login-view" style="position:fixed;inset:0;background:#f8fafc;display:none;align-items:center;justify-content:center;z-index:1000">
+    <div class="card" style="width:330px;max-width:90vw">
+      <h2 style="margin-top:0">🏮 hannom-app — Sign in</h2>
+      <label for="lg-user">Username</label>
+      <input id="lg-user" autocomplete="username" />
+      <label for="lg-pass">Password</label>
+      <input id="lg-pass" type="password" autocomplete="current-password"
+             onkeydown="if(event.key==='Enter')doLogin()" />
+      <p id="lg-msg" class="muted" style="color:#c62828;min-height:1.1em"></p>
+      <button onclick="doLogin()" style="width:100%">Sign in</button>
+    </div>
+  </div>
+
   <h1>🏮 hannom-app — Han-Nom OCR corpus builder</h1>
   <p class="muted">Upload a page (image, or a text-layer Mục lục PDF). Review, fix boxes, re-OCR, and verify.</p>
+  <div id="userbar" class="muted" style="display:none;margin-bottom:1rem">
+    Signed in as <b id="ub-name"></b> (<span id="ub-role"></span>)
+    <a onclick="doLogout()" style="margin-left:0.5rem">log out</a>
+  </div>
 
   <div class="card">
     <h2>Upload</h2>
@@ -137,6 +154,13 @@
   </div>
 
   <script>
+    // Any 401 (e.g. an expired session) drops back to the login screen.
+    const _fetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const r = await _fetch(...args);
+      if (r.status === 401 && !String(args[0]).includes('/auth/')) showLogin();
+      return r;
+    };
     const form = document.getElementById('form'), msg = document.getElementById('msg');
     const esc = s => (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
     const cssEsc = s => (window.CSS && CSS.escape) ? CSS.escape(s) : s;
@@ -417,7 +441,37 @@
         tbody.appendChild(tr);
       }
     }
-    refresh(); setInterval(refresh, 3000); loadProviders();
+    // ----- auth / login gate -----
+    let ME = null;
+    function showLogin() { document.getElementById('login-view').style.display = 'flex'; }
+    function hideLogin() { document.getElementById('login-view').style.display = 'none'; }
+    async function doLogin() {
+      const u = document.getElementById('lg-user').value.trim();
+      const p = document.getElementById('lg-pass').value;
+      const m = document.getElementById('lg-msg'); m.textContent = '';
+      try {
+        const r = await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p }) });
+        if (!r.ok) { const j = await r.json().catch(() => ({})); m.textContent = j.detail || 'login failed'; return; }
+        ME = (await r.json()).user; startApp();
+      } catch (e) { m.textContent = 'login error: ' + e; }
+    }
+    async function doLogout() { try { await fetch('/auth/logout', { method: 'POST' }); } catch {} location.reload(); }
+    function startApp() {
+      hideLogin();
+      document.getElementById('userbar').style.display = '';
+      document.getElementById('ub-name').textContent = ME.username;
+      document.getElementById('ub-role').textContent = ME.role;
+      document.body.dataset.role = ME.role;
+      refresh(); if (!window._poll) window._poll = setInterval(refresh, 3000); loadProviders();
+    }
+    (async function init() {
+      try {
+        const r = await _fetch('/auth/me');
+        ME = r.ok ? (await r.json()).user : null;
+      } catch { ME = null; }
+      if (ME) startApp(); else showLogin();
+    })();
   </script>
 </body>
 </html>

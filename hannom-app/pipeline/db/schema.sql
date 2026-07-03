@@ -6,6 +6,16 @@
 -- (DOUBLE PRECISION) to match the existing Job dataclass 1:1. payload/result
 -- stay TEXT (opaque JSON strings the app already json.dumps/loads).
 
+-- Users for self-hosted login. Passwords are bcrypt hashes (never plaintext).
+-- role: 'admin' (manages users + page-range assignments) | 'reviewer'.
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role          TEXT NOT NULL DEFAULT 'reviewer',
+    created_at    DOUBLE PRECISION NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     filename    TEXT NOT NULL,
