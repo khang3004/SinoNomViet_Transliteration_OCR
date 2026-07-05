@@ -77,6 +77,13 @@ desktop.ini
 .vscode/
 *.code-workspace
 
+# Claude Code local config / worktrees
+.claude/
+
+# ── Local scratch data dirs (not the app's ./data volume) ────────────────────
+hannom-app/data_t/
+hannom-app/data_test/
+
 # ── Secrets / credentials ─────────────────────────────────────────────────────
 .env
 .env.*
