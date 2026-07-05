@@ -121,6 +121,8 @@
         <table><thead><tr><th>Reviewer</th><th>Job</th><th>Pages</th><th></th></tr></thead><tbody id="admin-assigns"></tbody></table>
       </div>
     </div>
+    <h3 style="font-size:0.9rem;margin-top:1rem">Reviewer progress</h3>
+    <table><thead><tr><th>Reviewer</th><th>Job</th><th>Pages</th><th>Verified</th><th>On page</th><th>Last active</th></tr></thead><tbody id="admin-progress"></tbody></table>
   </div>
 
   <div class="card" id="review-card" style="display:none">
@@ -166,6 +168,7 @@
           <label>Quốc ngữ (phiên âm / dịch nghĩa)</label>
           <textarea class="ta-vi" id="f-meaning"></textarea>
         </div>
+        <div id="link-row" class="muted" style="font-size:0.8rem;min-height:1.2em"></div>
         <div class="row">
           <div><label>Ngày</label><input type="text" id="m-ngay" /></div>
           <div><label>Tờ/Tập</label><input type="text" id="m-to_tap" /></div>
@@ -245,7 +248,7 @@
       if (!nw || !nh) return;
       for (const r of pageRecords()) {
         const verified = r.review_status === 'verified', sel = r.id === R.selId;
-        for (const [cls, bb, num] of [['box-han', r.han_bbox, r.entry_no], ['box-vi', r.meaning_bbox, null]]) {
+        for (const [cls, bb, num] of [['box-han', r.han_bbox, r.part_of ? '⤷' : r.entry_no], ['box-vi', r.meaning_bbox, null]]) {
           if (!bb || bb.length !== 4 || bb[2] <= bb[0] || bb[3] <= bb[1]) continue;
           const d = document.createElement('div');
           d.className = 'box ' + cls + (verified ? ' ok' : '') + (sel ? ' sel' : '');
@@ -372,6 +375,10 @@
       for (const k of ['ngay','to_tap','loai','xuat_xu','de_tai']) f('m-' + k, m[k] || '');
       const raw = document.getElementById('f-raw');
       raw.innerHTML = (rec.han_raw && rec.han_raw !== rec.han) ? `raw OCR: <span class="d">${esc(rec.han_raw)}</span>` : '';
+      // Spanning-entry link control.
+      const lr = document.getElementById('link-row'), ce = rec.editable !== false;
+      if (rec.part_of) lr.innerHTML = `⤷ continuation of <b>${esc(rec.part_of)}</b>` + (ce ? ` · <a onclick="unlinkRec()">unlink</a>` : '');
+      else lr.innerHTML = ce ? `<a onclick="linkPrev()" title="This bài continues from the entry before it (e.g. across a page break)">⤷ mark as continuation of previous entry</a>` : '';
       document.getElementById('f-verify').checked = rec.review_status === 'verified';
       applyEditable(rec); onVerify();
     }
@@ -460,6 +467,23 @@
       btn.disabled = false; btn.textContent = label;
     }
 
+    // ----- spanning entries: link a fragment to the previous entry -----
+    async function reloadRecords() {
+      try { const j = await (await fetch('/jobs/' + R.jobId + '/records')).json(); R.records = j.records || []; } catch {}
+      drawBoxes(); fillEditor(getRec(R.selId) || null); updateProgress();
+    }
+    async function linkPrev() {
+      const rec = getRec(R.selId); if (!rec) return;
+      const res = await fetch(`/jobs/${R.jobId}/record/link`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: rec.id }) });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); alert('Link failed: ' + (j.detail || res.status)); return; }
+      await reloadRecords();
+    }
+    async function unlinkRec() {
+      const rec = getRec(R.selId); if (!rec) return;
+      const res = await fetch(`/jobs/${R.jobId}/record/unlink`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: rec.id }) });
+      if (res.ok) await reloadRecords(); else alert('Unlink failed');
+    }
+
     async function deleteBox() {
       const rec = getRec(R.selId); if (!rec) return;
       if (!confirm('Delete this box/record?')) return;
@@ -528,7 +552,19 @@
       document.getElementById('admin-assigns').innerHTML = as.map(a =>
         `<tr><td>${esc(a.username)}</td><td>${a.job_id}</td><td>${a.page_start}–${a.page_end}</td>` +
         `<td><a onclick="adminDelAssign(${a.id})">remove</a></td></tr>`).join('');
+      const pr = ((await (await fetch('/admin/progress')).json()).progress) || [];
+      document.getElementById('admin-progress').innerHTML = pr.map(p => {
+        const pct = p.total ? Math.round(100 * p.verified / p.total) : 0;
+        const cur = p.current_page != null ? ('p' + p.current_page) : '✓ done';
+        const la = p.last_active ? new Date(p.last_active * 1000).toLocaleString() : '—';
+        return `<tr><td>${esc(p.username)}</td><td>${p.job_id}</td><td>${p.page_start}–${p.page_end}</td>` +
+          `<td><span style="display:inline-block;width:90px;height:9px;background:#e5e7eb;border-radius:4px;vertical-align:middle">` +
+          `<span style="display:block;height:9px;background:#22c55e;border-radius:4px;width:${pct}%"></span></span> ${p.verified}/${p.total} (${pct}%)</td>` +
+          `<td>${cur}</td><td class="muted">${esc(la)}</td></tr>`;
+      }).join('');
     }
+    // Refresh the admin progress table periodically while an admin is viewing.
+    setInterval(() => { if (ME && ME.role === 'admin') loadAdmin(); }, 15000);
     async function adminCreateUser() {
       const b = { username: document.getElementById('au-user').value.trim(),
         password: document.getElementById('au-pass').value, role: document.getElementById('au-role').value };

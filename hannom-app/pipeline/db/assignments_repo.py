@@ -66,3 +66,31 @@ def delete(dsn: str, assignment_id: int) -> bool:
         cur = conn.execute("DELETE FROM assignments WHERE id=%s", (assignment_id,))
         conn.commit()
         return cur.rowcount > 0
+
+
+def progress(dsn: str) -> list[dict]:
+    """Per-assignment review progress for the admin dashboard.
+
+    For each reviewer's page range on a job: how many records are verified vs
+    total, the first page still needing work (``current_page``), and the last time
+    the reviewer verified anything (``last_active``, epoch seconds).
+    """
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            """
+            SELECT a.id, a.user_id, u.username, a.job_id, a.page_start, a.page_end,
+              (SELECT count(*) FROM records r
+                 WHERE r.job_id=a.job_id AND r.page BETWEEN a.page_start AND a.page_end) AS total,
+              (SELECT count(*) FROM records r
+                 WHERE r.job_id=a.job_id AND r.page BETWEEN a.page_start AND a.page_end
+                   AND r.review_status='verified') AS verified,
+              (SELECT min(r.page) FROM records r
+                 WHERE r.job_id=a.job_id AND r.page BETWEEN a.page_start AND a.page_end
+                   AND r.review_status <> 'verified') AS current_page,
+              (SELECT max(r.reviewed_at) FROM records r
+                 WHERE r.job_id=a.job_id AND r.reviewed_by=a.user_id) AS last_active
+            FROM assignments a JOIN users u ON u.id = a.user_id
+            ORDER BY u.username, a.job_id, a.page_start
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]

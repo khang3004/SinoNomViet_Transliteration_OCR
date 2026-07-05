@@ -63,12 +63,20 @@ CREATE TABLE IF NOT EXISTS records (
     meaning_bbox      JSONB,
     reviewed_by       INTEGER,
     reviewed_at       DOUBLE PRECISION,
+    -- part_of: the human_id of the HEAD entry this record continues (a bài whose
+    -- text spans a page break). NULL = a head/standalone entry. Continuations
+    -- merge into their head for export + entry counting.
+    part_of           TEXT,
     created_at        DOUBLE PRECISION NOT NULL,
     UNIQUE (job_id, human_id)
 );
 
+-- Migrate existing records tables that predate part_of.
+ALTER TABLE records ADD COLUMN IF NOT EXISTS part_of TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_records_job ON records (job_id);
 CREATE INDEX IF NOT EXISTS idx_records_job_page ON records (job_id, page);
+CREATE INDEX IF NOT EXISTS idx_records_part_of ON records (job_id, part_of);
 
 -- Page-range assignments: an admin gives each reviewer an inclusive [start,end]
 -- page range on a job. A reviewer may VIEW everything but only EDIT/verify

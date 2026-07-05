@@ -28,7 +28,7 @@ _COLUMNS = [
     "human_id", "source_doc", "page", "line_no", "entry_no", "han", "han_raw",
     "han_conf", "phonetic", "meaning", "layout_type", "image_path", "entry_meta",
     "han_chars", "phonetic_per_char", "source_of", "review_status", "han_bbox",
-    "meaning_bbox", "reviewed_by", "reviewed_at",
+    "meaning_bbox", "reviewed_by", "reviewed_at", "part_of",
 ]
 
 
@@ -63,6 +63,7 @@ def _row_to_dict(row: dict) -> dict:
         "meaning_bbox": row["meaning_bbox"],
         "reviewed_by": row["reviewed_by"],
         "reviewed_at": row["reviewed_at"],
+        "part_of": row.get("part_of"),
     }
 
 
@@ -91,6 +92,7 @@ def _rec_to_row(job_id: int, rec: dict) -> dict:
         "meaning_bbox": rec.get("meaning_bbox"),
         "reviewed_by": rec.get("reviewed_by"),
         "reviewed_at": rec.get("reviewed_at"),
+        "part_of": rec.get("part_of"),
     }
 
 
@@ -197,3 +199,71 @@ def id_prefix(dsn: str, job_id: int) -> str:
     if row and row["human_id"]:
         return row["human_id"].rsplit(".", 2)[0]
     return "HVB_001"
+
+
+# --- spanning entries (part_of links) ---------------------------------
+def set_part_of(dsn: str, job_id: int, human_id: str, part_of: str | None) -> dict | None:
+    """Link ``human_id`` as a continuation of ``part_of`` (or None to unlink)."""
+    with connect(dsn) as conn:
+        row = conn.execute(
+            "UPDATE records SET part_of=%s WHERE job_id=%s AND human_id=%s RETURNING *",
+            (part_of, job_id, human_id),
+        ).fetchone()
+        conn.commit()
+    return _row_to_dict(row) if row else None
+
+
+def previous_entry_head(dsn: str, job_id: int, page: int, line_no: int) -> str | None:
+    """Head id of the entry immediately BEFORE (page, line_no) in reading order.
+
+    Resolves through continuations so the returned id is always a head — so a bài
+    spanning 3+ pages chains every part to the same head.
+    """
+    with connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT human_id, part_of FROM records "
+            "WHERE job_id=%s AND (page < %s OR (page = %s AND line_no < %s)) "
+            "ORDER BY page DESC, line_no DESC, id DESC LIMIT 1",
+            (job_id, page, page, line_no),
+        ).fetchone()
+    if not row:
+        return None
+    return row["part_of"] or row["human_id"]
+
+
+def merged_entries(dsn: str, job_id: int) -> list[dict]:
+    """Records with continuations folded into their head (for export).
+
+    One dict per head: continuations' ``han``/``meaning`` are concatenated in
+    reading order; ``spans_pages`` + ``parts`` record the provenance of each piece.
+    """
+    recs = list_by_job(dsn, job_id)  # ordered by page, line_no
+    children: dict[str, list[dict]] = {}
+    heads: list[dict] = []
+    for r in recs:
+        head = r.get("part_of")
+        if head:
+            children.setdefault(head, []).append(r)
+        else:
+            heads.append(r)
+    out: list[dict] = []
+    for h in heads:
+        parts = [h] + sorted(
+            children.get(h["id"], []),
+            key=lambda r: (r.get("page") or 0, r.get("line_no") or 0),
+        )
+        merged = dict(h)
+        if len(parts) > 1:
+            merged["han"] = "".join(p.get("han", "") for p in parts)
+            merged["han_chars"] = list(merged["han"])
+            merged["meaning"] = " ".join(
+                p.get("meaning", "").strip() for p in parts if p.get("meaning", "").strip()
+            )
+            merged["spans_pages"] = [p.get("page") for p in parts]
+            merged["parts"] = [
+                {"id": p["id"], "page": p.get("page"), "han": p.get("han", ""),
+                 "han_bbox": p.get("han_bbox")}
+                for p in parts
+            ]
+        out.append(merged)
+    return out

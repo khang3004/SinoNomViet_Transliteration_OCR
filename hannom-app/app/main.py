@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -171,6 +172,14 @@ def admin_delete_assignment(assignment_id: int, _admin: dict = Depends(auth.requ
     return {"ok": True}
 
 
+@app.get("/admin/progress")
+def admin_progress(_admin: dict = Depends(auth.require_admin)) -> dict:
+    """Per-reviewer review progress (verified/total, current page, last active)."""
+    from pipeline.db import assignments_repo
+
+    return {"progress": assignments_repo.progress(DATABASE_URL)}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     with open(_INDEX, encoding="utf-8") as fh:
@@ -224,7 +233,9 @@ def get_output(job_id: int):
     if DATABASE_URL:
         from pipeline.db import records_repo
 
-        recs = records_repo.list_by_job(DATABASE_URL, job_id)
+        # Export merged entries: a bài spanning a page break becomes ONE line with
+        # its parts' han/meaning concatenated (continuations folded into the head).
+        recs = records_repo.merged_entries(DATABASE_URL, job_id)
         body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs)
         fname = os.path.basename(job.output_path) or f"job_{job_id}.jsonl"
         return Response(
@@ -405,6 +416,13 @@ def update_record(job_id: int, edit: RecordEdit, request: Request) -> dict:
         if edit.meaning_bbox is not None:
             changes["meaning_bbox"] = edit.meaning_bbox
         changes["review_status"] = edit.review_status or "verified"
+        # Record WHO verified and WHEN (for the admin progress dashboard).
+        if changes["review_status"] == "verified":
+            changes["reviewed_by"] = (getattr(request.state, "user", None) or {}).get("id")
+            changes["reviewed_at"] = time.time()
+        else:
+            changes["reviewed_by"] = None
+            changes["reviewed_at"] = None
         updated = records_repo.update(DATABASE_URL, job_id, edit.id, changes)
         logger.info("Job %d: record %s updated (status=%s).", job_id, edit.id, changes["review_status"])
         return {"ok": True, "record": updated}
@@ -538,6 +556,57 @@ def delete_record(job_id: int, req: DeleteRecord, request: Request) -> dict:
     _save_records(job, kept)
     logger.info("Job %d: deleted record %s.", job_id, req.id)
     return {"ok": True, "deleted": req.id}
+
+
+class LinkRecord(BaseModel):
+    """Mark record ``id`` as a continuation of a head entry on a previous page."""
+
+    id: str
+    head_id: str | None = None  # explicit head; if omitted, the previous entry
+
+
+@app.post("/jobs/{job_id}/record/link")
+def link_record(job_id: int, req: LinkRecord, request: Request) -> dict:
+    """Link a fragment as the continuation of the entry before it (spanning page)."""
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="linking requires DATABASE_URL")
+    from pipeline.db import records_repo
+
+    tail = records_repo.get(DATABASE_URL, job_id, req.id)
+    if tail is None:
+        raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
+    _require_can_edit(request, job_id, tail.get("page"))
+    if req.head_id:
+        head = records_repo.get(DATABASE_URL, job_id, req.head_id)
+        if head is None:
+            raise HTTPException(status_code=404, detail="head entry not found")
+        head_id = head.get("part_of") or req.head_id  # resolve to the true head
+    else:
+        head_id = records_repo.previous_entry_head(
+            DATABASE_URL, job_id, tail.get("page") or 0, tail.get("line_no") or 0
+        )
+        if not head_id:
+            raise HTTPException(status_code=400, detail="no previous entry to link to")
+    if head_id == req.id:
+        raise HTTPException(status_code=400, detail="a record cannot continue itself")
+    updated = records_repo.set_part_of(DATABASE_URL, job_id, req.id, head_id)
+    logger.info("Job %d: linked %s as continuation of %s.", job_id, req.id, head_id)
+    return {"ok": True, "record": updated}
+
+
+@app.post("/jobs/{job_id}/record/unlink")
+def unlink_record(job_id: int, req: DeleteRecord, request: Request) -> dict:
+    """Detach a continuation so it is a standalone entry again."""
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="linking requires DATABASE_URL")
+    from pipeline.db import records_repo
+
+    rec = records_repo.get(DATABASE_URL, job_id, req.id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"record {req.id!r} not found")
+    _require_can_edit(request, job_id, rec.get("page"))
+    updated = records_repo.set_part_of(DATABASE_URL, job_id, req.id, None)
+    return {"ok": True, "record": updated}
 
 
 @app.post("/jobs/{job_id}/reocr")
