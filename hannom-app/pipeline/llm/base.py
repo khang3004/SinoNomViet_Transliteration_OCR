@@ -17,6 +17,7 @@ class LLMProvider(Protocol):
     name: str
     default_model: str
     default_vision_model: str
+    supports_vision: bool
 
     def complete(
         self, prompt: str, api_key: str, model: str | None = None, system: str | None = None

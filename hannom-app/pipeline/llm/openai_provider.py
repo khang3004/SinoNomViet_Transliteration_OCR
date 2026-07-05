@@ -9,6 +9,7 @@ class OpenAIProvider:
     name = "openai"
     default_model = "gpt-4o-mini"
     default_vision_model = "gpt-4o-mini"  # multimodal
+    supports_vision = True
 
     def complete(self, prompt, api_key, model=None, system=None) -> str:
         from openai import OpenAI  # lazy

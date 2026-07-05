@@ -644,7 +644,11 @@ def llm_providers() -> dict:
 
     return {
         "providers": [
-            {"name": n, "default_model": llm.get_provider(n).default_model}
+            {
+                "name": n,
+                "default_model": llm.get_provider(n).default_model,
+                "supports_vision": getattr(llm.get_provider(n), "supports_vision", True),
+            }
             for n in llm.available()
         ]
     }

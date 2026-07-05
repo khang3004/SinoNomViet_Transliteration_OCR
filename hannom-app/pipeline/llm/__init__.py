@@ -61,6 +61,7 @@ def complete_vision(
 
 # --- built-in provider registrations (lazy SDK imports inside each) ---------
 from pipeline.llm import anthropic_provider as _anthropic  # noqa: E402,F401
+from pipeline.llm import deepseek as _deepseek  # noqa: E402,F401
 from pipeline.llm import gemini as _gemini  # noqa: E402,F401
 from pipeline.llm import openai_provider as _openai  # noqa: E402,F401
 

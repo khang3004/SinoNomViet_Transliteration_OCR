@@ -418,6 +418,8 @@
     async function loadProviders() {
       try {
         const j = await (await fetch('/llm/providers')).json();
+        window.PROVIDERS = {};
+        for (const p of j.providers) window.PROVIDERS[p.name] = p.supports_vision !== false;
         document.getElementById('ai-provider').innerHTML =
           j.providers.map(p => `<option value="${p.name}">${esc(p.name)}</option>`).join('');
       } catch (e) { /* ignore */ }
@@ -443,6 +445,9 @@
     async function visionCorrect() {
       const rec = getRec(R.selId); if (!rec) return;
       const provider = document.getElementById('ai-provider').value || 'gemini';
+      if (window.PROVIDERS && window.PROVIDERS[provider] === false) {
+        alert(`${provider} has no image model. Pick Gemini, OpenAI, or Anthropic for the 👁 image button.`); return;
+      }
       const api_key = (document.getElementById('ai-key').value || '').trim();
       if (!api_key) { alert(`Paste your ${provider} API key in the field at the top-right of Review.`); return; }
       const bb = rec.han_bbox;

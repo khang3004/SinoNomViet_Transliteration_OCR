@@ -10,6 +10,7 @@ class AnthropicProvider:
     default_model = "claude-3-5-haiku-latest"
     # 3.5 Haiku is text-only; use a vision-capable model for image reads.
     default_vision_model = "claude-3-5-sonnet-latest"
+    supports_vision = True
 
     def complete(self, prompt, api_key, model=None, system=None) -> str:
         import anthropic  # lazy
