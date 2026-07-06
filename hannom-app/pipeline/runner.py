@@ -182,26 +182,43 @@ def _process_pdf(pdf_path: str, doc: str, engine, config: Config, output_path: s
     stem = _safe_stem(output_path)
 
     all_records: list[Record] = []
+    failed: list[int] = []
     for page_index in range(n):
-        # Rasterise the page ONCE: saved for the UI and reused for Han OCR.
-        image, _scale = render_page(pdf_path, page_index, config.pdf_dpi)
-        img_name = f"{stem}_p{page_index + 1:04d}.png"
-        image.save(os.path.join(pages_dir, img_name))
+        page_no = page_index + 1
+        # Isolate each page: a single bad page (unrenderable scan, a non-Mục-lục
+        # divider/blank page that matches no layout, etc.) must NOT sink the whole
+        # multi-hundred-page job. Log it and carry on.
+        try:
+            # Rasterise the page ONCE: saved for the UI and reused for Han OCR.
+            image, _scale = render_page(pdf_path, page_index, config.pdf_dpi)
+            img_name = f"{stem}_p{page_no:04d}.png"
+            image.save(os.path.join(pages_dir, img_name))
 
-        ctx = PageContext(
-            source_doc=doc,
-            page=page_index + 1,
-            image_path=img_name,  # filename the UI fetches from /pages/
-            pdf_path=pdf_path,
-            pdf_page_index=page_index,
-            ocr_engine=engine,
-            config=config,
-            render_dpi=config.pdf_dpi,
-            page_width=float(image.width),
-            prerendered_image=image,
+            ctx = PageContext(
+                source_doc=doc,
+                page=page_no,
+                image_path=img_name,  # filename the UI fetches from /pages/
+                pdf_path=pdf_path,
+                pdf_page_index=page_index,
+                ocr_engine=engine,
+                config=config,
+                render_dpi=config.pdf_dpi,
+                page_width=float(image.width),
+                prerendered_image=image,
+            )
+            handler = layouts.route(ctx)
+            all_records.extend(handler.extract(ctx))
+        except Exception as exc:  # noqa: BLE001 - one bad page shouldn't fail the job
+            failed.append(page_no)
+            logger.warning(
+                "Skipping page %d of %s (%s: %s).",
+                page_no, os.path.basename(pdf_path), type(exc).__name__, exc,
+            )
+    if failed:
+        logger.warning(
+            "%s: extracted %d page(s); skipped %d unprocessable page(s): %s",
+            os.path.basename(pdf_path), n - len(failed), len(failed), failed,
         )
-        handler = layouts.route(ctx)
-        all_records.extend(handler.extract(ctx))
     return all_records
 
 

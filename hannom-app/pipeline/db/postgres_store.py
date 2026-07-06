@@ -87,6 +87,12 @@ class PostgresJobStore:
             row = conn.execute("SELECT * FROM jobs WHERE id=%s", (job_id,)).fetchone()
             return _row_to_job(row) if row else None
 
+    def delete(self, job_id: int) -> bool:
+        """Delete a job; its records + assignments cascade (FK ON DELETE CASCADE)."""
+        with connect(self._dsn) as conn:
+            cur = conn.execute("DELETE FROM jobs WHERE id=%s", (job_id,))
+            return cur.rowcount > 0
+
     def get_result(self, job_id: int) -> str:
         """Return the inline ``result`` text for a job ('' if none)."""
         with connect(self._dsn) as conn:

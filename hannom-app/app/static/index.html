@@ -81,7 +81,7 @@
   </div>
 
   <div id="jobs-view">
-  <div class="card">
+  <div class="card" id="upload-card">
     <h2>Upload</h2>
     <form id="form">
       <label for="file">Document (image or PDF)</label>
@@ -566,14 +566,22 @@
       } catch (err) { msg.textContent = 'Upload failed: ' + err; }
     });
 
+    async function deleteJob(id) {
+      if (!confirm(`Delete job #${id} and ALL its records, assignments, and page images? This cannot be undone.`)) return;
+      const r = await fetch('/jobs/' + id, { method: 'DELETE' });
+      if (r.ok) { if (R.jobId === id) closeReview(); refresh(); }
+      else alert('Delete failed: ' + ((await r.json().catch(() => ({}))).detail || r.status));
+    }
+
     async function refresh() {
       const j = await (await fetch('/jobs')).json(); const tbody = document.getElementById('jobs'); tbody.innerHTML = '';
       for (const job of j.jobs) {
         if (job.filename && job.filename.startsWith('reocr')) continue;  // hide internal reocr jobs
         const tr = document.createElement('tr'); let out = '—';
         if (job.status === 'done') out = `<a onclick="viewJob(${job.id})">review</a> · <a href="/jobs/${job.id}/output">.jsonl</a>`;
-        else if (job.status === 'failed') out = `<span class="muted">${esc(job.error) || 'failed'}</span>`;
-        tr.innerHTML = `<td>${job.id}</td><td>${esc(job.filename)}</td><td class="status ${job.status}">${job.status}</td><td>${out}</td>`;
+        else if (job.status === 'failed') out = `<span class="muted" title="${esc(job.error)}">${esc(job.error) || 'failed'}</span>`;
+        const del = (ME && ME.role === 'admin') ? ` · <a onclick="deleteJob(${job.id})" title="delete job" style="color:#c62828">🗑</a>` : '';
+        tr.innerHTML = `<td>${job.id}</td><td>${esc(job.filename)}</td><td class="status ${job.status}">${job.status}</td><td>${out}${del}</td>`;
         tbody.appendChild(tr);
       }
     }
@@ -719,6 +727,7 @@
       document.getElementById('ub-name').textContent = ME.username;
       document.getElementById('ub-role').textContent = ME.role;
       document.body.dataset.role = ME.role;
+      document.getElementById('upload-card').style.display = ME.role === 'admin' ? '' : 'none';
       refresh(); if (!window._poll) window._poll = setInterval(refresh, 3000); loadProviders(); loadAdmin();
     }
     (async function init() {

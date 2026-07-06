@@ -152,6 +152,11 @@ class JobStore:
             row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             return self._row_to_job(row) if row else None
 
+    def delete(self, job_id: int) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            return cur.rowcount > 0
+
     def list_jobs(self, limit: int = 100) -> list[Job]:
         with self._connect() as conn:
             rows = conn.execute(

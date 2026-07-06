@@ -253,10 +253,14 @@ def healthz() -> dict:
 
 @app.post("/upload")
 async def upload(
+    request: Request,
     file: UploadFile = File(...),
     source_doc: str = Form(""),
 ) -> JSONResponse:
-    """Accept an image/PDF upload and enqueue a processing job."""
+    """Accept an image/PDF upload and enqueue a processing job (admin only)."""
+    user = getattr(request.state, "user", None)
+    if user is not None and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="only admins can upload")
     filename = os.path.basename(file.filename or "upload")
     dest = os.path.join(config.uploads_dir, filename)
     # Avoid clobbering: prefix with a counter if needed.
@@ -280,6 +284,42 @@ def get_job(job_id: int) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return job.__dict__
+
+
+def _delete_job_files(job) -> None:
+    """Best-effort removal of a job's files: uploaded source, output JSONL, and
+    rendered page images (pages/job_<id>_*). Frees disk when a job is deleted."""
+    import glob
+
+    for path in (job.input_path, job.output_path):
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    for p in glob.glob(os.path.join(config.output_dir, "pages", f"job_{job.id}_*")):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+@app.delete("/jobs/{job_id}")
+def delete_job(job_id: int, request: Request) -> dict:
+    """Delete a job and everything under it (admin only).
+
+    Its records + assignments cascade in Postgres; its files are removed from disk.
+    """
+    user = getattr(request.state, "user", None)
+    if user is not None and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="only admins can delete jobs")
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    _delete_job_files(job)
+    store.delete(job_id)
+    logger.info("Deleted job %d (%s).", job_id, job.filename)
+    return {"ok": True, "deleted": job_id}
 
 
 @app.get("/jobs/{job_id}/output")
