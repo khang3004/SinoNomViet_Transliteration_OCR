@@ -180,6 +180,64 @@ def admin_progress(_admin: dict = Depends(auth.require_admin)) -> dict:
     return {"progress": assignments_repo.progress(DATABASE_URL)}
 
 
+# --- corpus view (whole corpus by Trang số, across all uploads) --------
+def _member_filter(request: Request, member: int | None) -> int | None:
+    """Honor the ?member= filter only for admins; reviewers get the aggregate."""
+    user = getattr(request.state, "user", None)
+    if member and user and user.get("role") == "admin":
+        return member
+    return None
+
+
+@app.get("/corpus/pages")
+def corpus_pages(
+    request: Request, member: int | None = None, offset: int = 0, limit: int = 50
+) -> dict:
+    """Paginated list of DONE pages (Trang số with verified work) across all jobs."""
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="corpus requires DATABASE_URL")
+    from pipeline.db import corpus_repo
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    rows, total = corpus_repo.page_index(
+        DATABASE_URL, _member_filter(request, member), offset, limit
+    )
+    return {"pages": rows, "total": total, "offset": offset, "limit": limit}
+
+
+@app.get("/corpus/summary")
+def corpus_summary(request: Request, member: int | None = None) -> dict:
+    """Corpus totals (done pages, entries, verified) for the header."""
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="corpus requires DATABASE_URL")
+    from pipeline.db import corpus_repo
+
+    return corpus_repo.summary(DATABASE_URL, _member_filter(request, member))
+
+
+@app.get("/corpus/page/{page}")
+def corpus_page(page: int, request: Request) -> dict:
+    """The merged entries on one Trang số across all jobs, for reading."""
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="corpus requires DATABASE_URL")
+    from pipeline.db import corpus_repo
+
+    entries = corpus_repo.page_entries(DATABASE_URL, page)
+    user = getattr(request.state, "user", None)
+    editable = False
+    if user and user.get("role") == "admin":
+        editable = True
+    elif user and entries:
+        from pipeline.db import assignments_repo
+
+        job_ids = {e["job_id"] for e in entries}
+        editable = any(
+            assignments_repo.covers(DATABASE_URL, user["id"], jid, page) for jid in job_ids
+        )
+    return {"page": page, "entries": entries, "editable": editable}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     with open(_INDEX, encoding="utf-8") as fh:

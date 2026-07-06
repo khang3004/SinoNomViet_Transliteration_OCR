@@ -75,6 +75,12 @@
     <a onclick="doLogout()" style="margin-left:0.5rem">log out</a>
   </div>
 
+  <div id="nav" style="display:none;margin-bottom:1rem;font-size:0.95rem">
+    <a onclick="showJobs()" id="nav-jobs"><b>Jobs</b></a> ·
+    <a onclick="showCorpus()" id="nav-corpus">📚 Corpus</a>
+  </div>
+
+  <div id="jobs-view">
   <div class="card">
     <h2>Upload</h2>
     <form id="form">
@@ -186,6 +192,33 @@
         </label>
         <button class="btn-save" id="btn-save" disabled onclick="saveRecord()">💾 Save to corpus</button>
         <div class="btnrow"><button class="ghost" onclick="step(-1)">← Prev</button><button class="ghost" onclick="step(1)">Next →</button></div>
+      </div>
+    </div>
+  </div>
+  </div><!-- /jobs-view -->
+
+  <div class="card" id="corpus-card" style="display:none">
+    <div class="review-head">
+      <h2 style="margin:0">📚 Corpus</h2>
+      <span class="muted" id="corpus-summary"></span>
+      <span style="flex:1"></span>
+      <span id="corpus-member-wrap" style="display:none;font-size:0.85rem">
+        member: <select id="corpus-member" onchange="loadCorpus(0)"></select>
+      </span>
+    </div>
+    <div class="workspace">
+      <div>
+        <div class="muted" style="font-size:0.8rem;margin-bottom:0.3rem">Completed pages (Trang số) — only pages with verified work, across all uploads.</div>
+        <table><thead><tr><th>Trang số</th><th>Verified</th><th>Reviewer(s)</th><th>Uploads</th><th></th></tr></thead><tbody id="corpus-pages"></tbody></table>
+        <div class="btnrow" style="margin-top:0.5rem;align-items:center">
+          <button class="ghost" id="corpus-prev" onclick="corpusPage(-1)">‹ prev</button>
+          <span class="muted" id="corpus-pageinfo" style="flex:1;text-align:center"></span>
+          <button class="ghost" id="corpus-next" onclick="corpusPage(1)">next ›</button>
+        </div>
+      </div>
+      <div>
+        <h3 id="corpus-read-title" style="font-size:1rem;margin-top:0">Select a page to read</h3>
+        <div id="corpus-read"></div>
       </div>
     </div>
   </div>
@@ -589,6 +622,80 @@
     }
     async function adminDelAssign(id) { await fetch('/admin/assignments/' + id, { method: 'DELETE' }); loadAdmin(); }
 
+    // ----- corpus view (whole corpus by Trang số, across all uploads) -----
+    let CORPUS = { offset: 0, limit: 25, total: 0 };
+    function showJobs() {
+      document.getElementById('jobs-view').style.display = '';
+      document.getElementById('corpus-card').style.display = 'none';
+      document.getElementById('nav-jobs').innerHTML = '<b>Jobs</b>';
+      document.getElementById('nav-corpus').innerHTML = '📚 Corpus';
+    }
+    function showCorpus() {
+      document.getElementById('jobs-view').style.display = 'none';
+      document.getElementById('corpus-card').style.display = '';
+      document.getElementById('nav-jobs').innerHTML = 'Jobs';
+      document.getElementById('nav-corpus').innerHTML = '<b>📚 Corpus</b>';
+      if (ME && ME.role === 'admin') {
+        document.getElementById('corpus-member-wrap').style.display = '';
+        populateCorpusMembers();
+      }
+      loadCorpus(0);
+    }
+    async function populateCorpusMembers() {
+      try {
+        const us = ((await (await fetch('/admin/users')).json()).users) || [];
+        document.getElementById('corpus-member').innerHTML =
+          ['<option value="">all members</option>'].concat(
+            us.filter(u => u.role === 'reviewer').map(u => `<option value="${u.id}">${esc(u.username)}</option>`)
+          ).join('');
+      } catch {}
+    }
+    async function loadCorpus(offset) {
+      CORPUS.offset = offset;
+      const member = (ME && ME.role === 'admin') ? (document.getElementById('corpus-member').value || '') : '';
+      const q = new URLSearchParams({ offset: CORPUS.offset, limit: CORPUS.limit });
+      if (member) q.set('member', member);
+      const [pg, sm] = await Promise.all([
+        (await fetch('/corpus/pages?' + q)).json(),
+        (await fetch('/corpus/summary' + (member ? '?member=' + member : ''))).json()
+      ]);
+      CORPUS.total = pg.total || 0;
+      document.getElementById('corpus-summary').textContent =
+        `${sm.page_count} done page(s) · ${sm.verified_count} verified / ${sm.entry_count} entries`;
+      document.getElementById('corpus-pages').innerHTML = (pg.pages || []).map(p =>
+        `<tr><td><b>${p.page}</b></td><td>${p.verified}/${p.entries}</td>` +
+        `<td>${esc((p.reviewers || []).join(', '))}</td>` +
+        `<td class="muted">${(p.jobs || []).join(', ')}</td>` +
+        `<td><a onclick="readCorpusPage(${p.page})">read ▸</a></td></tr>`).join('') ||
+        '<tr><td colspan="5" class="muted">No completed pages yet.</td></tr>';
+      const from = CORPUS.total ? CORPUS.offset + 1 : 0, to = Math.min(CORPUS.offset + CORPUS.limit, CORPUS.total);
+      document.getElementById('corpus-pageinfo').textContent = `${from}–${to} of ${CORPUS.total}`;
+      document.getElementById('corpus-prev').disabled = CORPUS.offset <= 0;
+      document.getElementById('corpus-next').disabled = CORPUS.offset + CORPUS.limit >= CORPUS.total;
+    }
+    function corpusPage(dir) {
+      const next = CORPUS.offset + dir * CORPUS.limit;
+      if (next >= 0 && next < CORPUS.total) loadCorpus(next);
+    }
+    async function readCorpusPage(page) {
+      document.getElementById('corpus-read-title').textContent = 'Trang số ' + page;
+      const el = document.getElementById('corpus-read'); el.innerHTML = '<p class="muted">loading…</p>';
+      const d = await (await fetch('/corpus/page/' + page)).json();
+      const rows = (d.entries || []).map(e =>
+        `<div style="border-bottom:1px solid #eee;padding:0.5rem 0">
+           <div class="muted" style="font-size:0.72rem">entry ${e.entry_no ?? '—'} · upload ${e.job_id} · ${esc(e.review_status)}${e.spans_pages ? ' · ⤷ spanning' : ''}</div>
+           <div style="font-family:'MingLiU','Noto Serif CJK TC','SimSun',serif;font-size:18px;line-height:1.6">${esc(e.han)}</div>
+           <div style="font-size:14px;color:#334155">${esc(e.meaning)}</div>
+         </div>`).join('');
+      const editLink = (d.editable && d.entries && d.entries.length)
+        ? `<a onclick="editInReview(${d.entries[0].job_id}, ${page})">✎ edit in review</a>` : '';
+      el.innerHTML = (rows || '<p class="muted">No entries on this page.</p>') + `<div style="margin-top:0.6rem">${editLink}</div>`;
+    }
+    async function editInReview(jobId, page) {
+      showJobs(); await viewJob(jobId);
+      if (R.pages && R.pages.includes(page)) gotoPage(page);
+    }
+
     // ----- auth / login gate -----
     let ME = null;
     function showLogin() { document.getElementById('login-view').style.display = 'flex'; }
@@ -608,6 +715,7 @@
     function startApp() {
       hideLogin();
       document.getElementById('userbar').style.display = '';
+      document.getElementById('nav').style.display = '';
       document.getElementById('ub-name').textContent = ME.username;
       document.getElementById('ub-role').textContent = ME.role;
       document.body.dataset.role = ME.role;
