@@ -112,6 +112,13 @@ class Config:
         """Initial admin password, used only to seed the first account."""
         return os.environ.get("ADMIN_PASSWORD", "").strip()
 
+    @property
+    def cookie_secure(self) -> bool:
+        """Set COOKIE_SECURE=1 when served over HTTPS so the session cookie is
+        marked Secure (browser only sends it over TLS). MUST stay off for plain
+        HTTP (local dev / IP testing) or the cookie won't be sent at all."""
+        return os.environ.get("COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}
+
     # ----------------------------------------------------------------------
     def required_api_keys(self) -> list[tuple[str, str]]:
         """Return [(env_var, label)] for keys required by the selected backends."""

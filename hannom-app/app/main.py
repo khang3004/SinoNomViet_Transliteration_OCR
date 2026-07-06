@@ -83,7 +83,8 @@ def auth_login(body: LoginBody) -> JSONResponse:
     token = auth.make_token(u)
     resp = JSONResponse({"ok": True, "user": {"username": u["username"], "role": u["role"]}})
     resp.set_cookie(
-        auth.COOKIE_NAME, token, httponly=True, samesite="lax", max_age=7 * 24 * 3600, path="/"
+        auth.COOKIE_NAME, token, httponly=True, samesite="lax", secure=config.cookie_secure,
+        max_age=7 * 24 * 3600, path="/",
     )
     return resp
 

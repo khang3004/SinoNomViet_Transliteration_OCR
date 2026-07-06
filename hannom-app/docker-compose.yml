@@ -42,6 +42,7 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:-}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}      # set 1 when served over HTTPS (Caddy)
     # Secrets (AUTH_SECRET, ADMIN_PASSWORD). Won't fail if .env is absent.
     env_file:
       - path: .env
