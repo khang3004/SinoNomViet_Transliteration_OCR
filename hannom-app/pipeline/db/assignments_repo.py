@@ -54,6 +54,15 @@ def ranges_for(dsn: str, user_id: int, job_id: int) -> list[tuple[int, int]]:
     return [(r["page_start"], r["page_end"]) for r in rows]
 
 
+def job_ids_for_user(dsn: str, user_id: int) -> set[int]:
+    """The set of job ids a reviewer is assigned to (any page range)."""
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT job_id FROM assignments WHERE user_id=%s", (user_id,)
+        ).fetchall()
+    return {r["job_id"] for r in rows}
+
+
 def covers(dsn: str, user_id: int, job_id: int, page: int | None) -> bool:
     """True if the reviewer has a range covering ``page`` on this job."""
     if page is None:

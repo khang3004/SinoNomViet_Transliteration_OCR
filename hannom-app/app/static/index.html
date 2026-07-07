@@ -591,7 +591,8 @@
       document.getElementById('admin-card').style.display = '';
       const us = ((await (await fetch('/admin/users')).json()).users) || [];
       document.getElementById('admin-users').innerHTML =
-        us.map(u => `<tr><td>${esc(u.username)}</td><td class="muted">${esc(u.role)}</td></tr>`).join('');
+        us.map(u => `<tr><td>${esc(u.username)}</td><td class="muted">${esc(u.role)}</td>` +
+          `<td><a onclick="adminSetPw(${u.id})">set password</a></td></tr>`).join('');
       document.getElementById('as-user').innerHTML =
         us.filter(u => u.role === 'reviewer').map(u => `<option value="${u.id}">${esc(u.username)}</option>`).join('');
       const as = ((await (await fetch('/admin/assignments')).json()).assignments) || [];
@@ -629,6 +630,12 @@
       m.textContent = r.ok ? 'assigned' : (j.detail || 'failed'); if (r.ok) loadAdmin();
     }
     async function adminDelAssign(id) { await fetch('/admin/assignments/' + id, { method: 'DELETE' }); loadAdmin(); }
+    async function adminSetPw(id) {
+      const pw = prompt('New password for this user:');
+      if (!pw) return;
+      const r = await fetch(`/admin/users/${id}/password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) });
+      if (r.ok) alert('Password updated.'); else alert('Failed: ' + ((await r.json().catch(() => ({}))).detail || r.status));
+    }
 
     // ----- corpus view (whole corpus by Trang số, across all uploads) -----
     let CORPUS = { offset: 0, limit: 25, total: 0 };

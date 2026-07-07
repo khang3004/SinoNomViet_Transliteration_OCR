@@ -45,6 +45,16 @@ def get_by_id(dsn: str, user_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def set_password(dsn: str, user_id: int, password_hash: str) -> bool:
+    """Update a user's bcrypt password hash (admin password reset)."""
+    with connect(dsn) as conn:
+        cur = conn.execute(
+            "UPDATE users SET password_hash=%s WHERE id=%s", (password_hash, user_id)
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def list_users(dsn: str) -> list[dict]:
     with connect(dsn) as conn:
         rows = conn.execute(

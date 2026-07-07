@@ -145,6 +145,25 @@ def admin_list_users(_admin: dict = Depends(auth.require_admin)) -> dict:
     return {"users": users_repo.list_users(DATABASE_URL)}
 
 
+class PasswordReset(BaseModel):
+    password: str
+
+
+@app.post("/admin/users/{user_id}/password")
+def admin_set_password(
+    user_id: int, body: PasswordReset, _admin: dict = Depends(auth.require_admin)
+) -> dict:
+    """Admin resets a user's password (bcrypt-hashed; plaintext never stored)."""
+    from pipeline.db import users_repo
+
+    if not body.password.strip():
+        raise HTTPException(status_code=400, detail="password cannot be empty")
+    if not users_repo.set_password(DATABASE_URL, user_id, auth.hash_password(body.password)):
+        raise HTTPException(status_code=404, detail="user not found")
+    logger.info("Admin reset password for user %d.", user_id)
+    return {"ok": True}
+
+
 @app.post("/admin/assignments")
 def admin_create_assignment(body: NewAssignment, _admin: dict = Depends(auth.require_admin)) -> dict:
     from pipeline.db import assignments_repo
@@ -272,17 +291,41 @@ async def upload(
     return JSONResponse({"job_id": job_id, "filename": os.path.basename(dest)})
 
 
+def _assigned_job_ids(user: dict | None) -> set[int] | None:
+    """Job ids a reviewer is assigned to (None when auth/DB is off = full access)."""
+    if not (DATABASE_URL and user):
+        return None
+    from pipeline.db import assignments_repo
+
+    return assignments_repo.job_ids_for_user(DATABASE_URL, user["id"])
+
+
+def _require_job_access(request: Request, job_id: int) -> None:
+    """Reviewers may only touch jobs they're assigned to (admins/dev: all)."""
+    user = getattr(request.state, "user", None)
+    if user is None or user.get("role") == "admin":
+        return
+    if job_id not in (_assigned_job_ids(user) or set()):
+        raise HTTPException(status_code=403, detail="not assigned to this job")
+
+
 @app.get("/jobs")
-def list_jobs() -> dict:
+def list_jobs(request: Request) -> dict:
+    """List jobs. Reviewers see ONLY the jobs they're assigned to; admins see all."""
     jobs = store.list_jobs()
+    user = getattr(request.state, "user", None)
+    if user is not None and user.get("role") != "admin":
+        allowed = _assigned_job_ids(user) or set()
+        jobs = [j for j in jobs if j.id in allowed]
     return {"jobs": [j.__dict__ for j in jobs]}
 
 
 @app.get("/jobs/{job_id}")
-def get_job(job_id: int) -> dict:
+def get_job(job_id: int, request: Request) -> dict:
     job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    _require_job_access(request, job_id)
     return job.__dict__
 
 
@@ -323,12 +366,13 @@ def delete_job(job_id: int, request: Request) -> dict:
 
 
 @app.get("/jobs/{job_id}/output")
-def get_output(job_id: int):
+def get_output(job_id: int, request: Request):
     """Download the job's records as JSONL. Regenerated from Postgres (so human
     edits are reflected) when a DB is configured; else the on-disk JSONL file."""
     job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    _require_job_access(request, job_id)
     if DATABASE_URL:
         from pipeline.db import records_repo
 
@@ -361,6 +405,7 @@ def get_records(job_id: int, request: Request) -> dict:
     job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    _require_job_access(request, job_id)
     if DATABASE_URL:
         from pipeline.db import records_repo
 
