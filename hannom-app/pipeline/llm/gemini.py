@@ -57,8 +57,16 @@ class GeminiProvider:
     default_model = "gemini-flash-latest"
     default_vision_model = "gemini-flash-latest"  # multimodal
     supports_vision = True
+    # Shown in the model picker (the reviewer can also type any other model name).
+    # "*-latest" are stable aliases that follow the newest model; the "*-preview"
+    # entries are the current gemini-3 previews (may be renamed/retired by Google).
     suggested_models = [
-        "gemini-flash-latest", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash",
+        "gemini-flash-latest",
+        "gemini-3-flash-preview",
+        "gemini-3-pro-preview",
+        "gemini-flash-lite-latest",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
     ]
 
     def _client(self, api_key):
