@@ -569,7 +569,14 @@ def update_record(job_id: int, edit: RecordEdit, request: Request) -> dict:
             changes["reviewed_by"] = None
             changes["reviewed_at"] = None
         updated = records_repo.update(DATABASE_URL, job_id, edit.id, changes)
-        logger.info("Job %d: record %s updated (status=%s).", job_id, edit.id, changes["review_status"])
+        # If this is a spanning bài, share the same review decision with its
+        # continuation fragment(s) so the Corpus doesn't show them as 'pending'.
+        n = records_repo.cascade_status_to_parts(
+            DATABASE_URL, job_id, edit.id,
+            changes["review_status"], changes.get("reviewed_by"), changes.get("reviewed_at"),
+        )
+        logger.info("Job %d: record %s updated (status=%s%s).", job_id, edit.id,
+                    changes["review_status"], f", {n} continuation(s)" if n else "")
         return {"ok": True, "record": updated}
 
     job, records = _job_records(job_id)
@@ -734,8 +741,9 @@ def link_record(job_id: int, req: LinkRecord, request: Request) -> dict:
             raise HTTPException(status_code=400, detail="no previous entry to link to")
     if head_id == req.id:
         raise HTTPException(status_code=400, detail="a record cannot continue itself")
-    updated = records_repo.set_part_of(DATABASE_URL, job_id, req.id, head_id)
-    logger.info("Job %d: linked %s as continuation of %s.", job_id, req.id, head_id)
+    updated = records_repo.link_as_continuation(DATABASE_URL, job_id, req.id, head_id)
+    logger.info("Job %d: linked %s as continuation of %s (inherited head metadata).",
+                job_id, req.id, head_id)
     return {"ok": True, "record": updated}
 
 

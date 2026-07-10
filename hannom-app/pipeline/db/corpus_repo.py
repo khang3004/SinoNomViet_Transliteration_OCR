@@ -95,34 +95,53 @@ def page_entries(dsn: str, page: int) -> list[dict]:
             "FROM records WHERE page=%s ORDER BY job_id, line_no, id",
             (page,),
         ).fetchall()
-    recs = [dict(r) for r in rows]
-    by_id = {r["human_id"]: r for r in recs}
-    children: dict[str, list[dict]] = {}
+        recs = [dict(r) for r in rows]
+        by_id = {(r["job_id"], r["human_id"]): r for r in recs}
+        # A continuation whose HEAD is on another page shows here as its own row.
+        # Look up those heads' status so the fragment reflects its bài's verified
+        # state (else a verified spanning entry reads as 'pending' on its tail page).
+        ext = [(r["job_id"], r["part_of"]) for r in recs
+               if r.get("part_of") and (r["job_id"], r["part_of"]) not in by_id]
+        head_status: dict[tuple, str] = {}
+        if ext:
+            hr = conn.execute(
+                "SELECT job_id, human_id, review_status FROM records "
+                "WHERE (job_id, human_id) IN "
+                "(SELECT * FROM unnest(%s::bigint[], %s::text[]))",
+                ([j for j, _ in ext], [hid for _, hid in ext]),
+            ).fetchall()
+            head_status = {(h["job_id"], h["human_id"]): h["review_status"] for h in hr}
+    children: dict[tuple, list[dict]] = {}
     heads: list[dict] = []
     for r in recs:
         head = r.get("part_of")
         # Only fold into a head that is on THIS page; otherwise treat as its own row.
-        if head and head in by_id:
-            children.setdefault(head, []).append(r)
+        if head and (r["job_id"], head) in by_id:
+            children.setdefault((r["job_id"], head), []).append(r)
         else:
             heads.append(r)
     out: list[dict] = []
     for h in heads:
         parts = [h] + sorted(
-            children.get(h["human_id"], []),
+            children.get((h["job_id"], h["human_id"]), []),
             key=lambda r: (r.get("job_id") or 0, r.get("line_no") or 0),
         )
         han = "".join(p.get("han", "") for p in parts)
         meaning = " ".join(
             p.get("meaning", "").strip() for p in parts if p.get("meaning", "").strip()
         )
+        # This row is itself a continuation of a head on another page → use that
+        # head's status and flag it as spanning.
+        ext_head = (h["job_id"], h.get("part_of"))
+        is_ext_cont = h.get("part_of") and ext_head in head_status
+        status = head_status[ext_head] if is_ext_cont else h.get("review_status")
         out.append({
             "human_id": h["human_id"],
             "job_id": h["job_id"],
             "entry_no": h.get("entry_no"),
             "han": han,
             "meaning": meaning,
-            "review_status": h.get("review_status"),
-            "spans_pages": len(parts) > 1,
+            "review_status": status,
+            "spans_pages": len(parts) > 1 or bool(is_ext_cont),
         })
     return out

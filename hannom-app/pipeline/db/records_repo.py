@@ -213,6 +213,57 @@ def set_part_of(dsn: str, job_id: int, human_id: str, part_of: str | None) -> di
     return _row_to_dict(row) if row else None
 
 
+def link_as_continuation(dsn: str, job_id: int, human_id: str, head_id: str) -> dict | None:
+    """Link ``human_id`` as a continuation of ``head_id`` AND inherit the head's
+    entry-grouping fields, so a fragment carries the SAME catalogue metadata as the
+    bài it continues: entry_no, entry_meta (Ngày/Tờ-Tập/Loại/Xuất xứ/Đề tài), and the
+    head's review status (a continuation belongs to its head's verified entry).
+    """
+    with connect(dsn) as conn:
+        head = conn.execute(
+            "SELECT entry_no, entry_meta, review_status, reviewed_by, reviewed_at "
+            "FROM records WHERE job_id=%s AND human_id=%s",
+            (job_id, head_id),
+        ).fetchone()
+        if head is None:
+            # head_id has no row (shouldn't happen) — just set the link, nothing to inherit.
+            row = conn.execute(
+                "UPDATE records SET part_of=%s WHERE job_id=%s AND human_id=%s RETURNING *",
+                (head_id, job_id, human_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "UPDATE records SET part_of=%s, entry_no=%s, entry_meta=%s, "
+                "review_status=%s, reviewed_by=%s, reviewed_at=%s "
+                "WHERE job_id=%s AND human_id=%s RETURNING *",
+                (head_id, head["entry_no"], Jsonb(head["entry_meta"] or {}),
+                 head["review_status"], head["reviewed_by"], head["reviewed_at"],
+                 job_id, human_id),
+            ).fetchone()
+        conn.commit()
+    return _row_to_dict(row) if row else None
+
+
+def cascade_status_to_parts(
+    dsn: str, job_id: int, head_id: str, status: str,
+    reviewed_by: int | None, reviewed_at: float | None,
+) -> int:
+    """Propagate a head entry's review decision to its continuation fragments.
+
+    A spanning bài is verified once (on the head); its continuation(s) on later
+    pages must share that status so the Corpus never shows a verified entry's tail
+    as still 'pending'. Returns the number of fragments updated.
+    """
+    with connect(dsn) as conn:
+        cur = conn.execute(
+            "UPDATE records SET review_status=%s, reviewed_by=%s, reviewed_at=%s "
+            "WHERE job_id=%s AND part_of=%s",
+            (status, reviewed_by, reviewed_at, job_id, head_id),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
 def previous_entry_head(dsn: str, job_id: int, page: int, line_no: int) -> str | None:
     """Head id of the entry immediately BEFORE (page, line_no) in reading order.
 
