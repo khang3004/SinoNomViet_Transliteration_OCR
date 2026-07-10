@@ -400,10 +400,20 @@
         temp.remove();
         if (!draw.box || (draw.box[2]-draw.box[0]) < 8 || (draw.box[3]-draw.box[1]) < 8) { toggleDraw(mode); return; }
         if (mode === 'meaning') {
-          const rec = getRec(R.selId);
-          if (!rec) { alert('Select an entry first (click its box), then draw its Việt box.'); toggleDraw(mode); return; }
-          rec.meaning_bbox = draw.box;   // local; saved with the record on Save
-          toggleDraw(mode); drawBoxes(); selectRecord(rec.id);
+          // Attach the Việt box to the entry whose Hán box lines up vertically with
+          // it (same y-band = same bài), so drawing several Việt boxes never
+          // overwrites the wrong entry — regardless of what's currently selected.
+          const cy = (draw.box[1] + draw.box[3]) / 2;
+          const cands = pageRecords().filter(r => r.han_bbox && r.han_bbox.length === 4);
+          let target = cands.find(r => cy >= r.han_bbox[1] && cy <= r.han_bbox[3]);
+          if (!target && cands.length) {
+            target = cands.reduce((a, b) =>
+              Math.abs((b.han_bbox[1] + b.han_bbox[3]) / 2 - cy) < Math.abs((a.han_bbox[1] + a.han_bbox[3]) / 2 - cy) ? b : a);
+          }
+          target = target || getRec(R.selId);
+          if (!target) { alert('Draw the Hán box first (or select an entry), then its Việt box.'); toggleDraw(mode); return; }
+          target.meaning_bbox = draw.box;   // local; saved with the record on Save
+          toggleDraw(mode); drawBoxes(); selectRecord(target.id);
           return;
         }
         // 'han' → create a new entry with this Hán box
