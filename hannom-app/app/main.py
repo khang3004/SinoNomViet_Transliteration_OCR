@@ -792,6 +792,7 @@ def llm_providers() -> dict:
                 "name": n,
                 "default_model": llm.get_provider(n).default_model,
                 "supports_vision": getattr(llm.get_provider(n), "supports_vision", True),
+                "suggested_models": getattr(llm.get_provider(n), "suggested_models", []),
             }
             for n in llm.available()
         ]

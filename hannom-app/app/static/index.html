@@ -137,7 +137,10 @@
       <span class="progress" id="progress"></span>
       <span class="pagesel" id="pagesel"></span>
       <span style="flex:1"></span>
-      <select id="ai-provider" title="LLM provider for AI-correct" style="font-size:0.78rem;padding:0.25rem"></select>
+      <select id="ai-provider" onchange="onProviderChange()" title="LLM provider for AI-correct" style="font-size:0.78rem;padding:0.25rem"></select>
+      <input id="ai-model" list="ai-model-list" placeholder="model" title="Model — the provider default is filled in; type or pick a newer one"
+             oninput="sessionStorage.setItem('llm_model', this.value)" style="font-size:0.78rem;width:150px;padding:0.3rem" />
+      <datalist id="ai-model-list"></datalist>
       <input id="ai-key" type="password" placeholder="your API key" title="Your own LLM key — used per request, never stored server-side"
              oninput="sessionStorage.setItem('llm_key', this.value)" style="font-size:0.78rem;width:150px;padding:0.3rem" />
       <button class="ghost" onclick="closeReview()" style="font-size:0.75rem;padding:0.2rem 0.6rem">✕ close</button>
@@ -451,13 +454,22 @@
     async function loadProviders() {
       try {
         const j = await (await fetch('/llm/providers')).json();
-        window.PROVIDERS = {};
-        for (const p of j.providers) window.PROVIDERS[p.name] = p.supports_vision !== false;
+        window.PROVIDERS = {}; window.PROVIDER_INFO = {};
+        for (const p of j.providers) { window.PROVIDERS[p.name] = p.supports_vision !== false; window.PROVIDER_INFO[p.name] = p; }
         document.getElementById('ai-provider').innerHTML =
           j.providers.map(p => `<option value="${p.name}">${esc(p.name)}</option>`).join('');
+        onProviderChange();
       } catch (e) { /* ignore */ }
       const k = sessionStorage.getItem('llm_key'); if (k) document.getElementById('ai-key').value = k;
     }
+    // Fill the model box (+ suggestions) for the chosen provider; user can edit it.
+    function onProviderChange() {
+      const info = (window.PROVIDER_INFO || {})[document.getElementById('ai-provider').value] || {};
+      document.getElementById('ai-model-list').innerHTML =
+        (info.suggested_models || []).map(m => `<option value="${esc(m)}"></option>`).join('');
+      document.getElementById('ai-model').value = info.default_model || '';
+    }
+    function currentModel() { return (document.getElementById('ai-model').value || '').trim() || null; }
 
     async function aiCorrect() {
       const rec = getRec(R.selId); if (!rec) return;
@@ -467,7 +479,7 @@
       const btn = document.getElementById('btn-ai'); btn.disabled = true; btn.textContent = '✨ …';
       try {
         const res = await fetch(`/jobs/${R.jobId}/correct`, { method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ id: rec.id, provider, api_key }) });
+          body: JSON.stringify({ id: rec.id, provider, api_key, model: currentModel() }) });
         const j = await res.json();
         if (!res.ok) throw new Error(j.detail || res.status);
         if (j.text) { document.getElementById('f-han').value = j.text; rec.han = j.text; }
@@ -497,7 +509,7 @@
       btn.disabled = true; btn.textContent = '👁 …';
       try {
         const res = await fetch(`/jobs/${R.jobId}/vision_correct`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: rec.id, provider, api_key, image_b64, ocr_text: document.getElementById('f-han').value || '' }) });
+          body: JSON.stringify({ id: rec.id, provider, api_key, model: currentModel(), image_b64, ocr_text: document.getElementById('f-han').value || '' }) });
         const j = await res.json();
         if (!res.ok) throw new Error(j.detail || res.status);
         if (j.text) { document.getElementById('f-han').value = j.text; rec.han = j.text; }

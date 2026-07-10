@@ -18,6 +18,7 @@ class LLMProvider(Protocol):
     default_model: str
     default_vision_model: str
     supports_vision: bool
+    suggested_models: list[str]  # newest first — offered in the UI model picker
 
     def complete(
         self, prompt: str, api_key: str, model: str | None = None, system: str | None = None

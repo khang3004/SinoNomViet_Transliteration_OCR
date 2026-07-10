@@ -17,6 +17,7 @@ class DeepSeekProvider:
     default_model = "deepseek-chat"
     default_vision_model = ""       # no vision model
     supports_vision = False
+    suggested_models = ["deepseek-chat", "deepseek-reasoner"]
 
     def complete(self, prompt, api_key, model=None, system=None) -> str:
         from openai import OpenAI  # lazy — DeepSeek speaks the OpenAI protocol
