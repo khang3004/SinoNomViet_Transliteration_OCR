@@ -68,14 +68,43 @@ def _run_extract(store, config, engine, job) -> None:
     logger.info("Job %d done: %d record(s) → %s", job.id, len(records), out_path)
 
 
+# A SECOND OCR engine tuned for Vietnamese (Latin + diacritics), built lazily on
+# the first Việt re-OCR so it costs no memory until actually used. The default Hán
+# engine (chinese_cht) cannot read Vietnamese.
+_VN_ENGINE = None
+_VN_ENGINE_TRIED = False
+
+
+def _vn_engine(config):
+    """Return a Vietnamese OCR engine (paddle lang=vi), or None if unavailable."""
+    global _VN_ENGINE, _VN_ENGINE_TRIED
+    if _VN_ENGINE is not None or _VN_ENGINE_TRIED:
+        return _VN_ENGINE
+    _VN_ENGINE_TRIED = True
+    if config.ocr_backend != "paddle":
+        return None
+    try:
+        from pipeline.ocr.paddle import PaddleEngine
+
+        lang = os.environ.get("OCR_LANG_VN", "vi")
+        logger.info("Building Vietnamese OCR engine (lang=%s) for Việt re-OCR …", lang)
+        _VN_ENGINE = PaddleEngine(lang=lang)
+        logger.info("Vietnamese OCR engine ready.")
+    except Exception:  # noqa: BLE001 - fall back to the Hán engine if it can't build
+        logger.exception("Could not build the Vietnamese OCR engine; Việt re-OCR will be poor.")
+    return _VN_ENGINE
+
+
 def _run_reocr(store, config, engine, job) -> None:
     """Re-OCR one box region; write {text, conf} JSON for the app to poll."""
     args = json.loads(job.payload or "{}")
     img_name = args.get("image_path") or args.get("page_image") or ""
     page_image = os.path.join(config.output_dir, "pages", os.path.basename(img_name))
     field = args.get("field", "han")
+    # Vietnamese uses its own engine; Hán uses the warm default engine.
+    ocr_engine = (_vn_engine(config) or engine) if field == "meaning" else engine
     logger.info("Claimed reocr job %d (%s bbox=%s field=%s).", job.id, os.path.basename(page_image), args.get("bbox"), field)
-    result = reocr_region(page_image, args["bbox"], config, engine=engine, field=field)
+    result = reocr_region(page_image, args["bbox"], config, engine=ocr_engine, field=field)
     out_path = os.path.join(config.output_dir, "reocr", f"reocr_{job.id}.json")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:

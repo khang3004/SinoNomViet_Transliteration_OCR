@@ -69,6 +69,7 @@ services:
       OCR_BACKEND: ${OCR_BACKEND:-paddle}
       OCR_USE_GPU: ${OCR_USE_GPU:-0}          # 0 = CPU (default); 1 = GPU (see below)
       OCR_LANG: ${OCR_LANG:-chinese_cht}      # Traditional — best for Sino-Nom
+      OCR_LANG_VN: ${OCR_LANG_VN:-vi}         # 2nd engine for "Re-OCR Việt" (lazy)
       TRANSLATE_BACKEND: ${TRANSLATE_BACKEND:-skip}   # set "api" + GOOGLE_API_KEY for Gemini
       CORRECT_BACKEND: ${CORRECT_BACKEND:-skip}
       DSG_FFF: ${DSG_FFF:-HVB_001}
