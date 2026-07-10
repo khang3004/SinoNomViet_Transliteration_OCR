@@ -209,6 +209,10 @@
       <span id="corpus-member-wrap" style="display:none;font-size:0.85rem">
         member: <select id="corpus-member" onchange="loadCorpus(0)"></select>
       </span>
+      <span id="corpus-sync-wrap" style="display:none;font-size:0.85rem;margin-left:0.7rem">
+        <button class="ghost" id="btn-sync-sheet" onclick="syncSheet()" title="Push the verified corpus to the shared Google Sheet">☁ Sync sheet</button>
+        <span class="muted" id="sync-status"></span>
+      </span>
     </div>
     <div class="workspace">
       <div>
@@ -695,6 +699,7 @@
       document.getElementById('nav-corpus').innerHTML = '<b>📚 Corpus</b>';
       if (ME && ME.role === 'admin') {
         document.getElementById('corpus-member-wrap').style.display = '';
+        document.getElementById('corpus-sync-wrap').style.display = '';
         populateCorpusMembers();
       }
       loadCorpus(0);
@@ -707,6 +712,19 @@
             us.filter(u => u.role === 'reviewer').map(u => `<option value="${u.id}">${esc(u.username)}</option>`)
           ).join('');
       } catch {}
+    }
+    async function syncSheet() {
+      const btn = document.getElementById('btn-sync-sheet'), st = document.getElementById('sync-status');
+      const label = btn.textContent;
+      btn.disabled = true; btn.textContent = '☁ Syncing…'; st.textContent = '';
+      try {
+        const res = await fetch('/corpus/sync-sheet', { method: 'POST' });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.detail || res.status);
+        st.innerHTML = `✓ Synced ${j.entry_count} entries · ` +
+          `<a href="${esc(j.spreadsheet_url)}" target="_blank" rel="noopener">open sheet ▸</a>`;
+      } catch (err) { st.innerHTML = `<span class="failed">Sync failed: ${esc(String(err.message || err))}</span>`; }
+      btn.disabled = false; btn.textContent = label;
     }
     async function loadCorpus(offset) {
       CORPUS.offset = offset;

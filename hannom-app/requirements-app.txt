@@ -22,3 +22,7 @@ openai==2.45.0                # latest (Jul 2026)
 anthropic==0.116.0            # latest (Jul 2026)
 # (no httpx pin — the current SDKs work with current httpx; the pin was only a
 #  workaround for the old openai 1.54 / anthropic 0.39 `proxies` bug.)
+
+# Google Sheets export (admin "Sync sheet" in the Corpus tab). Uses the service
+# account already-present google-auth; gspread is the thin Sheets client.
+gspread>=6.1.0

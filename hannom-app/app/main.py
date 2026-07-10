@@ -258,6 +258,38 @@ def corpus_page(page: int, request: Request) -> dict:
     return {"page": page, "entries": entries, "editable": editable}
 
 
+@app.post("/corpus/sync-sheet")
+def corpus_sync_sheet(_admin: dict = Depends(auth.require_admin)) -> dict:
+    """Push the verified corpus into the shared Google Sheet (admin only).
+
+    Full-replace of two tabs: 'Hán–Việt' (two columns) and 'Chi tiết' (with the
+    catalogue metadata). Requires GOOGLE_SHEET_ID + service-account credentials.
+    """
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="corpus requires DATABASE_URL")
+    creds = config.google_sheets_credentials()
+    if not (config.google_sheet_id and creds):
+        raise HTTPException(
+            status_code=503,
+            detail="Google Sheets export is not configured. Set GOOGLE_SHEET_ID and "
+                   "GOOGLE_SHEETS_CREDENTIALS_B64 (or _FILE) in the environment, and "
+                   "share the sheet with the service account.",
+        )
+    from pipeline.db import corpus_repo
+    from pipeline.sheets import exporter
+
+    rows = corpus_repo.export_entries(DATABASE_URL)
+    tables = exporter.build_tables(rows)
+    try:
+        result = exporter.sync_corpus(creds, config.google_sheet_id, tables)
+    except Exception as exc:  # noqa: BLE001 - surface a clean message to the admin
+        logger.exception("Google Sheets sync failed.")
+        raise HTTPException(status_code=502, detail=f"Google Sheets sync failed: {exc}") from exc
+    logger.info("Corpus synced to Google Sheet: %d entries, tabs=%s.",
+                len(rows), [s["title"] for s in result["sheets"]])
+    return {"ok": True, "entry_count": len(rows), **result}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     with open(_INDEX, encoding="utf-8") as fh:

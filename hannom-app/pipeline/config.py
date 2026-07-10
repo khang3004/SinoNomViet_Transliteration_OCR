@@ -12,6 +12,9 @@ See AGENTS.md §6 (Backends & config) and §7 (Secure API keys).
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -118,6 +121,42 @@ class Config:
         marked Secure (browser only sends it over TLS). MUST stay off for plain
         HTTP (local dev / IP testing) or the cookie won't be sent at all."""
         return os.environ.get("COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+    # --- Google Sheets export (admin "Sync sheet") ------------------------
+    @property
+    def google_sheet_id(self) -> str:
+        """Target spreadsheet id (from its URL). The admin shares this sheet with
+        the service account and sets GOOGLE_SHEET_ID."""
+        return os.environ.get("GOOGLE_SHEET_ID", "").strip()
+
+    def google_sheets_credentials(self) -> dict | None:
+        """Service-account JSON as a dict, or None if not configured.
+
+        Read from GOOGLE_SHEETS_CREDENTIALS_B64 (base64 of the JSON — preferred so
+        the multi-line key survives ``.env``) or GOOGLE_SHEETS_CREDENTIALS_FILE (a
+        mounted key file). Never logged; only presence is ever reported.
+        """
+        b64 = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_B64", "").strip()
+        if b64:
+            try:
+                return json.loads(base64.b64decode(b64))
+            except (binascii.Error, ValueError) as exc:
+                logger.warning("GOOGLE_SHEETS_CREDENTIALS_B64 is not valid base64 JSON: %s", exc)
+                return None
+        path = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_FILE", "").strip()
+        if path:
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    return json.load(fh)
+            except (OSError, ValueError) as exc:
+                logger.warning("GOOGLE_SHEETS_CREDENTIALS_FILE could not be read: %s", exc)
+                return None
+        return None
+
+    @property
+    def sheets_configured(self) -> bool:
+        """True when both a target sheet id and valid credentials are present."""
+        return bool(self.google_sheet_id and self.google_sheets_credentials())
 
     # ----------------------------------------------------------------------
     def required_api_keys(self) -> list[tuple[str, str]]:

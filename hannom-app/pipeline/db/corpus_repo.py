@@ -82,6 +82,63 @@ def summary(dsn: str, member_id: int | None = None) -> dict:
     }
 
 
+def export_entries(dsn: str) -> list[dict]:
+    """Every VERIFIED entry across the whole corpus, continuations folded in.
+
+    One dict per head whose ``review_status='verified'``: han/meaning concatenated
+    from its parts, catalogue metadata taken from the head's ``entry_meta``, plus
+    ``page`` (Trang số), ``entry_no``, ``job_id`` and the reviewer name. Ordered by
+    (page, job_id, entry_no) for a stable sheet. Used by the Google Sheets export.
+    """
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT r.human_id, r.job_id, r.page, r.line_no, r.entry_no, r.han, "
+            "       r.meaning, r.entry_meta, r.review_status, r.part_of, "
+            "       u.username AS reviewer "
+            "FROM records r LEFT JOIN users u ON u.id = r.reviewed_by "
+            "ORDER BY r.job_id, r.page NULLS FIRST, r.line_no, r.id"
+        ).fetchall()
+    recs = [dict(r) for r in rows]
+    # Fold continuations into their head, keyed by (job_id, human_id) so ids that
+    # repeat across uploads don't collide.
+    children: dict[tuple, list[dict]] = {}
+    heads: list[dict] = []
+    for r in recs:
+        head = r.get("part_of")
+        if head:
+            children.setdefault((r["job_id"], head), []).append(r)
+        else:
+            heads.append(r)
+    out: list[dict] = []
+    for h in heads:
+        if h.get("review_status") != "verified":
+            continue  # only finished entries make it into the corpus export
+        parts = [h] + sorted(
+            children.get((h["job_id"], h["human_id"]), []),
+            key=lambda r: (r.get("page") or 0, r.get("line_no") or 0),
+        )
+        meta = h.get("entry_meta") or {}
+        out.append({
+            "page": h.get("page"),
+            "entry_no": h.get("entry_no"),
+            "han": "".join(p.get("han", "") for p in parts),
+            "meaning": " ".join(
+                p.get("meaning", "").strip() for p in parts if p.get("meaning", "").strip()
+            ),
+            "ngay": meta.get("ngay", ""),
+            "to_tap": meta.get("to_tap", ""),
+            "loai": meta.get("loai", ""),
+            "xuat_xu": meta.get("xuat_xu", ""),
+            "de_tai": meta.get("de_tai", ""),
+            "job_id": h.get("job_id"),
+            "reviewer": h.get("reviewer") or "",
+        })
+    out.sort(key=lambda e: (e["page"] if e["page"] is not None else 1 << 30,
+                            e["job_id"] or 0,
+                            e["entry_no"] if e["entry_no"] is not None else 1 << 30))
+    return out
+
+
 def page_entries(dsn: str, page: int) -> list[dict]:
     """Entries on one Trang số across all jobs, continuations folded into heads.
 
