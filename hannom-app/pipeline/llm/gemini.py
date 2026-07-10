@@ -23,7 +23,7 @@ class GeminiProvider:
 
         genai.configure(api_key=api_key)
         gm = genai.GenerativeModel(model or self.default_model, system_instruction=system)
-        resp = gm.generate_content(prompt, request_options={"timeout": _TIMEOUT})
+        resp = gm.generate_content(prompt, generation_config={"temperature": 0.2}, request_options={"timeout": _TIMEOUT})
         return (resp.text or "").strip()
 
     def complete_vision(self, prompt, images, api_key, model=None, system=None) -> str:
@@ -32,7 +32,7 @@ class GeminiProvider:
         genai.configure(api_key=api_key)
         gm = genai.GenerativeModel(model or self.default_vision_model, system_instruction=system)
         parts = [prompt] + [{"mime_type": "image/png", "data": img} for img in images]
-        resp = gm.generate_content(parts, request_options={"timeout": _TIMEOUT})
+        resp = gm.generate_content(parts, generation_config={"temperature": 0.2}, request_options={"timeout": _TIMEOUT})
         return (resp.text or "").strip()
 
 

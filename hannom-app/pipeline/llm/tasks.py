@@ -65,12 +65,15 @@ def translate_han(provider: str, api_key: str, han: str, model: str | None = Non
 
 
 _OCR_SYSTEM = (
-    "You are a high-accuracy OCR engine for a Nguyễn-dynasty Châu bản catalogue entry "
-    "(bài). You receive a cropped image of the Hán (classical Chinese) text and a "
-    "cropped image of its parallel Vietnamese (Quốc-ngữ) text. TRANSCRIBE exactly what "
-    "each image says — do NOT translate, summarize, reorder, or invent characters. Keep "
-    "the Hán characters as written; write the Vietnamese in correct Quốc-ngữ with full "
-    "diacritics. Read from the IMAGES."
+    "You are an OCR system specialised in Hán-Nôm documents from a Nguyễn-dynasty "
+    "Châu bản catalogue. You receive a cropped image of the Hán (Classical Chinese, "
+    "Traditional script) text and a cropped image of its parallel Vietnamese "
+    "(Quốc-ngữ, Latin) text. Rules:\n"
+    "1. Read ALL the text in each image.\n"
+    "2. Keep the original line order and content.\n"
+    "3. Do NOT translate, interpret, summarise, or fix spelling.\n"
+    "4. Replace any character you cannot read with the symbol □.\n"
+    "5. Add no explanation. Return ONLY valid JSON."
 )
 
 
@@ -133,16 +136,17 @@ def llm_ocr(
     the model is told to read from the images.
     """
     images = [han_image] + ([vi_image] if vi_image else [])
-    prompt = "Image 1 = the Hán crop."
+    prompt = "Image 1 = the Hán text."
     if vi_image:
-        prompt += " Image 2 = the parallel Vietnamese crop."
+        prompt += " Image 2 = the parallel Vietnamese text."
     hint = " / ".join(x for x in (han_text.strip(), vi_text.strip()) if x)
     if hint:
         prompt += f"\n(Existing rough text — trust the IMAGE over this: {hint})"
     prompt += (
-        '\nTranscribe both images. Return ONLY a JSON object, exactly: '
-        '{"han": "<Hán characters as written>", '
-        '"vietnamese": "<Vietnamese transcription with proper diacritics>"}'
+        "\nTranscribe each image following the rules (keep line order; do not "
+        "translate or fix spelling; use □ for unreadable characters). Return ONLY "
+        'valid JSON, exactly: {"han": "<Hán text as written>", '
+        '"vietnamese": "<Vietnamese text as written, with diacritics>"}'
     )
     try:
         raw = llm.complete_vision(

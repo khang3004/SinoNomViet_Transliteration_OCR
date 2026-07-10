@@ -21,6 +21,7 @@ class AnthropicProvider:
         msg = client.messages.create(
             model=model or self.default_model,
             max_tokens=4096,
+            temperature=0,
             system=system or "",
             messages=[{"role": "user", "content": prompt}],
         )
@@ -41,6 +42,7 @@ class AnthropicProvider:
         msg = client.messages.create(
             model=model or self.default_vision_model,
             max_tokens=4096,
+            temperature=0,
             system=system or "",
             messages=[{"role": "user", "content": content}],
         )
