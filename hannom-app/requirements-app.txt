@@ -12,8 +12,7 @@ bcrypt==4.2.0
 # USER's own key (per request). Each is imported lazily, only when used.
 # (DeepSeek is OpenAI-compatible and uses the openai SDK with a custom base_url.)
 google-genai>=1.20.0          # current Gemini SDK (replaces google-generativeai)
-openai==1.54.4
-anthropic==0.39.0
-# Pin httpx < 0.28: openai/anthropic 1.54/0.39 pass a `proxies` kwarg that httpx
-# 0.28 removed (causes "unexpected keyword argument 'proxies'" on client init).
-httpx==0.27.2
+openai==2.45.0                # latest (Jul 2026)
+anthropic==0.116.0            # latest (Jul 2026)
+# (no httpx pin — the current SDKs work with current httpx; the pin was only a
+#  workaround for the old openai 1.54 / anthropic 0.39 `proxies` bug.)
