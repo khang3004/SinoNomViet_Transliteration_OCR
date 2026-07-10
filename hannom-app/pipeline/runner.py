@@ -55,13 +55,18 @@ def process_file(
     return records
 
 
-def reocr_region(page_image_path: str, bbox, config: Config, engine=None) -> dict:
+def reocr_region(page_image_path: str, bbox, config: Config, engine=None, field: str = "han") -> dict:
     """Re-OCR one region of a rendered page image (Bug/feature: box re-OCR).
 
     Crops ``page_image_path`` to ``bbox`` ([x0,y0,x1,y1] in page-pixel coords)
     and runs the OCR engine on the crop. Returns ``{text, conf}`` with the text
     assembled in reading order (top→bottom, left→right). Used by the worker to
     serve interactive re-OCR of user-edited boxes.
+
+    ``field="han"`` keeps only CJK-majority detections and joins with no separator
+    (the Hán column). ``field="meaning"`` keeps ALL detections and joins with spaces
+    — for re-OCRing the Vietnamese/Latin box (note: the OCR model is tuned for Hán,
+    so Vietnamese diacritics may need touch-up; the 👁 LLM read is more accurate).
     """
     from PIL import Image
 
@@ -84,11 +89,13 @@ def reocr_region(page_image_path: str, bbox, config: Config, engine=None) -> dic
     from pipeline.layouts.base import cjk_ratio
 
     dets = engine.ocr(crop_path) or []
-    # Keep CJK-majority detections (this targets the Hán column), dropping any
-    # Latin label-bleed grazed at the box edges. Read top→bottom, left→right.
-    dets = [d for d in dets if cjk_ratio(d.get("text", "")) >= 0.34]
+    if field == "han":
+        # Keep CJK-majority detections (the Hán column), dropping Latin bleed.
+        dets = [d for d in dets if cjk_ratio(d.get("text", "")) >= 0.34]
+    # Read top→bottom, left→right.
     dets.sort(key=lambda d: ((d["bbox"][1] + d["bbox"][3]) / 2.0, d["bbox"][0]))
-    text = "".join(d.get("text", "") for d in dets)
+    sep = "" if field == "han" else " "   # Hán has no spaces; Vietnamese is word-spaced
+    text = sep.join(d.get("text", "") for d in dets)
     conf = sum(float(d.get("conf", 0.0)) for d in dets) / len(dets) if dets else 0.0
     return {"text": text, "conf": round(conf, 4)}
 

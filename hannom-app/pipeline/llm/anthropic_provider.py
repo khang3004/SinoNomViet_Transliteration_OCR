@@ -27,21 +27,22 @@ class AnthropicProvider:
         parts = [b.text for b in msg.content if getattr(b, "type", "") == "text"]
         return "".join(parts).strip()
 
-    def complete_vision(self, prompt, image_bytes, api_key, model=None, system=None) -> str:
+    def complete_vision(self, prompt, images, api_key, model=None, system=None) -> str:
         import base64
 
         import anthropic  # lazy
 
         client = anthropic.Anthropic(api_key=api_key)
-        b64 = base64.b64encode(image_bytes).decode("ascii")
+        content = []
+        for img in images:
+            b64 = base64.b64encode(img).decode("ascii")
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}})
+        content.append({"type": "text", "text": prompt})
         msg = client.messages.create(
             model=model or self.default_vision_model,
             max_tokens=1024,
             system=system or "",
-            messages=[{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
-                {"type": "text", "text": prompt},
-            ]}],
+            messages=[{"role": "user", "content": content}],
         )
         parts = [b.text for b in msg.content if getattr(b, "type", "") == "text"]
         return "".join(parts).strip()

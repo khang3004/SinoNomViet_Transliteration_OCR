@@ -24,12 +24,13 @@ class GeminiProvider:
         resp = gm.generate_content(prompt)
         return (resp.text or "").strip()
 
-    def complete_vision(self, prompt, image_bytes, api_key, model=None, system=None) -> str:
+    def complete_vision(self, prompt, images, api_key, model=None, system=None) -> str:
         import google.generativeai as genai  # lazy
 
         genai.configure(api_key=api_key)
         gm = genai.GenerativeModel(model or self.default_vision_model, system_instruction=system)
-        resp = gm.generate_content([prompt, {"mime_type": "image/png", "data": image_bytes}])
+        parts = [prompt] + [{"mime_type": "image/png", "data": img} for img in images]
+        resp = gm.generate_content(parts)
         return (resp.text or "").strip()
 
 

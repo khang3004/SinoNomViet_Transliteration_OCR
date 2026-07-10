@@ -29,14 +29,15 @@ class LLMProvider(Protocol):
     def complete_vision(
         self,
         prompt: str,
-        image_bytes: bytes,
+        images: list[bytes],
         api_key: str,
         model: str | None = None,
         system: str | None = None,
     ) -> str:
-        """Return the model's text response for ``prompt`` + a PNG image.
+        """Return the model's text response for ``prompt`` + one or more PNG images.
 
-        Used to read Han characters straight from a cropped page region when OCR
-        is wrong or missing. ``image_bytes`` is raw PNG bytes.
+        Used to read Han characters from a cropped page region (and, optionally, the
+        parallel Vietnamese crop) when OCR is wrong or missing. ``images`` is a list
+        of raw PNG byte strings, in order (e.g. [Hán crop, Vietnamese crop]).
         """
         ...

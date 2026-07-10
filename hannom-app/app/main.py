@@ -459,6 +459,7 @@ class ReocrRequest(BaseModel):
     image_path: str
     bbox: list[float]
     page: int = 1
+    field: str = "han"   # "han" (CJK-filtered) or "meaning" (Vietnamese/Latin)
 
 
 def _job_records(job_id: int):
@@ -758,7 +759,10 @@ def enqueue_reocr(job_id: int, req: ReocrRequest) -> dict:
     """Enqueue a re-OCR of one box region; the worker (with OCR) runs it."""
     if store.get(job_id) is None:
         raise HTTPException(status_code=404, detail="job not found")
-    payload = json.dumps({"image_path": os.path.basename(req.image_path), "bbox": req.bbox})
+    payload = json.dumps({
+        "image_path": os.path.basename(req.image_path), "bbox": req.bbox,
+        "field": req.field if req.field in ("han", "meaning") else "han",
+    })
     rid = store.create(
         filename=f"reocr p{req.page}", input_path="", source_doc="",
         kind="reocr", payload=payload,
@@ -839,29 +843,41 @@ class VisionRequest(BaseModel):
     provider: str = "gemini"
     api_key: str               # the USER's own key — used per-request, never stored
     model: str | None = None
-    image_b64: str             # base64 PNG of the cropped box (may be a data URL)
+    image_b64: str             # base64 PNG of the Hán crop (may be a data URL)
     ocr_text: str = ""         # current OCR text (may be blank/wrong)
+    vi_image_b64: str = ""     # optional base64 PNG of the parallel Vietnamese crop
+    meaning: str = ""          # optional Vietnamese text of the entry (extra context)
 
 
 @app.post("/jobs/{job_id}/vision_correct")
 def vision_correct(job_id: int, req: VisionRequest) -> dict:
     """Read Han from a cropped box IMAGE with the USER's own multimodal key.
 
-    The browser crops the box and sends the PNG; we forward it + the current OCR
-    text to the chosen provider. Key is used only for this call — never stored.
+    The browser crops the Hán box (and optionally the parallel Vietnamese box) and
+    sends the PNG(s); we forward them + the current OCR text + the Vietnamese meaning
+    to the chosen provider. Key is used only for this call — never stored.
     """
     import base64
 
     from pipeline.llm.tasks import vision_read_han
 
+    def _decode(b64: str) -> bytes | None:
+        if not b64:
+            return None
+        return base64.b64decode(b64.split(",", 1)[-1])
+
     try:
-        img = base64.b64decode(req.image_b64.split(",", 1)[-1])
+        img = _decode(req.image_b64)
+        vi_img = _decode(req.vi_image_b64)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"invalid image data: {exc}") from exc
     if not img:
         raise HTTPException(status_code=400, detail="empty image")
     try:
-        text = vision_read_han(req.provider, req.api_key, img, req.ocr_text, req.model)
+        text = vision_read_han(
+            req.provider, req.api_key, img, req.ocr_text, req.model,
+            vi_image=vi_img, meaning=req.meaning,
+        )
     except Exception as exc:  # noqa: BLE001 - clean error to the UI
         raise HTTPException(status_code=400, detail=f"vision read failed: {exc}") from exc
     return {"text": text}

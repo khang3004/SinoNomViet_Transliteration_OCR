@@ -46,16 +46,16 @@ def complete(
 def complete_vision(
     name: str,
     prompt: str,
-    image_bytes: bytes,
+    images: list[bytes],
     api_key: str,
     model: str | None = None,
     system: str | None = None,
 ) -> str:
-    """Run one multimodal (text + image) completion with a per-call ``api_key``."""
+    """Run one multimodal (text + one-or-more images) completion with a per-call key."""
     if not (api_key or "").strip():
         raise ValueError("An API key is required (paste your own provider key).")
     return get_provider(name).complete_vision(
-        prompt, image_bytes, api_key=api_key, model=model, system=system
+        prompt, images, api_key=api_key, model=model, system=system
     )
 
 

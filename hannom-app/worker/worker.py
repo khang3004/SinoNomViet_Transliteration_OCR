@@ -73,8 +73,9 @@ def _run_reocr(store, config, engine, job) -> None:
     args = json.loads(job.payload or "{}")
     img_name = args.get("image_path") or args.get("page_image") or ""
     page_image = os.path.join(config.output_dir, "pages", os.path.basename(img_name))
-    logger.info("Claimed reocr job %d (%s bbox=%s).", job.id, os.path.basename(page_image), args.get("bbox"))
-    result = reocr_region(page_image, args["bbox"], config, engine=engine)
+    field = args.get("field", "han")
+    logger.info("Claimed reocr job %d (%s bbox=%s field=%s).", job.id, os.path.basename(page_image), args.get("bbox"), field)
+    result = reocr_region(page_image, args["bbox"], config, engine=engine, field=field)
     out_path = os.path.join(config.output_dir, "reocr", f"reocr_{job.id}.json")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:

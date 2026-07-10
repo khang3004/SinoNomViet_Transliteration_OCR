@@ -32,7 +32,7 @@ class DeepSeekProvider:
         )
         return (resp.choices[0].message.content or "").strip()
 
-    def complete_vision(self, prompt, image_bytes, api_key, model=None, system=None) -> str:
+    def complete_vision(self, prompt, images, api_key, model=None, system=None) -> str:
         raise ValueError(
             "DeepSeek has no image/vision model — use Gemini, OpenAI, or Anthropic "
             "for reading Hán from an image."
