@@ -11,7 +11,13 @@ bcrypt==4.2.0
 # LLM provider SDKs — the app makes translation/correction calls with the
 # USER's own key (per request). Each is imported lazily, only when used.
 # (DeepSeek is OpenAI-compatible and uses the openai SDK with a custom base_url.)
-google-genai>=1.20.0          # current Gemini SDK (replaces google-generativeai)
+# Gemini SDK (replaces google-generativeai). Pinned to 1.38.0: versions >=1.39.0
+# pool httpx clients at module level with a TTL reaper that closes them, so a
+# fresh per-request Client can grab an already-closed client -> "Cannot send a
+# request, as the client has been closed." (googleapis/python-genai#1489). We
+# create a Client per call with the user's own key, so we can't use one shared
+# long-lived client; pinning below the regression is the reliable fix.
+google-genai==1.38.0
 openai==2.45.0                # latest (Jul 2026)
 anthropic==0.116.0            # latest (Jul 2026)
 # (no httpx pin — the current SDKs work with current httpx; the pin was only a
