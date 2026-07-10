@@ -60,7 +60,7 @@ class Config:
     )
     # Gemini model id used when TRANSLATE_BACKEND=api (AGENTS.md §6).
     translate_model: str = field(
-        default_factory=lambda: _env("TRANSLATE_MODEL", "gemini-2.0-flash")
+        default_factory=lambda: _env("TRANSLATE_MODEL", "gemini-flash-latest")
     )
 
     # --- work identity / rendering ----------------------------------------

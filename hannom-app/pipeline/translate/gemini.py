@@ -1,7 +1,7 @@
 """Gemini translation backend — ``TRANSLATE_BACKEND=api`` (AGENTS.md §6, §7).
 
-Default translation path: ``gemini-2.0-flash`` (cheap). The model id is
-configurable via ``TRANSLATE_MODEL``. The API key is read from ``GOOGLE_API_KEY``
+Default translation path: ``gemini-flash-latest`` (auto-tracks the newest Flash).
+The model id is configurable via ``TRANSLATE_MODEL``. The API key is read from ``GOOGLE_API_KEY``
 in the environment — never hardcoded, never logged. ``google-generativeai`` is
 imported lazily so importing the registry never requires the dependency.
 """
@@ -37,7 +37,7 @@ class GeminiTranslator:
             raise RuntimeError(
                 "GOOGLE_API_KEY is not set; cannot use TRANSLATE_BACKEND=api."
             )
-        self._model_id = os.environ.get("TRANSLATE_MODEL", "gemini-2.0-flash").strip()
+        self._model_id = os.environ.get("TRANSLATE_MODEL", "gemini-flash-latest").strip()
         import google.generativeai as genai  # lazy, worker-only
 
         genai.configure(api_key=api_key)

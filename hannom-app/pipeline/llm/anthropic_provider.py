@@ -7,13 +7,11 @@ from pipeline.llm import register
 
 class AnthropicProvider:
     name = "anthropic"
-    default_model = "claude-3-5-haiku-latest"
-    # 3.5 Haiku is text-only; use a vision-capable model for image reads.
-    default_vision_model = "claude-3-5-sonnet-latest"
+    default_model = "claude-sonnet-4-6"
+    default_vision_model = "claude-sonnet-4-6"  # multimodal
     supports_vision = True
     suggested_models = [
-        "claude-sonnet-4-0", "claude-3-7-sonnet-latest",
-        "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest",
+        "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-fable-5",
     ]
 
     def complete(self, prompt, api_key, model=None, system=None) -> str:

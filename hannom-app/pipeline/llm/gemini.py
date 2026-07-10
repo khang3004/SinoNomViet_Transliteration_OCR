@@ -7,10 +7,14 @@ from pipeline.llm import register
 
 class GeminiProvider:
     name = "gemini"
-    default_model = "gemini-2.0-flash"
-    default_vision_model = "gemini-2.0-flash"  # multimodal
+    # Alias that always points at the newest Flash (currently 3.5) — avoids 404s
+    # when Google retires a dated model (e.g. gemini-2.0-flash, shut down 2026-06).
+    default_model = "gemini-flash-latest"
+    default_vision_model = "gemini-flash-latest"  # multimodal
     supports_vision = True
-    suggested_models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro"]
+    suggested_models = [
+        "gemini-flash-latest", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash",
+    ]
 
     def complete(self, prompt, api_key, model=None, system=None) -> str:
         import google.generativeai as genai  # lazy

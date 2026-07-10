@@ -34,7 +34,7 @@ class ApiCorrector:
             raise RuntimeError(
                 "GOOGLE_API_KEY is not set; cannot use CORRECT_BACKEND=api."
             )
-        model_id = os.environ.get("CORRECT_MODEL", "gemini-2.0-flash").strip()
+        model_id = os.environ.get("CORRECT_MODEL", "gemini-flash-latest").strip()
         import google.generativeai as genai  # lazy
 
         genai.configure(api_key=api_key)

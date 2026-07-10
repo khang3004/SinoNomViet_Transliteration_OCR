@@ -7,10 +7,10 @@ from pipeline.llm import register
 
 class OpenAIProvider:
     name = "openai"
-    default_model = "gpt-4o-mini"
-    default_vision_model = "gpt-4o-mini"  # multimodal
+    default_model = "gpt-5"
+    default_vision_model = "gpt-5"  # multimodal
     supports_vision = True
-    suggested_models = ["gpt-4o", "gpt-4.1", "gpt-4o-mini", "gpt-4.1-mini"]
+    suggested_models = ["gpt-5.6", "gpt-5.5", "gpt-5", "gpt-5-mini"]
 
     def complete(self, prompt, api_key, model=None, system=None) -> str:
         from openai import OpenAI  # lazy
