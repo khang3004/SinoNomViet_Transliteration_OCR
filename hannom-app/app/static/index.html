@@ -148,7 +148,8 @@
     <div class="workspace">
       <div>
         <div class="toolbar">
-          <button class="ghost" id="draw-btn" onclick="toggleDraw()">🖊 Draw box</button>
+          <button class="ghost" id="draw-han-btn" onclick="toggleDraw('han')">🖊 Draw Hán</button>
+          <button class="ghost" id="draw-vi-btn" onclick="toggleDraw('meaning')">🖊 Draw Việt</button>
           <span class="muted" id="draw-hint">Click a box to edit · drag its handles to resize · drag body to move</span>
         </div>
         <div class="legend">
@@ -267,7 +268,8 @@
     function renderPage() {
       const recs = pageRecords(), wrap = document.getElementById('wrap');
       R.pageEditable = (ME && ME.role === 'admin') || recs.some(r => r.editable !== false);
-      document.getElementById('draw-btn').disabled = !R.pageEditable;
+      document.getElementById('draw-han-btn').disabled = !R.pageEditable;
+      document.getElementById('draw-vi-btn').disabled = !R.pageEditable;
       wrap.innerHTML = ''; R.wrap = wrap;
       const img = document.createElement('img'); R.img = img; img.alt = 'page ' + R.page;
       img.onload = () => { drawBoxes(); if (recs.length) selectRecord(recs[0].id); else fillEditor(null); };
@@ -367,19 +369,26 @@
     }
 
     // ----- draw a new box -----
-    function toggleDraw() {
-      R.drawMode = !R.drawMode;
-      document.getElementById('draw-btn').classList.toggle('blue', R.drawMode);
-      R.wrap.classList.toggle('draw', R.drawMode);
-      document.getElementById('draw-hint').textContent = R.drawMode
-        ? 'Draw mode ON — drag on the page to create a new box' : 'Click a box to edit · drag handles to resize';
+    // Draw mode: 'han' creates a NEW entry from the drawn Hán box; 'meaning' sets
+    // the SELECTED entry's Việt box. Clicking the active button again turns it off.
+    function toggleDraw(mode) {
+      R.drawMode = (R.drawMode === mode) ? null : mode;
+      document.getElementById('draw-han-btn').classList.toggle('blue', R.drawMode === 'han');
+      document.getElementById('draw-vi-btn').classList.toggle('blue', R.drawMode === 'meaning');
+      if (R.wrap) R.wrap.classList.toggle('draw', !!R.drawMode);
+      document.getElementById('draw-hint').textContent =
+        R.drawMode === 'han' ? 'Draw the Hán box → creates a new entry'
+        : R.drawMode === 'meaning' ? 'Draw the Việt box for the SELECTED entry'
+        : 'Click a box to edit · drag its handles to resize · drag body to move';
     }
     document.addEventListener('mousedown', (e) => {
       if (!R.drawMode || !R.wrap || R.pageEditable === false) return;
       if (e.target !== R.img && e.target !== R.wrap) return;
       e.preventDefault();
+      const mode = R.drawMode;
       const [sx, sy] = toNatural(e.clientX, e.clientY);
-      const temp = document.createElement('div'); temp.className = 'box box-han sel'; R.wrap.appendChild(temp);
+      const temp = document.createElement('div');
+      temp.className = 'box ' + (mode === 'meaning' ? 'box-vi' : 'box-han') + ' sel'; R.wrap.appendChild(temp);
       const draw = { sx, sy };
       const mv = (ev) => { const [mx, my] = toNatural(ev.clientX, ev.clientY);
         const x0 = Math.min(sx, mx), y0 = Math.min(sy, my), x1 = Math.max(sx, mx), y1 = Math.max(sy, my);
@@ -389,12 +398,20 @@
       const up = async () => {
         document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up);
         temp.remove();
-        if (!draw.box || (draw.box[2]-draw.box[0]) < 8 || (draw.box[3]-draw.box[1]) < 8) return;
+        if (!draw.box || (draw.box[2]-draw.box[0]) < 8 || (draw.box[3]-draw.box[1]) < 8) { toggleDraw(mode); return; }
+        if (mode === 'meaning') {
+          const rec = getRec(R.selId);
+          if (!rec) { alert('Select an entry first (click its box), then draw its Việt box.'); toggleDraw(mode); return; }
+          rec.meaning_bbox = draw.box;   // local; saved with the record on Save
+          toggleDraw(mode); drawBoxes(); selectRecord(rec.id);
+          return;
+        }
+        // 'han' → create a new entry with this Hán box
         const pageImg = (pageRecords()[0] || {}).image_path || '';
         const res = await fetch(`/jobs/${R.jobId}/record/new`, { method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ page: R.page, han_bbox: draw.box, image_path: pageImg }) });
         const j = await res.json(); R.records.push(j.record);
-        toggleDraw(); drawBoxes(); selectRecord(j.record.id); updateProgress();
+        toggleDraw(mode); drawBoxes(); selectRecord(j.record.id); updateProgress();
       };
       document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
     });
