@@ -64,6 +64,69 @@ def translate_han(provider: str, api_key: str, han: str, model: str | None = Non
     return out
 
 
+_ENHANCE_SYSTEM = (
+    "You are an expert in classical Hán-Nôm and Vietnamese, reviewing ONE entry (bài) "
+    "of a Nguyễn-dynasty Châu bản catalogue. You get a cropped image of the Hán text "
+    "and a cropped image of its parallel Vietnamese text, plus rough OCR of each (which "
+    "may be wrong, blank, or missing Vietnamese diacritics). Read the IMAGES carefully "
+    "and correct both. Trust the images over the OCR. Do not translate; transcribe."
+)
+
+
+def _parse_enhance(raw: str) -> dict:
+    """Parse the model's JSON reply into {han, meaning}; fall back gracefully."""
+    import json
+    import re
+
+    s = re.sub(r"```(?:json)?|```", "", raw or "").strip()
+    m = re.search(r"\{.*\}", s, re.DOTALL)
+    if m:
+        try:
+            d = json.loads(m.group(0))
+            return {
+                "han": (d.get("han") or "").strip(),
+                "meaning": (d.get("vietnamese") or d.get("meaning") or "").strip(),
+            }
+        except Exception:  # noqa: BLE001 - not valid JSON; fall through
+            pass
+    return {"han": s, "meaning": ""}  # last resort: whole reply as Hán
+
+
+def vision_enhance(
+    provider: str,
+    api_key: str,
+    han_image: bytes,
+    vi_image: bytes | None = None,
+    han_text: str = "",
+    vi_text: str = "",
+    model: str | None = None,
+) -> dict:
+    """Correct BOTH the Hán and Vietnamese of an entry from their cropped images.
+
+    Sends both crops + both rough OCR texts to a multimodal model and returns
+    ``{"han": <corrected Hán>, "meaning": <corrected Vietnamese>}``.
+    """
+    images = [han_image] + ([vi_image] if vi_image else [])
+    prompt = "Image 1 = the Hán crop."
+    if vi_image:
+        prompt += " Image 2 = the parallel Vietnamese crop."
+    prompt += (
+        f"\nRough OCR — Hán: {han_text.strip() or '(blank)'}"
+        f"\nRough OCR — Vietnamese: {vi_text.strip() or '(blank)'}"
+        '\nReturn ONLY a JSON object with the corrected text, exactly: '
+        '{"han": "<corrected Hán characters>", '
+        '"vietnamese": "<corrected Vietnamese with proper diacritics>"}'
+    )
+    try:
+        raw = llm.complete_vision(
+            provider, prompt, images, api_key=api_key, model=model, system=_ENHANCE_SYSTEM
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("LLM vision enhance failed (provider=%s).", provider)
+        raise
+    return _parse_enhance(raw)
+
+
 def vision_read_han(
     provider: str,
     api_key: str,

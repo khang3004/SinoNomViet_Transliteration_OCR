@@ -883,6 +883,47 @@ def vision_correct(job_id: int, req: VisionRequest) -> dict:
     return {"text": text}
 
 
+class EnhanceRequest(BaseModel):
+    """AI enhance one entry from both crops + both OCR texts (bring-your-own-key)."""
+
+    id: str = ""
+    provider: str = "gemini"
+    api_key: str
+    model: str | None = None
+    han_b64: str = ""          # base64 PNG of the Hán crop
+    vi_b64: str = ""           # base64 PNG of the Vietnamese crop (optional)
+    han_text: str = ""         # current/rough Hán OCR text
+    vi_text: str = ""          # current/rough Vietnamese OCR text
+
+
+@app.post("/jobs/{job_id}/ai_enhance")
+def ai_enhance(job_id: int, req: EnhanceRequest) -> dict:
+    """Read both crops (+ both OCR texts) and return corrected {han, meaning}.
+
+    Uses the reviewer's own multimodal key — used once, never stored.
+    """
+    import base64
+
+    from pipeline.llm.tasks import vision_enhance
+
+    def _decode(b64: str) -> bytes | None:
+        return base64.b64decode(b64.split(",", 1)[-1]) if b64 else None
+
+    try:
+        han_img = _decode(req.han_b64)
+        vi_img = _decode(req.vi_b64)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"invalid image data: {exc}") from exc
+    if not han_img:
+        raise HTTPException(status_code=400, detail="empty Hán image")
+    try:
+        return vision_enhance(
+            req.provider, req.api_key, han_img, vi_img, req.han_text, req.vi_text, req.model
+        )
+    except Exception as exc:  # noqa: BLE001 - clean error to the UI
+        raise HTTPException(status_code=400, detail=f"AI enhance failed: {exc}") from exc
+
+
 def _poll_result(rid: int, kind: str) -> dict:
     job = store.get(rid)
     if job is None or job.kind != kind:
