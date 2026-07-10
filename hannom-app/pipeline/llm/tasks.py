@@ -73,8 +73,33 @@ _ENHANCE_SYSTEM = (
 )
 
 
+_HAN_KEYS = ("han", "han_text", "hán", "hanvan", "han_van", "chinese", "classical_chinese")
+_VI_KEYS = ("vietnamese", "vietnamese_text", "meaning", "quoc_ngu", "quocngu", "viet",
+            "translation", "quoc_ngu_text")
+
+
+def _pick(d: dict, keys: tuple) -> str:
+    """Find a text value under any of ``keys`` (case-insensitive), unwrapping a
+    nested ``{"text": ...}`` / ``{"value": ...}`` object if the model wrapped it."""
+    low = {str(k).lower(): v for k, v in d.items()}
+    for k in keys:
+        if k in low:
+            v = low[k]
+            if isinstance(v, str):
+                return v.strip()
+            if isinstance(v, dict):
+                t = v.get("text") or v.get("value") or ""
+                if isinstance(t, str):
+                    return t.strip()
+    return ""
+
+
 def _parse_enhance(raw: str) -> dict:
-    """Parse the model's JSON reply into {han, meaning}; fall back gracefully."""
+    """Parse the model's JSON reply into {han, meaning}; fall back gracefully.
+
+    Handles both the flat shape we ask for (``{"han": …, "vietnamese": …}``) and
+    richer shapes some models return (e.g. ``{"han_text": {"text": …}, …}``).
+    """
     import json
     import re
 
@@ -83,10 +108,9 @@ def _parse_enhance(raw: str) -> dict:
     if m:
         try:
             d = json.loads(m.group(0))
-            return {
-                "han": (d.get("han") or "").strip(),
-                "meaning": (d.get("vietnamese") or d.get("meaning") or "").strip(),
-            }
+            han, meaning = _pick(d, _HAN_KEYS), _pick(d, _VI_KEYS)
+            if han or meaning:
+                return {"han": han, "meaning": meaning}
         except Exception:  # noqa: BLE001 - not valid JSON; fall through
             pass
     return {"han": s, "meaning": ""}  # last resort: whole reply as Hán
