@@ -11,7 +11,7 @@ bcrypt==4.2.0
 # LLM provider SDKs — the app makes translation/correction calls with the
 # USER's own key (per request). Each is imported lazily, only when used.
 # (DeepSeek is OpenAI-compatible and uses the openai SDK with a custom base_url.)
-google-generativeai==0.8.3
+google-genai>=1.20.0          # current Gemini SDK (replaces google-generativeai)
 openai==1.54.4
 anthropic==0.39.0
 # Pin httpx < 0.28: openai/anthropic 1.54/0.39 pass a `proxies` kwarg that httpx
