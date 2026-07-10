@@ -20,7 +20,7 @@ class AnthropicProvider:
         client = anthropic.Anthropic(api_key=api_key, timeout=300)
         msg = client.messages.create(
             model=model or self.default_model,
-            max_tokens=1024,
+            max_tokens=4096,
             system=system or "",
             messages=[{"role": "user", "content": prompt}],
         )
@@ -40,7 +40,7 @@ class AnthropicProvider:
         content.append({"type": "text", "text": prompt})
         msg = client.messages.create(
             model=model or self.default_vision_model,
-            max_tokens=1024,
+            max_tokens=4096,
             system=system or "",
             messages=[{"role": "user", "content": content}],
         )
