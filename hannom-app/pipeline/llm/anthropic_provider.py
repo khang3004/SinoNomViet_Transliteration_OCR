@@ -17,7 +17,7 @@ class AnthropicProvider:
     def complete(self, prompt, api_key, model=None, system=None) -> str:
         import anthropic  # lazy
 
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic(api_key=api_key, timeout=300)
         msg = client.messages.create(
             model=model or self.default_model,
             max_tokens=1024,
@@ -32,7 +32,7 @@ class AnthropicProvider:
 
         import anthropic  # lazy
 
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic(api_key=api_key, timeout=300)
         content = []
         for img in images:
             b64 = base64.b64encode(img).decode("ascii")

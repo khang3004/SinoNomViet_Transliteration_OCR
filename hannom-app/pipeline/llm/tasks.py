@@ -64,12 +64,13 @@ def translate_han(provider: str, api_key: str, han: str, model: str | None = Non
     return out
 
 
-_ENHANCE_SYSTEM = (
-    "You are an expert in classical Hán-Nôm and Vietnamese, reviewing ONE entry (bài) "
-    "of a Nguyễn-dynasty Châu bản catalogue. You get a cropped image of the Hán text "
-    "and a cropped image of its parallel Vietnamese text, plus rough OCR of each (which "
-    "may be wrong, blank, or missing Vietnamese diacritics). Read the IMAGES carefully "
-    "and correct both. Trust the images over the OCR. Do not translate; transcribe."
+_OCR_SYSTEM = (
+    "You are a high-accuracy OCR engine for a Nguyễn-dynasty Châu bản catalogue entry "
+    "(bài). You receive a cropped image of the Hán (classical Chinese) text and a "
+    "cropped image of its parallel Vietnamese (Quốc-ngữ) text. TRANSCRIBE exactly what "
+    "each image says — do NOT translate, summarize, reorder, or invent characters. Keep "
+    "the Hán characters as written; write the Vietnamese in correct Quốc-ngữ with full "
+    "diacritics. Read from the IMAGES."
 )
 
 
@@ -116,7 +117,7 @@ def _parse_enhance(raw: str) -> dict:
     return {"han": s, "meaning": ""}  # last resort: whole reply as Hán
 
 
-def vision_enhance(
+def llm_ocr(
     provider: str,
     api_key: str,
     han_image: bytes,
@@ -125,28 +126,30 @@ def vision_enhance(
     vi_text: str = "",
     model: str | None = None,
 ) -> dict:
-    """Correct BOTH the Hán and Vietnamese of an entry from their cropped images.
+    """Use a multimodal LLM AS the OCR: transcribe the Hán and Vietnamese directly
+    from their cropped images. Returns ``{"han": …, "meaning": …}``.
 
-    Sends both crops + both rough OCR texts to a multimodal model and returns
-    ``{"han": <corrected Hán>, "meaning": <corrected Vietnamese>}``.
+    ``han_text``/``vi_text`` (any existing OCR) are passed only as a weak hint —
+    the model is told to read from the images.
     """
     images = [han_image] + ([vi_image] if vi_image else [])
     prompt = "Image 1 = the Hán crop."
     if vi_image:
         prompt += " Image 2 = the parallel Vietnamese crop."
+    hint = " / ".join(x for x in (han_text.strip(), vi_text.strip()) if x)
+    if hint:
+        prompt += f"\n(Existing rough text — trust the IMAGE over this: {hint})"
     prompt += (
-        f"\nRough OCR — Hán: {han_text.strip() or '(blank)'}"
-        f"\nRough OCR — Vietnamese: {vi_text.strip() or '(blank)'}"
-        '\nReturn ONLY a JSON object with the corrected text, exactly: '
-        '{"han": "<corrected Hán characters>", '
-        '"vietnamese": "<corrected Vietnamese with proper diacritics>"}'
+        '\nTranscribe both images. Return ONLY a JSON object, exactly: '
+        '{"han": "<Hán characters as written>", '
+        '"vietnamese": "<Vietnamese transcription with proper diacritics>"}'
     )
     try:
         raw = llm.complete_vision(
-            provider, prompt, images, api_key=api_key, model=model, system=_ENHANCE_SYSTEM
+            provider, prompt, images, api_key=api_key, model=model, system=_OCR_SYSTEM
         )
     except Exception:  # noqa: BLE001
-        logger.exception("LLM vision enhance failed (provider=%s).", provider)
+        logger.exception("LLM OCR failed (provider=%s).", provider)
         raise
     return _parse_enhance(raw)
 

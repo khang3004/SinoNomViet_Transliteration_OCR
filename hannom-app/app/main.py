@@ -883,8 +883,8 @@ def vision_correct(job_id: int, req: VisionRequest) -> dict:
     return {"text": text}
 
 
-class EnhanceRequest(BaseModel):
-    """AI enhance one entry from both crops + both OCR texts (bring-your-own-key)."""
+class LlmOcrRequest(BaseModel):
+    """LLM-as-OCR of one entry from both crops (bring-your-own-key)."""
 
     id: str = ""
     provider: str = "gemini"
@@ -892,19 +892,20 @@ class EnhanceRequest(BaseModel):
     model: str | None = None
     han_b64: str = ""          # base64 PNG of the Hán crop
     vi_b64: str = ""           # base64 PNG of the Vietnamese crop (optional)
-    han_text: str = ""         # current/rough Hán OCR text
-    vi_text: str = ""          # current/rough Vietnamese OCR text
+    han_text: str = ""         # existing Hán text (weak hint only)
+    vi_text: str = ""          # existing Vietnamese text (weak hint only)
 
 
-@app.post("/jobs/{job_id}/ai_enhance")
-def ai_enhance(job_id: int, req: EnhanceRequest) -> dict:
-    """Read both crops (+ both OCR texts) and return corrected {han, meaning}.
+@app.post("/jobs/{job_id}/llm_ocr")
+def llm_ocr_route(job_id: int, req: LlmOcrRequest) -> dict:
+    """Transcribe both crops with a multimodal LLM; return {han, meaning}.
 
-    Uses the reviewer's own multimodal key — used once, never stored.
+    The LLM does the OCR (reads straight from the images). The reviewer's own key
+    is used once, never stored.
     """
     import base64
 
-    from pipeline.llm.tasks import vision_enhance
+    from pipeline.llm.tasks import llm_ocr as run_llm_ocr
 
     def _decode(b64: str) -> bytes | None:
         return base64.b64decode(b64.split(",", 1)[-1]) if b64 else None
@@ -917,11 +918,11 @@ def ai_enhance(job_id: int, req: EnhanceRequest) -> dict:
     if not han_img:
         raise HTTPException(status_code=400, detail="empty Hán image")
     try:
-        return vision_enhance(
+        return run_llm_ocr(
             req.provider, req.api_key, han_img, vi_img, req.han_text, req.vi_text, req.model
         )
     except Exception as exc:  # noqa: BLE001 - clean error to the UI
-        raise HTTPException(status_code=400, detail=f"AI enhance failed: {exc}") from exc
+        raise HTTPException(status_code=400, detail=f"LLM OCR failed: {exc}") from exc
 
 
 def _poll_result(rid: int, kind: str) -> dict:

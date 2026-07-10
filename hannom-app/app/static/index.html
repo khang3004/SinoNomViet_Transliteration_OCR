@@ -174,7 +174,7 @@
         <div class="btnrow" style="margin-top:0.2rem">
           <button class="amber" id="btn-reocr" onclick="reocrBox()" title="OCR the Hán box from the image">🔁 Re-OCR Hán</button>
           <button class="amber" id="btn-reocr-vi" onclick="reocrVi()" title="OCR the Vietnamese box from the image (rough — AI enhance cleans it)">🔁 Re-OCR Việt</button>
-          <button class="blue" id="btn-enhance" onclick="aiEnhance()" title="AI reads both crops + both OCR texts and corrects Hán & Việt together">✨ AI enhance</button>
+          <button class="blue" id="btn-llm-ocr" onclick="llmOcr()" title="Let the LLM read (OCR) the Hán &amp; Việt straight from the box images">✨ LLM OCR</button>
           <button class="danger" id="btn-del" onclick="deleteBox()">🗑 Delete</button>
         </div>
         <div id="link-row" class="muted" style="font-size:0.8rem;min-height:1.2em"></div>
@@ -425,7 +425,7 @@
       R.selEditable = canEdit;
       ['f-entry','f-page','f-han','f-meaning','m-ngay','m-to_tap','m-loai','m-xuat_xu','m-de_tai']
         .forEach(id => { document.getElementById(id).readOnly = !canEdit; });
-      ['btn-reocr','btn-reocr-vi','btn-enhance','btn-del','f-verify'].forEach(id => { document.getElementById(id).disabled = !canEdit; });
+      ['btn-reocr','btn-reocr-vi','btn-llm-ocr','btn-del','f-verify'].forEach(id => { document.getElementById(id).disabled = !canEdit; });
       document.getElementById('ro-note').style.display = canEdit ? 'none' : '';
     }
     function onVerify() {
@@ -494,12 +494,12 @@
     }
     function currentModel() { return (document.getElementById('ai-model').value || '').trim() || null; }
 
-    // AI enhance: send BOTH crops + BOTH OCR texts; get corrected Hán AND Việt back.
-    async function aiEnhance() {
+    // LLM OCR: the LLM reads (OCRs) BOTH crops and returns Hán + Việt transcriptions.
+    async function llmOcr() {
       const rec = getRec(R.selId); if (!rec) return;
       const provider = document.getElementById('ai-provider').value || 'gemini';
       if (window.PROVIDERS && window.PROVIDERS[provider] === false) {
-        alert(`${provider} has no image model. Pick Gemini, OpenAI, or Anthropic for AI enhance.`); return;
+        alert(`${provider} has no image model. Pick Gemini, OpenAI, or Anthropic for LLM OCR.`); return;
       }
       const api_key = (document.getElementById('ai-key').value || '').trim();
       if (!api_key) { alert(`Paste your ${provider} API key in the field at the top-right of Review.`); return; }
@@ -507,17 +507,17 @@
       const han_b64 = cropBoxPng(rec.han_bbox);
       if (!han_b64) { alert('This record has no Hán box to crop.'); return; }
       const vi_b64 = cropBoxPng(rec.meaning_bbox) || '';
-      const btn = document.getElementById('btn-enhance'), label = btn.textContent;
+      const btn = document.getElementById('btn-llm-ocr'), label = btn.textContent;
       btn.disabled = true; btn.textContent = '✨ …';
       try {
-        const res = await fetch(`/jobs/${R.jobId}/ai_enhance`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        const res = await fetch(`/jobs/${R.jobId}/llm_ocr`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: rec.id, provider, api_key, model: currentModel(), han_b64, vi_b64,
             han_text: document.getElementById('f-han').value || '', vi_text: document.getElementById('f-meaning').value || '' }) });
         const j = await res.json();
         if (!res.ok) throw new Error(j.detail || res.status);
         if (j.han) { document.getElementById('f-han').value = j.han; rec.han = j.han; }
         if (j.meaning) { document.getElementById('f-meaning').value = j.meaning; rec.meaning = j.meaning; }
-      } catch (err) { alert('AI enhance failed: ' + err); }
+      } catch (err) { alert('LLM OCR failed: ' + err); }
       btn.disabled = false; btn.textContent = label;
     }
 

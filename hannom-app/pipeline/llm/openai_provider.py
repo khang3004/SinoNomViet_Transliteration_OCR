@@ -15,7 +15,7 @@ class OpenAIProvider:
     def complete(self, prompt, api_key, model=None, system=None) -> str:
         from openai import OpenAI  # lazy
 
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=api_key, timeout=300)
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -30,7 +30,7 @@ class OpenAIProvider:
 
         from openai import OpenAI  # lazy
 
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=api_key, timeout=300)
         content = [{"type": "text", "text": prompt}]
         for img in images:
             b64 = base64.b64encode(img).decode("ascii")
