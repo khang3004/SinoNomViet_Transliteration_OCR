@@ -1007,17 +1007,15 @@ def autoscan_page_route(job_id: int, req: AutoscanRequest, request: Request) -> 
     with open(path, "rb") as fh:
         png = fh.read()
 
-    import io
-
-    from PIL import Image
-
-    with Image.open(io.BytesIO(png)) as im:
-        width, height = im.size
-    source_doc = existing[0].get("source_doc", "") if existing else ""
-    prefix = records_repo.id_prefix(DATABASE_URL, job_id)
-
     from pipeline import autoscan
     from pipeline.llm.tasks import autoscan_page as run_autoscan
+
+    try:
+        width, height = autoscan.image_size(png)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    source_doc = existing[0].get("source_doc", "") if existing else ""
+    prefix = records_repo.id_prefix(DATABASE_URL, job_id)
 
     try:
         entries = run_autoscan(req.provider, req.api_key, autoscan.downscale_for_llm(png), req.model)

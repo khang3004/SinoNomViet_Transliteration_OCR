@@ -20,6 +20,26 @@ def _num(v):
         return None
 
 
+def image_size(data: bytes) -> tuple[int, int]:
+    """(width, height) of a page image WITHOUT Pillow (the app image has no PIL).
+
+    Parses the PNG IHDR header (rendered pages are PNG). Falls back to Pillow if it
+    happens to be installed (e.g. a JPEG upload); raises ValueError otherwise.
+    """
+    import struct
+
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        w, h = struct.unpack(">II", data[16:24])
+        return int(w), int(h)
+    try:  # non-PNG (e.g. an uploaded JPEG) — use Pillow only if present
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            return int(im.size[0]), int(im.size[1])
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"could not determine image size: {exc}") from exc
+
+
 def to_pixel_box(norm, width: int, height: int) -> list[float]:
     """``[ymin,xmin,ymax,xmax]`` (0–1000) → page-pixel ``[x0,y0,x1,y1]``.
 

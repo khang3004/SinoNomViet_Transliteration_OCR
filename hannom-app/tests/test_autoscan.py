@@ -2,7 +2,22 @@
 
 from __future__ import annotations
 
+import struct
+
+import pytest
+
 from pipeline import autoscan
+
+
+# --- image_size (PNG header, no Pillow) -----------------------------------
+def test_image_size_reads_png_header():
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0d" + b"IHDR" + struct.pack(">II", 1234, 5678)
+    assert autoscan.image_size(png) == (1234, 5678)
+
+
+def test_image_size_rejects_unknown_without_pillow():
+    with pytest.raises(ValueError):
+        autoscan.image_size(b"not an image")
 
 
 # --- to_pixel_box ---------------------------------------------------------
