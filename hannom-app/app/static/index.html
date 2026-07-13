@@ -153,13 +153,12 @@
           <span class="muted" id="draw-hint">Click a box to edit · drag its handles to resize · drag body to move</span>
         </div>
         <div class="toolbar" id="autoscan-bar" style="margin-top:0.3rem">
-          <button class="blue" id="btn-autoscan" onclick="autoScan()" title="Let the LLM read whole pages: place Hán+Việt boxes, OCR, and detect continuations. Records are left UNVERIFIED for you to check. Gemini gives the best boxes.">🤖 AI auto-scan</button>
-          <span class="muted" style="font-size:0.78rem">pages
-            <input type="number" id="as-from" min="1" style="width:64px;padding:0.2rem" title="from page (Trang số)" />
+          <button class="blue" id="btn-autoscan" onclick="submitBatchScan()" title="Queue a Gemini Batch job that reads this job's UNVERIFIED pages (async, ~50% cheaper, no rate-limit failures). It places Hán+Việt boxes, OCRs them, and detects continuations; results are written as UNVERIFIED records for you to check. Default model gemini-2.5-flash.">🤖 Batch AI scan</button>
+          <span class="muted" style="font-size:0.78rem">unverified pages
+            <input type="number" id="as-from" min="1" style="width:64px;padding:0.2rem" title="from page (optional)" />
             →
-            <input type="number" id="as-to" min="1" style="width:64px;padding:0.2rem" title="to page (Trang số)" />
+            <input type="number" id="as-to" min="1" style="width:64px;padding:0.2rem" title="to page (optional)" />
           </span>
-          <button class="ghost" id="btn-autoscan-stop" onclick="stopAutoScan()" style="display:none">■ Stop</button>
           <span class="muted" id="autoscan-status" style="font-size:0.78rem"></span>
         </div>
         <div class="legend">
@@ -262,13 +261,13 @@
       R = { jobId: id, records: j.records || [], pages: [], page: null, selId: null, img: null, wrap: null, drawMode: false };
       R.pages = [...new Set(R.records.map(r => r.page))].sort((a, b) => a - b);
       R.page = R.pages[0]; renderPageSelector(); renderPage();
-      if (R.pages.length) {  // default the auto-scan range to the whole job
+      if (R.pages.length) {  // default the batch-scan range to the whole job
         document.getElementById('as-from').value = R.pages[0];
         document.getElementById('as-to').value = R.pages[R.pages.length - 1];
       }
-      document.getElementById('autoscan-status').textContent = '';
+      loadJobBatches();  // surface/resume any in-flight batch for this job
     }
-    function closeReview() { document.getElementById('review-card').style.display = 'none'; }
+    function closeReview() { stopBatchPolling(); document.getElementById('review-card').style.display = 'none'; }
     function pageRecords() { return R.records.filter(r => r.page === R.page); }
     function getRec(id) { return R.records.find(r => r.id === id); }
 
@@ -567,51 +566,70 @@
       btn.disabled = false; btn.textContent = label;
     }
 
-    // ----- AI auto-scan: LLM reads whole pages -> pending records -----
-    let AUTOSCAN = { running: false, stop: false };
-    function stopAutoScan() { AUTOSCAN.stop = true; }
-    async function autoScan() {
-      if (AUTOSCAN.running) return;
+    // ----- AI batch auto-scan (Gemini Batch API): whole-job, async -----
+    let BATCH = { name: null, timer: null };
+    function batchStatusEl() { return document.getElementById('autoscan-status'); }
+    function batchKey() { return (document.getElementById('ai-key').value || '').trim(); }
+    function batchModel() {
+      const m = currentModel();
+      const def = (window.PROVIDER_INFO && window.PROVIDER_INFO.gemini && window.PROVIDER_INFO.gemini.default_model) || '';
+      return (!m || m === def) ? 'gemini-2.5-flash' : m;  // batch default, unless user typed one
+    }
+    async function submitBatchScan() {
       const provider = document.getElementById('ai-provider').value || 'gemini';
-      if (window.PROVIDERS && window.PROVIDERS[provider] === false) {
-        alert(`${provider} has no image model. Pick Gemini (recommended), OpenAI, or Anthropic.`); return;
-      }
-      const api_key = (document.getElementById('ai-key').value || '').trim();
-      if (!api_key) { alert(`Paste your ${provider} API key (top-right of Review).`); return; }
-      const from = parseInt(document.getElementById('as-from').value), to = parseInt(document.getElementById('as-to').value);
-      if (!(from >= 1) || !(to >= from)) { alert('Enter a valid page range (from ≤ to).'); return; }
-      const pages = R.pages.filter(p => p >= from && p <= to);
-      if (!pages.length) { alert('No pages in that range for this job.'); return; }
-      if (!confirm(`Auto-scan ${pages.length} page(s) with ${provider}? This replaces non-verified records on those pages (verified pages are skipped). Records stay UNVERIFIED for your review.`)) return;
-
-      AUTOSCAN = { running: true, stop: false };
-      const btn = document.getElementById('btn-autoscan'), stopBtn = document.getElementById('btn-autoscan-stop'), st = document.getElementById('autoscan-status');
-      btn.disabled = true; stopBtn.style.display = ''; document.getElementById('btn-autoscan-stop').disabled = false;
-      const model = currentModel();
-      let done = 0, createdTotal = 0, skipped = 0, failed = 0;
-      for (const page of pages) {
-        if (AUTOSCAN.stop) break;
-        st.textContent = `Scanning page ${page} … (${done}/${pages.length} done · ${createdTotal} entries)`;
-        const image_path = (R.records.find(r => r.page === page) || {}).image_path || '';
-        try {
-          const res = await fetch(`/jobs/${R.jobId}/autoscan_page`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ page, provider, api_key, model, image_path }) });
-          if (res.status === 403) { skipped++; }
-          else {
-            const j = await res.json();
-            if (!res.ok) { failed++; console.warn('autoscan page', page, j.detail || res.status); }
-            else if (j.skipped) { skipped++; }
-            else { createdTotal += (j.created || 0); }
-          }
-        } catch (err) { failed++; console.warn('autoscan page', page, err); }
-        done++;
-        await new Promise(s => setTimeout(s, 350));  // gentle on rate limits
-      }
-      st.textContent = `Done: ${done}/${pages.length} page(s) · ${createdTotal} entries` +
-        (skipped ? ` · ${skipped} skipped` : '') + (failed ? ` · ${failed} failed` : '') + (AUTOSCAN.stop ? ' · stopped' : '');
-      btn.disabled = false; stopBtn.style.display = 'none';
-      AUTOSCAN.running = false;
-      await reloadRecords();  // refresh boxes/records (new pending entries)
+      if (provider !== 'gemini') { alert('Batch scan is Gemini-only. Choose Gemini as the provider.'); return; }
+      const api_key = batchKey();
+      if (!api_key) { alert('Paste your Gemini API key (top-right of Review).'); return; }
+      const model = batchModel();
+      const body = { provider, api_key, model };
+      const from = parseInt(document.getElementById('as-from').value); if (from >= 1) body.page_from = from;
+      const to = parseInt(document.getElementById('as-to').value); if (to >= 1) body.page_to = to;
+      if (!confirm(`Queue a Gemini batch scan of this job's UNVERIFIED pages with ${model}? It runs in the background (minutes–hours); results are written as pending records for review. Verified pages are skipped.`)) return;
+      const btn = document.getElementById('btn-autoscan'); btn.disabled = true;
+      batchStatusEl().textContent = 'Submitting…';
+      try {
+        const res = await fetch(`/jobs/${R.jobId}/autoscan_batch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.detail || res.status);
+        BATCH.name = j.batch_name;
+        batchStatusEl().textContent = `Batch submitted · ${j.pages} page(s) · scanning…`;
+        startBatchPolling();
+      } catch (err) { batchStatusEl().innerHTML = `<span class="failed">Submit failed: ${esc(String(err.message || err))}</span>`; }
+      btn.disabled = false;
+    }
+    function startBatchPolling() { if (BATCH.timer) clearInterval(BATCH.timer); pollBatchOnce(); BATCH.timer = setInterval(pollBatchOnce, 45000); }
+    function stopBatchPolling() { if (BATCH.timer) { clearInterval(BATCH.timer); BATCH.timer = null; } }
+    async function pollBatchOnce() {
+      if (!BATCH.name || !R.jobId) return;
+      const api_key = batchKey();
+      if (!api_key) { batchStatusEl().textContent = 'Paste your Gemini key to check batch status.'; return; }
+      try {
+        const res = await fetch(`/jobs/${R.jobId}/autoscan_batch/status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ batch_name: BATCH.name, api_key }) });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.detail || res.status);
+        if (j.state === 'applied') {
+          stopBatchPolling(); const n = BATCH.name; BATCH.name = null;
+          batchStatusEl().textContent = `✓ Batch done · applied ${j.created_entries} entries. Reloading…`;
+          await reloadRecords();
+          batchStatusEl().innerHTML = `✓ Batch done · applied <b>${j.created_entries}</b> entries.`;
+        } else if (['failed', 'cancelled', 'expired'].includes(j.state)) {
+          stopBatchPolling(); BATCH.name = null;
+          batchStatusEl().innerHTML = `<span class="failed">Batch ${j.state}${j.error ? ': ' + esc(j.error) : ''}</span>`;
+        } else {
+          batchStatusEl().textContent = `Batch ${j.state || 'running'}… (auto-checks every 45s)`;
+        }
+      } catch (err) { batchStatusEl().innerHTML = `<span class="failed">Status check failed: ${esc(String(err.message || err))}</span>`; }
+    }
+    async function loadJobBatches() {  // resume an in-flight batch when a job is opened
+      stopBatchPolling(); BATCH.name = null; batchStatusEl().textContent = '';
+      try {
+        const j = await (await fetch(`/jobs/${R.jobId}/autoscan_batch`)).json();
+        const active = (j.batches || []).find(b => !['applied', 'failed', 'cancelled', 'expired'].includes(b.state));
+        if (active) {
+          BATCH.name = active.batch_name;
+          batchStatusEl().innerHTML = `Batch in progress (${active.pages} page(s)) — <a onclick="startBatchPolling()">check status</a>`;
+        }
+      } catch {}
     }
 
     // ----- spanning entries: link a fragment to the previous entry -----

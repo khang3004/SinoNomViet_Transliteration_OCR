@@ -204,14 +204,11 @@ def _parse_autoscan(raw: str) -> list[dict]:
     return [e for e in entries if isinstance(e, dict)]
 
 
-def autoscan_page(
-    provider: str, api_key: str, page_image: bytes, model: str | None = None,
-) -> list[dict]:
-    """Send a WHOLE page image to a vision LLM; return a list of entry dicts.
+def autoscan_prompt() -> tuple[str, str]:
+    """(system, user prompt) for full-page auto-scan.
 
-    Each entry: ``{han_box, viet_box (0–1000 [ymin,xmin,ymax,xmax]), han,
-    vietnamese, is_continuation, meta}``. Used by the job auto-scan; the caller
-    converts boxes to pixels and writes pending records.
+    Shared by the synchronous ``autoscan_page`` and the batch builder so both send
+    byte-identical instructions to the model.
     """
     prompt = (
         "Analyse this full catalogue page (entries are BELOW the 'TRÍCH YẾU' "
@@ -224,9 +221,22 @@ def autoscan_page(
         '"xuat_xu": "", "de_tai": ""}}]}\n'
         "One object per entry, in reading order. Boxes normalized to 0–1000."
     )
+    return _AUTOSCAN_SYSTEM, prompt
+
+
+def autoscan_page(
+    provider: str, api_key: str, page_image: bytes, model: str | None = None,
+) -> list[dict]:
+    """Send a WHOLE page image to a vision LLM; return a list of entry dicts.
+
+    Each entry: ``{han_box, viet_box (0–1000 [ymin,xmin,ymax,xmax]), han,
+    vietnamese, is_continuation, meta}``. Used by the job auto-scan; the caller
+    converts boxes to pixels and writes pending records.
+    """
+    system, prompt = autoscan_prompt()
     try:
         raw = llm.complete_vision(
-            provider, prompt, [page_image], api_key=api_key, model=model, system=_AUTOSCAN_SYSTEM
+            provider, prompt, [page_image], api_key=api_key, model=model, system=system
         )
     except Exception:  # noqa: BLE001
         logger.exception("LLM auto-scan failed (provider=%s).", provider)

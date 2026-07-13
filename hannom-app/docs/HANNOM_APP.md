@@ -157,14 +157,18 @@ worker (and written as a JSONL artifact). Each record carries `han`, `meaning`,
     regions). Providers: **gemini, openai, anthropic** (vision) and **deepseek**
     (text only — the 👁 button is disabled for it). Anthropic vision uses
     `claude-3-5-sonnet`.
-- **🤖 AI auto-scan (bring-your-own-key)** — in a job's review toolbar, pick a page
-  range and let a vision LLM read **whole pages**: it places the Hán + Việt boxes,
-  OCRs both, detects **continuations** (page breaks), and fills best-effort metadata.
-  Results are written as **pending** records (the verify tick stays off) for a human
-  to check. On a page with no verified entries it **replaces** the non-verified
-  records; pages with any verified entry are **skipped**. Continuation links are
-  derived from reading order (never from an LLM-supplied id), so re-running is safe.
-  Gemini gives the best box accuracy.
+- **🤖 Batch AI scan (bring-your-own-key)** — in a job's review toolbar, queue a
+  **Gemini Batch** job over the job's **unverified pages** (optional from→to range).
+  Gemini reads each whole page asynchronously (minutes–hours, ~50% cheaper, no
+  rate-limit failures): it places the Hán + Việt boxes, OCRs both, reads the entry
+  number, detects **continuations** (page breaks), and fills best-effort metadata.
+  When the batch finishes the app **auto-applies** the results as **pending** records
+  (verify tick stays off) for a human to check. On a page with no verified entries it
+  **replaces** the non-verified records; pages with any verified entry are **skipped**.
+  Continuation links are derived from reading order (never an LLM id), so re-running is
+  safe. Only the batch **name** is persisted (never the key), so an in-flight batch is
+  shown and resumes polling when the job is reopened. Default model
+  `gemini-2.5-flash`. (The interactive per-box **LLM OCR** stays synchronous.)
 - **Spanning entries (page breaks)** — a bài whose text continues on the next page:
   select the continuation → **"⤷ mark as continuation of previous entry"**. Parts
   keep their own boxes but **merge into one entry** for export and counting
@@ -242,6 +246,9 @@ Public: `/`, `/healthz`, `/auth/login`, `/auth/logout`, static assets.
 - `POST /jobs/{id}/record/link` · `/record/unlink` — spanning-entry links
 - `POST /jobs/{id}/reocr` + `GET /reocr/{rid}` — re-OCR a box
 - `POST /jobs/{id}/autoscan_page` — AI auto-scan one page → pending records (BYO key)
+- `POST /jobs/{id}/autoscan_batch` — queue a Gemini Batch scan of unverified pages (BYO key)
+- `POST /jobs/{id}/autoscan_batch/status` — poll a batch; auto-applies results on success
+- `GET /jobs/{id}/autoscan_batch` — list a job's batch scans (resume UI)
 - `GET /pages/{filename}` — a rendered page image
 
 **LLM (bring-your-own-key)**

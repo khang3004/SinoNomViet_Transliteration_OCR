@@ -92,3 +92,24 @@ CREATE TABLE IF NOT EXISTS assignments (
 
 CREATE INDEX IF NOT EXISTS idx_assignments_user ON assignments (user_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_job ON assignments (job_id);
+
+-- AI batch auto-scan tracking. A submitted Gemini Batch job scans a job's
+-- unverified pages asynchronously; we persist only the batch NAME (never the API
+-- key) so any admin can poll/resume and apply the results. state: submitted |
+-- running | succeeded | failed | applied | cancelled | expired.
+CREATE TABLE IF NOT EXISTS autoscan_batches (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    job_id          BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    batch_name      TEXT NOT NULL,
+    provider        TEXT NOT NULL DEFAULT 'gemini',
+    model           TEXT NOT NULL DEFAULT '',
+    state           TEXT NOT NULL DEFAULT 'submitted',
+    pages           INTEGER NOT NULL DEFAULT 0,
+    created_entries INTEGER NOT NULL DEFAULT 0,
+    error           TEXT NOT NULL DEFAULT '',
+    created_by      INTEGER,
+    created_at      DOUBLE PRECISION NOT NULL,
+    applied_at      DOUBLE PRECISION
+);
+
+CREATE INDEX IF NOT EXISTS idx_autoscan_batches_job ON autoscan_batches (job_id);

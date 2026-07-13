@@ -1042,6 +1042,179 @@ def autoscan_page_route(job_id: int, req: AutoscanRequest, request: Request) -> 
     return {"ok": True, "page": req.page, "skipped": False, "created": len(created), "records": result}
 
 
+class BatchScanRequest(BaseModel):
+    """Submit a Gemini Batch auto-scan over a job's unverified pages (BYO key)."""
+
+    provider: str = "gemini"
+    api_key: str               # the USER's own key — used per-request, never stored
+    model: str = "gemini-2.5-flash"
+    page_from: int | None = None
+    page_to: int | None = None
+
+
+class BatchStatusRequest(BaseModel):
+    batch_name: str
+    api_key: str
+
+
+@app.post("/jobs/{job_id}/autoscan_batch")
+def autoscan_batch_submit(job_id: int, req: BatchScanRequest, request: Request) -> dict:
+    """Queue a Gemini Batch job that scans this job's UNVERIFIED pages (async, cheap).
+
+    Selects the pages with no verified record that the caller may edit, uploads them
+    as one batch, and records the batch name for polling. Nothing is written yet —
+    results are auto-applied when the batch finishes (see the status endpoint).
+    """
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="auto-scan requires DATABASE_URL")
+    if store.get(job_id) is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if req.provider != "gemini":
+        raise HTTPException(status_code=400, detail="batch auto-scan is Gemini-only")
+
+    from pipeline import autoscan
+    from pipeline.db import batches_repo, records_repo
+    from pipeline.llm import gemini_batch
+    from pipeline.llm.tasks import autoscan_prompt
+
+    user = getattr(request.state, "user", None)
+    existing = records_repo.list_by_job(DATABASE_URL, job_id)
+    by_page: dict[int, list[dict]] = {}
+    for r in existing:
+        p = r.get("page")
+        if p is not None:
+            by_page.setdefault(p, []).append(r)
+
+    system, prompt = autoscan_prompt()
+    items: list[dict] = []
+    for p in sorted(by_page):
+        if req.page_from is not None and p < req.page_from:
+            continue
+        if req.page_to is not None and p > req.page_to:
+            continue
+        if any(rr.get("review_status") == "verified" for rr in by_page[p]):
+            continue  # skip verified pages
+        if not _editable(user, job_id, p):
+            continue  # reviewers only their assignable pages
+        image_path = by_page[p][0].get("image_path") or ""
+        path = os.path.join(config.output_dir, "pages", os.path.basename(image_path))
+        if not image_path or not os.path.exists(path):
+            continue
+        with open(path, "rb") as fh:
+            png = fh.read()
+        items.append({"key": str(p), "image_png": autoscan.downscale_for_llm(png),
+                      "prompt": prompt, "system": system})
+    if not items:
+        raise HTTPException(status_code=400, detail="no unverified pages (with images) you can edit in that range")
+
+    model = req.model or "gemini-2.5-flash"
+    try:
+        batch_name = gemini_batch.submit_page_batch(req.api_key, model, items, f"autoscan-job-{job_id}")
+    except Exception as exc:  # noqa: BLE001 - clean error to the UI
+        raise HTTPException(status_code=502, detail=f"batch submit failed: {exc}") from exc
+    batches_repo.create(DATABASE_URL, job_id, batch_name, req.provider, model, len(items),
+                        (user or {}).get("id"))
+    logger.info("Job %d: submitted batch %s (%d pages, model=%s).", job_id, batch_name, len(items), model)
+    return {"ok": True, "batch_name": batch_name, "pages": len(items), "state": "submitted"}
+
+
+def _apply_batch_results(job_id: int, results: dict[str, str]) -> int:
+    """Write a finished batch's results as PENDING records (ascending page order)."""
+    from pipeline import autoscan
+    from pipeline.db import records_repo
+    from pipeline.llm.tasks import _parse_autoscan
+
+    existing = records_repo.list_by_job(DATABASE_URL, job_id)
+    by_page: dict[int, list[dict]] = {}
+    for r in existing:
+        p = r.get("page")
+        if p is not None:
+            by_page.setdefault(p, []).append(r)
+    prefix = records_repo.id_prefix(DATABASE_URL, job_id)
+    source_doc = existing[0].get("source_doc", "") if existing else ""
+
+    total = 0
+    for key in sorted(results, key=lambda k: int(k) if k.isdigit() else 1 << 30):
+        if not key.isdigit():
+            continue
+        page = int(key)
+        if records_repo.has_verified_on_page(DATABASE_URL, job_id, page):
+            continue  # verified since submit → don't touch
+        on_page = by_page.get(page, [])
+        image_path = on_page[0].get("image_path") if on_page else ""
+        path = os.path.join(config.output_dir, "pages", os.path.basename(image_path)) if image_path else ""
+        if not path or not os.path.exists(path):
+            continue
+        with open(path, "rb") as fh:
+            png = fh.read()
+        try:
+            width, height = autoscan.image_size(png)
+        except ValueError:
+            continue
+        entries = _parse_autoscan(results[key])
+        records, flags = autoscan.build_page_records(
+            entries, width, height, prefix, page, source_doc, image_path
+        )
+        created = records_repo.replace_page_pending(DATABASE_URL, job_id, page, records)
+        for rec, cont in zip(created, flags):
+            if not cont:
+                continue
+            head = records_repo.previous_entry_head(
+                DATABASE_URL, job_id, rec.get("page") or 0, rec.get("line_no") or 0
+            )
+            if head and head != rec["id"]:
+                records_repo.link_as_continuation(DATABASE_URL, job_id, rec["id"], head)
+        total += len(created)
+    return total
+
+
+@app.post("/jobs/{job_id}/autoscan_batch/status")
+def autoscan_batch_status(job_id: int, req: BatchStatusRequest, request: Request) -> dict:
+    """Poll a batch; on first success, auto-apply its results and mark it applied."""
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="auto-scan requires DATABASE_URL")
+    from pipeline.db import batches_repo
+    from pipeline.llm import gemini_batch
+
+    row = batches_repo.get_by_name(DATABASE_URL, job_id, req.batch_name)
+    if row is None:
+        raise HTTPException(status_code=404, detail="batch not found")
+    if row["state"] == "applied":
+        return {"state": "applied", "applied": True,
+                "created_entries": row["created_entries"], "pages": row["pages"]}
+
+    try:
+        st = gemini_batch.poll(req.api_key, req.batch_name)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"batch status failed: {exc}") from exc
+    state = st["state"]
+    if state in ("failed", "cancelled", "expired"):
+        batches_repo.set_state(DATABASE_URL, req.batch_name, state, st.get("error", ""))
+        return {"state": state, "applied": False, "error": st.get("error", "")}
+    if state != "succeeded":
+        batches_repo.set_state(DATABASE_URL, req.batch_name, state if state != "unknown" else "running")
+        return {"state": state, "applied": False}
+
+    try:
+        results = gemini_batch.fetch_results(req.api_key, req.batch_name)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"batch fetch failed: {exc}") from exc
+    created = _apply_batch_results(job_id, results)
+    batches_repo.mark_applied(DATABASE_URL, req.batch_name, created)
+    logger.info("Job %d: applied batch %s → %d entries.", job_id, req.batch_name, created)
+    return {"state": "applied", "applied": True, "created_entries": created, "pages": row["pages"]}
+
+
+@app.get("/jobs/{job_id}/autoscan_batch")
+def autoscan_batch_list(job_id: int) -> dict:
+    """List this job's batch auto-scans (for the resume UI)."""
+    if not DATABASE_URL:
+        return {"batches": []}
+    from pipeline.db import batches_repo
+
+    return {"batches": batches_repo.list_for_job(DATABASE_URL, job_id)}
+
+
 def _poll_result(rid: int, kind: str) -> dict:
     job = store.get(rid)
     if job is None or job.kind != kind:
