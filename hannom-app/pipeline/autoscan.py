@@ -20,6 +20,14 @@ def _num(v):
         return None
 
 
+def _int_or(v, default: int) -> int:
+    """Parse an int (handles '12', 12.0, ' 12 '); ``default`` if not parseable."""
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def image_size(data: bytes) -> tuple[int, int]:
     """(width, height) of a page image WITHOUT Pillow (the app image has no PIL).
 
@@ -86,6 +94,9 @@ def build_page_records(
         if not (han or meaning or han_box or viet_box):
             continue  # nothing usable — skip malformed entry
         line_no += 1
+        # Prefer the catalogue number the model read from the left of the entry;
+        # fall back to the sequential position if it's missing/unparseable.
+        entry_no = _int_or(e.get("entry_no"), line_no)
         meta_in = e.get("meta") or {}
         entry_meta = {k: str(meta_in.get(k, "") or "").strip() for k in _META_KEYS}
         records.append({
@@ -93,7 +104,7 @@ def build_page_records(
             "source_doc": source_doc,
             "page": page,
             "line_no": line_no,
-            "entry_no": line_no,
+            "entry_no": entry_no,
             "han": han,
             "han_raw": han,
             "han_conf": [],

@@ -160,18 +160,25 @@ def llm_ocr(
 
 _AUTOSCAN_SYSTEM = (
     "You are an OCR + layout analyser for a page from a Nguyễn-dynasty Châu bản "
-    "'Mục lục' (catalogue). The page is a two-column parallel list: each entry has "
-    "a block of Hán (Classical Chinese, Traditional script) and, beside it, its "
-    "Vietnamese (Quốc-ngữ, Latin) translation. Segment the page into entries in "
-    "natural reading order (top→bottom). For EACH entry give the bounding box of the "
-    "Hán block and the bounding box of its parallel Vietnamese block, plus the exact "
-    "transcription of each. Rules:\n"
-    "1. Bounding boxes are normalized to 0–1000 as [ymin, xmin, ymax, xmax].\n"
+    "'Mục lục' (catalogue). The page lists entries; each entry has a block of Hán "
+    "(Classical Chinese, Traditional script) and, beside it, its Vietnamese "
+    "(Quốc-ngữ, Latin) translation. Layout:\n"
+    "- Ignore the page header/title. The entry list begins BELOW the 'TRÍCH YẾU' "
+    "column heading — every bounding box you return MUST lie below that heading "
+    "(never include the header area).\n"
+    "- Each entry starts with its entry number (Bài số) printed on the LEFT, usually "
+    "on or just above the line carrying the metadata (Ngày / Tờ-Tập / Loại / Xuất xứ "
+    "/ Đề tài). Read that number as the entry's entry_no.\n"
+    "Segment the page into entries in natural reading order (top→bottom). For EACH "
+    "entry return its entry_no, the bounding box of the Hán block and of its parallel "
+    "Vietnamese block, and the exact transcription of each. Rules:\n"
+    "1. Bounding boxes are normalized to 0–1000 as [ymin, xmin, ymax, xmax] and must "
+    "start below the 'TRÍCH YẾU' heading.\n"
     "2. Transcribe text exactly as written — do NOT translate, interpret, or fix "
     "spelling; replace an unreadable character with □.\n"
-    "3. Mark is_continuation=true when an entry is the tail of a bài that began "
-    "above/on the previous page (i.e. it has no fresh entry number and continues the "
-    "prior entry). Otherwise false.\n"
+    "3. Mark is_continuation=true when an entry has NO number of its own and "
+    "continues the previous entry (e.g. a bài whose text carries over from the "
+    "previous page); leave its entry_no null. Otherwise false.\n"
     "4. meta: fill Ngày/Tờ-Tập/Loại/Xuất xứ/Đề tài from the Vietnamese if present, "
     "else empty strings.\n"
     "5. Return ONLY valid JSON, no prose."
@@ -207,8 +214,10 @@ def autoscan_page(
     converts boxes to pixels and writes pending records.
     """
     prompt = (
-        "Analyse this full catalogue page. Return JSON exactly of the form:\n"
-        '{"entries": [{"han_box": [ymin,xmin,ymax,xmax], '
+        "Analyse this full catalogue page (entries are BELOW the 'TRÍCH YẾU' "
+        "heading). Return JSON exactly of the form:\n"
+        '{"entries": [{"entry_no": <number on the left, or null>, '
+        '"han_box": [ymin,xmin,ymax,xmax], '
         '"viet_box": [ymin,xmin,ymax,xmax], "han": "<Hán as written>", '
         '"vietnamese": "<Vietnamese as written, with diacritics>", '
         '"is_continuation": false, "meta": {"ngay": "", "to_tap": "", "loai": "", '

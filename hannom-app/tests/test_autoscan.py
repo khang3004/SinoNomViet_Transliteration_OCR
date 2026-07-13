@@ -68,6 +68,18 @@ def test_build_page_records_boxes_and_metadata():
     assert recs[0]["source_of"]["han"] == "llm_autoscan"
 
 
+def test_build_page_records_uses_model_entry_no_with_fallback():
+    entries = [
+        {"entry_no": 42, "han": "甲", "han_box": [0, 0, 10, 10]},
+        {"entry_no": None, "is_continuation": True, "han": "乙", "han_box": [10, 0, 20, 10]},
+        {"han": "丙", "han_box": [20, 0, 30, 10]},  # missing entry_no -> sequential
+    ]
+    recs, flags = autoscan.build_page_records(entries, 100, 100, "HVB_001", 3, "d", "p.png")
+    assert [r["entry_no"] for r in recs] == [42, 2, 3]  # model number, else position
+    assert [r["line_no"] for r in recs] == [1, 2, 3]
+    assert flags == [False, True, False]
+
+
 def test_build_page_records_skips_empty_entries():
     entries = [{"han": "", "vietnamese": "", "han_box": None, "viet_box": None},
                {"han": "有", "vietnamese": "", "han_box": [0, 0, 10, 10]}]
