@@ -158,6 +158,73 @@ def llm_ocr(
     return _parse_enhance(raw)
 
 
+_AUTOSCAN_SYSTEM = (
+    "You are an OCR + layout analyser for a page from a Nguyễn-dynasty Châu bản "
+    "'Mục lục' (catalogue). The page is a two-column parallel list: each entry has "
+    "a block of Hán (Classical Chinese, Traditional script) and, beside it, its "
+    "Vietnamese (Quốc-ngữ, Latin) translation. Segment the page into entries in "
+    "natural reading order (top→bottom). For EACH entry give the bounding box of the "
+    "Hán block and the bounding box of its parallel Vietnamese block, plus the exact "
+    "transcription of each. Rules:\n"
+    "1. Bounding boxes are normalized to 0–1000 as [ymin, xmin, ymax, xmax].\n"
+    "2. Transcribe text exactly as written — do NOT translate, interpret, or fix "
+    "spelling; replace an unreadable character with □.\n"
+    "3. Mark is_continuation=true when an entry is the tail of a bài that began "
+    "above/on the previous page (i.e. it has no fresh entry number and continues the "
+    "prior entry). Otherwise false.\n"
+    "4. meta: fill Ngày/Tờ-Tập/Loại/Xuất xứ/Đề tài from the Vietnamese if present, "
+    "else empty strings.\n"
+    "5. Return ONLY valid JSON, no prose."
+)
+
+
+def _parse_autoscan(raw: str) -> list[dict]:
+    """Parse the auto-scan reply into a list of entry dicts (lenient)."""
+    import json
+    import re
+
+    s = re.sub(r"```(?:json)?|```", "", raw or "").strip()
+    m = re.search(r"\{.*\}", s, re.DOTALL) or re.search(r"\[.*\]", s, re.DOTALL)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(0))
+    except Exception:  # noqa: BLE001 - not valid JSON
+        return []
+    entries = data.get("entries") if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        return []
+    return [e for e in entries if isinstance(e, dict)]
+
+
+def autoscan_page(
+    provider: str, api_key: str, page_image: bytes, model: str | None = None,
+) -> list[dict]:
+    """Send a WHOLE page image to a vision LLM; return a list of entry dicts.
+
+    Each entry: ``{han_box, viet_box (0–1000 [ymin,xmin,ymax,xmax]), han,
+    vietnamese, is_continuation, meta}``. Used by the job auto-scan; the caller
+    converts boxes to pixels and writes pending records.
+    """
+    prompt = (
+        "Analyse this full catalogue page. Return JSON exactly of the form:\n"
+        '{"entries": [{"han_box": [ymin,xmin,ymax,xmax], '
+        '"viet_box": [ymin,xmin,ymax,xmax], "han": "<Hán as written>", '
+        '"vietnamese": "<Vietnamese as written, with diacritics>", '
+        '"is_continuation": false, "meta": {"ngay": "", "to_tap": "", "loai": "", '
+        '"xuat_xu": "", "de_tai": ""}}]}\n'
+        "One object per entry, in reading order. Boxes normalized to 0–1000."
+    )
+    try:
+        raw = llm.complete_vision(
+            provider, prompt, [page_image], api_key=api_key, model=model, system=_AUTOSCAN_SYSTEM
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("LLM auto-scan failed (provider=%s).", provider)
+        raise
+    return _parse_autoscan(raw)
+
+
 def vision_read_han(
     provider: str,
     api_key: str,

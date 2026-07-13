@@ -965,6 +965,85 @@ def llm_ocr_route(job_id: int, req: LlmOcrRequest) -> dict:
         raise HTTPException(status_code=400, detail=f"LLM OCR failed: {exc}") from exc
 
 
+class AutoscanRequest(BaseModel):
+    """AI auto-scan one page: LLM reads the whole page → pending records."""
+
+    page: int
+    provider: str = "gemini"
+    api_key: str               # the USER's own key — used per-request, never stored
+    model: str | None = None
+    image_path: str = ""       # optional; else resolved from a record on the page
+
+
+@app.post("/jobs/{job_id}/autoscan_page")
+def autoscan_page_route(job_id: int, req: AutoscanRequest, request: Request) -> dict:
+    """LLM reads a WHOLE page → writes (or replaces non-verified) PENDING records.
+
+    Segments the page into entries with Hán+Việt boxes, OCR text, continuation
+    links and best-effort metadata. Records are left unverified for a human. Pages
+    that already have any verified entry are skipped. Uses the reviewer's own key.
+    """
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="auto-scan requires DATABASE_URL")
+    if store.get(job_id) is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    _require_can_edit(request, job_id, req.page)
+
+    from pipeline.db import records_repo
+
+    if records_repo.has_verified_on_page(DATABASE_URL, job_id, req.page):
+        return {"ok": True, "page": req.page, "skipped": True, "reason": "verified",
+                "created": 0, "records": []}
+
+    existing = records_repo.list_by_job(DATABASE_URL, job_id)
+    on_page = [r for r in existing if r.get("page") == req.page]
+    image_path = os.path.basename(req.image_path) if req.image_path else (
+        (on_page[0].get("image_path") if on_page else "") or "")
+    if not image_path:
+        raise HTTPException(status_code=400, detail="no page image for this page")
+    path = os.path.join(config.output_dir, "pages", image_path)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="page image not found")
+    with open(path, "rb") as fh:
+        png = fh.read()
+
+    import io
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(png)) as im:
+        width, height = im.size
+    source_doc = existing[0].get("source_doc", "") if existing else ""
+    prefix = records_repo.id_prefix(DATABASE_URL, job_id)
+
+    from pipeline import autoscan
+    from pipeline.llm.tasks import autoscan_page as run_autoscan
+
+    try:
+        entries = run_autoscan(req.provider, req.api_key, autoscan.downscale_for_llm(png), req.model)
+    except Exception as exc:  # noqa: BLE001 - clean error to the UI
+        raise HTTPException(status_code=400, detail=f"auto-scan failed: {exc}") from exc
+
+    records, flags = autoscan.build_page_records(
+        entries, width, height, prefix, req.page, source_doc, image_path
+    )
+    created = records_repo.replace_page_pending(DATABASE_URL, job_id, req.page, records)
+    # Link continuations from READING ORDER (never trust an LLM-provided id): each
+    # flagged entry attaches to the entry before it, resolved to a real head.
+    for rec, cont in zip(created, flags):
+        if not cont:
+            continue
+        head = records_repo.previous_entry_head(
+            DATABASE_URL, job_id, rec.get("page") or 0, rec.get("line_no") or 0
+        )
+        if head and head != rec["id"]:
+            records_repo.link_as_continuation(DATABASE_URL, job_id, rec["id"], head)
+
+    result = [r for r in records_repo.list_by_job(DATABASE_URL, job_id) if r.get("page") == req.page]
+    logger.info("Job %d: auto-scanned page %d → %d record(s).", job_id, req.page, len(created))
+    return {"ok": True, "page": req.page, "skipped": False, "created": len(created), "records": result}
+
+
 def _poll_result(rid: int, kind: str) -> dict:
     job = store.get(rid)
     if job is None or job.kind != kind:

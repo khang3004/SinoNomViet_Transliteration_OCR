@@ -157,6 +157,14 @@ worker (and written as a JSONL artifact). Each record carries `han`, `meaning`,
     regions). Providers: **gemini, openai, anthropic** (vision) and **deepseek**
     (text only — the 👁 button is disabled for it). Anthropic vision uses
     `claude-3-5-sonnet`.
+- **🤖 AI auto-scan (bring-your-own-key)** — in a job's review toolbar, pick a page
+  range and let a vision LLM read **whole pages**: it places the Hán + Việt boxes,
+  OCRs both, detects **continuations** (page breaks), and fills best-effort metadata.
+  Results are written as **pending** records (the verify tick stays off) for a human
+  to check. On a page with no verified entries it **replaces** the non-verified
+  records; pages with any verified entry are **skipped**. Continuation links are
+  derived from reading order (never from an LLM-supplied id), so re-running is safe.
+  Gemini gives the best box accuracy.
 - **Spanning entries (page breaks)** — a bài whose text continues on the next page:
   select the continuation → **"⤷ mark as continuation of previous entry"**. Parts
   keep their own boxes but **merge into one entry** for export and counting
@@ -233,6 +241,7 @@ Public: `/`, `/healthz`, `/auth/login`, `/auth/logout`, static assets.
 - `POST /jobs/{id}/record` (edit/verify) · `/record/new` · `/record/delete`
 - `POST /jobs/{id}/record/link` · `/record/unlink` — spanning-entry links
 - `POST /jobs/{id}/reocr` + `GET /reocr/{rid}` — re-OCR a box
+- `POST /jobs/{id}/autoscan_page` — AI auto-scan one page → pending records (BYO key)
 - `GET /pages/{filename}` — a rendered page image
 
 **LLM (bring-your-own-key)**

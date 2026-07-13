@@ -115,6 +115,44 @@ def insert_many(dsn: str, job_id: int, records: list[dict]) -> int:
     return len(records)
 
 
+def has_verified_on_page(dsn: str, job_id: int, page: int) -> bool:
+    """True if any record on (job, page) is verified — auto-scan skips such pages."""
+    with connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM records WHERE job_id=%s AND page=%s "
+            "AND review_status='verified' LIMIT 1",
+            (job_id, page),
+        ).fetchone()
+    return row is not None
+
+
+def replace_page_pending(dsn: str, job_id: int, page: int, records: list[dict]) -> list[dict]:
+    """Atomically replace a page's NON-verified records with ``records``.
+
+    Deletes only ``review_status <> 'verified'`` rows on the page (verified/human
+    work is never touched), then inserts the new records. Returns the inserted
+    dicts in order. Used by AI auto-scan.
+    """
+    now = time.time()
+    cols = _COLUMNS + ["job_id", "created_at"]
+    placeholders = ", ".join(["%s"] * len(cols))
+    sql = f"INSERT INTO records ({', '.join(cols)}) VALUES ({placeholders}) RETURNING *"
+    out: list[dict] = []
+    with connect(dsn) as conn:
+        conn.execute(
+            "DELETE FROM records WHERE job_id=%s AND page=%s AND review_status <> 'verified'",
+            (job_id, page),
+        )
+        with conn.cursor() as cur:
+            for rec in records:
+                row = _rec_to_row(job_id, rec)
+                vals = [_wrap(c, row[c]) for c in _COLUMNS] + [job_id, now]
+                cur.execute(sql, vals)
+                out.append(_row_to_dict(cur.fetchone()))
+        conn.commit()
+    return out
+
+
 def list_by_job(dsn: str, job_id: int) -> list[dict]:
     """All records for a job, in reading order (page, then line)."""
     with connect(dsn) as conn:

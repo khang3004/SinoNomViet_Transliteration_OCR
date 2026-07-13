@@ -152,6 +152,16 @@
           <button class="ghost" id="draw-vi-btn" onclick="toggleDraw('meaning')">🖊 Draw Việt</button>
           <span class="muted" id="draw-hint">Click a box to edit · drag its handles to resize · drag body to move</span>
         </div>
+        <div class="toolbar" id="autoscan-bar" style="margin-top:0.3rem">
+          <button class="blue" id="btn-autoscan" onclick="autoScan()" title="Let the LLM read whole pages: place Hán+Việt boxes, OCR, and detect continuations. Records are left UNVERIFIED for you to check. Gemini gives the best boxes.">🤖 AI auto-scan</button>
+          <span class="muted" style="font-size:0.78rem">pages
+            <input type="number" id="as-from" min="1" style="width:64px;padding:0.2rem" title="from page (Trang số)" />
+            →
+            <input type="number" id="as-to" min="1" style="width:64px;padding:0.2rem" title="to page (Trang số)" />
+          </span>
+          <button class="ghost" id="btn-autoscan-stop" onclick="stopAutoScan()" style="display:none">■ Stop</button>
+          <span class="muted" id="autoscan-status" style="font-size:0.78rem"></span>
+        </div>
         <div class="legend">
           <span class="sw" style="background:rgba(179,18,42,.85)"></span>Hán
           <span class="sw" style="background:rgba(21,101,192,.85)"></span>Việt
@@ -252,6 +262,11 @@
       R = { jobId: id, records: j.records || [], pages: [], page: null, selId: null, img: null, wrap: null, drawMode: false };
       R.pages = [...new Set(R.records.map(r => r.page))].sort((a, b) => a - b);
       R.page = R.pages[0]; renderPageSelector(); renderPage();
+      if (R.pages.length) {  // default the auto-scan range to the whole job
+        document.getElementById('as-from').value = R.pages[0];
+        document.getElementById('as-to').value = R.pages[R.pages.length - 1];
+      }
+      document.getElementById('autoscan-status').textContent = '';
     }
     function closeReview() { document.getElementById('review-card').style.display = 'none'; }
     function pageRecords() { return R.records.filter(r => r.page === R.page); }
@@ -550,6 +565,53 @@
         if (j.meaning) { document.getElementById('f-meaning').value = j.meaning; rec.meaning = j.meaning; }
       } catch (err) { alert('LLM OCR failed: ' + err); }
       btn.disabled = false; btn.textContent = label;
+    }
+
+    // ----- AI auto-scan: LLM reads whole pages -> pending records -----
+    let AUTOSCAN = { running: false, stop: false };
+    function stopAutoScan() { AUTOSCAN.stop = true; }
+    async function autoScan() {
+      if (AUTOSCAN.running) return;
+      const provider = document.getElementById('ai-provider').value || 'gemini';
+      if (window.PROVIDERS && window.PROVIDERS[provider] === false) {
+        alert(`${provider} has no image model. Pick Gemini (recommended), OpenAI, or Anthropic.`); return;
+      }
+      const api_key = (document.getElementById('ai-key').value || '').trim();
+      if (!api_key) { alert(`Paste your ${provider} API key (top-right of Review).`); return; }
+      const from = parseInt(document.getElementById('as-from').value), to = parseInt(document.getElementById('as-to').value);
+      if (!(from >= 1) || !(to >= from)) { alert('Enter a valid page range (from ≤ to).'); return; }
+      const pages = R.pages.filter(p => p >= from && p <= to);
+      if (!pages.length) { alert('No pages in that range for this job.'); return; }
+      if (!confirm(`Auto-scan ${pages.length} page(s) with ${provider}? This replaces non-verified records on those pages (verified pages are skipped). Records stay UNVERIFIED for your review.`)) return;
+
+      AUTOSCAN = { running: true, stop: false };
+      const btn = document.getElementById('btn-autoscan'), stopBtn = document.getElementById('btn-autoscan-stop'), st = document.getElementById('autoscan-status');
+      btn.disabled = true; stopBtn.style.display = ''; document.getElementById('btn-autoscan-stop').disabled = false;
+      const model = currentModel();
+      let done = 0, createdTotal = 0, skipped = 0, failed = 0;
+      for (const page of pages) {
+        if (AUTOSCAN.stop) break;
+        st.textContent = `Scanning page ${page} … (${done}/${pages.length} done · ${createdTotal} entries)`;
+        const image_path = (R.records.find(r => r.page === page) || {}).image_path || '';
+        try {
+          const res = await fetch(`/jobs/${R.jobId}/autoscan_page`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page, provider, api_key, model, image_path }) });
+          if (res.status === 403) { skipped++; }
+          else {
+            const j = await res.json();
+            if (!res.ok) { failed++; console.warn('autoscan page', page, j.detail || res.status); }
+            else if (j.skipped) { skipped++; }
+            else { createdTotal += (j.created || 0); }
+          }
+        } catch (err) { failed++; console.warn('autoscan page', page, err); }
+        done++;
+        await new Promise(s => setTimeout(s, 350));  // gentle on rate limits
+      }
+      st.textContent = `Done: ${done}/${pages.length} page(s) · ${createdTotal} entries` +
+        (skipped ? ` · ${skipped} skipped` : '') + (failed ? ` · ${failed} failed` : '') + (AUTOSCAN.stop ? ' · stopped' : '');
+      btn.disabled = false; stopBtn.style.display = 'none';
+      AUTOSCAN.running = false;
+      await reloadRecords();  // refresh boxes/records (new pending entries)
     }
 
     // ----- spanning entries: link a fragment to the previous entry -----
