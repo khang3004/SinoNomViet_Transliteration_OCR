@@ -91,15 +91,18 @@ migrations for additive changes).
 | `jobs` | the async work queue | `id, filename, input_path, status (pending\|running\|done\|failed), kind (extract\|reocr), output_path, error, payload, result` |
 | `records` | extracted entries (source of truth for the editor) | `human_id (e.g. HVB_001.001.01), job_id→jobs, page (Trang số), line_no, entry_no (Bài số), han, han_raw, meaning, entry_meta (jsonb), han_bbox/meaning_bbox (jsonb), review_status, reviewed_by→users, reviewed_at, part_of` |
 | `assignments` | per-reviewer page ranges | `id, user_id→users, job_id→jobs, page_start, page_end` |
+| `autoscan_batches` | Gemini Batch AI scan tracking | `id, job_id→jobs, batch_name, provider, model, state (submitted\|running\|succeeded\|failed\|applied\|cancelled\|expired), pages, created_entries, error, created_by, created_at, applied_at` |
 
-- `records.job_id` and `assignments.job_id` are **`ON DELETE CASCADE`** — deleting a
-  job removes its records + assignments automatically.
+- `records.job_id`, `assignments.job_id`, and `autoscan_batches.job_id` are
+  **`ON DELETE CASCADE`** — deleting a job removes its records + assignments +
+  batch scans automatically.
 - `records.part_of` links a **spanning entry**'s continuation to its head (see §5).
 - Timestamps are epoch seconds (`double precision`) to match the code's `Job`/`Record`
   shapes.
 
 The queue and repositories live in `pipeline/db/` (`postgres_store.py`,
-`records_repo.py`, `users_repo.py`, `assignments_repo.py`, `corpus_repo.py`).
+`records_repo.py`, `users_repo.py`, `assignments_repo.py`, `corpus_repo.py`,
+`batches_repo.py`).
 `pipeline/jobstore/get_store(config)` returns the Postgres store when `DATABASE_URL`
 is set, else a SQLite store (dev/tests, no `psycopg` needed).
 
@@ -146,17 +149,20 @@ worker (and written as a JSONL artifact). Each record carries `han`, `meaning`,
   edit/verify their assigned pages (others are read-only). Reviewers also **only see
   the jobs they're assigned to**.
 - **Review editor** (`app/static/index.html`) — clickable/editable Hán + Việt boxes
-  over the page image (drag/resize/draw/delete), **re-OCR a box**, edit-in-place, a
-  verify checkbox that gates Save.
+  over the page image (drag/resize/draw/delete), **re-OCR Hán**, **re-OCR Việt**
+  (dedicated Vietnamese OCR engine), **Draw Hán** / **Draw Việt** (separate box
+  drawing for each column), edit-in-place, a verify checkbox that gates Save.
 - **LLM assist (bring-your-own-key)** — each reviewer pastes their **own** provider
   key in the UI; it is sent per-request and **never stored or logged**:
   - **AI-correct** — proofread the Hán using the Vietnamese as context.
   - **Translate** — Hán → modern Vietnamese.
-  - **👁 Vision** — draw a box → the browser crops it → the model **reads the Hán
-    straight from the image** + the current OCR text (great for missed/garbled
+  - **👁 LLM OCR (vision)** — draw a box → the browser crops it → the model **reads
+    the Hán straight from the image** + the current OCR text (great for missed/garbled
     regions). Providers: **gemini, openai, anthropic** (vision) and **deepseek**
-    (text only — the 👁 button is disabled for it). Anthropic vision uses
-    `claude-3-5-sonnet`.
+    (text only — the 👁 button is disabled for it).
+  - Default models per provider: **Gemini** `gemini-flash-latest`, **OpenAI** `gpt-5`,
+    **Anthropic** `claude-sonnet-4-6`, **DeepSeek** `deepseek-v4-flash`. The UI
+    offers a model picker with suggested alternatives for each provider.
 - **🤖 Batch AI scan (bring-your-own-key)** — in a job's review toolbar, queue a
   **Gemini Batch** job over the job's **unverified pages** (optional from→to range).
   Gemini reads each whole page asynchronously (minutes–hours, ~50% cheaper, no
@@ -168,7 +174,8 @@ worker (and written as a JSONL artifact). Each record carries `han`, `meaning`,
   Continuation links are derived from reading order (never an LLM id), so re-running is
   safe. Only the batch **name** is persisted (never the key), so an in-flight batch is
   shown and resumes polling when the job is reopened. Default model
-  `gemini-2.5-flash`. (The interactive per-box **LLM OCR** stays synchronous.)
+  `gemini-flash-latest` (alias; `gemini-2.5-flash` also available). (The interactive
+  per-box **LLM OCR** stays synchronous.)
 - **Spanning entries (page breaks)** — a bài whose text continues on the next page:
   select the continuation → **"⤷ mark as continuation of previous entry"**. Parts
   keep their own boxes but **merge into one entry** for export and counting
@@ -205,7 +212,9 @@ worker (and written as a JSONL artifact). Each record carries `han`, `meaning`,
 | Reset a user's password | ✅ | ❌ |
 | Progress dashboard | ✅ | ❌ |
 | Corpus view (browse + read) | ✅ (+ per-member filter) | ✅ (whole corpus) |
-| LLM correct / translate / vision | ✅ (own key) | ✅ (own key) |
+| LLM correct / translate / LLM OCR | ✅ (own key) | ✅ (own key) |
+| Batch AI scan | ✅ (own key) | ✅ (own key) |
+| Sync to Google Sheets | ✅ | ❌ |
 
 Enforcement is server-side (`app/main.py` + `pipeline/db/assignments_repo.py`); the
 UI mirrors it (hidden controls, read-only editor, disabled buttons).
@@ -283,6 +292,8 @@ Set in `.env` (gitignored; template in `.env.example`). `docker-compose.yml` bui
 | `OCR_LANG` | `chinese_cht` (Traditional — best for Sino-Nom) |
 | `PDF_DPI` | render DPI (default 300; lower = faster/smaller, less accurate) |
 | `TRANSLATE_BACKEND` / `CORRECT_BACKEND` | **`skip`** for this setup (per-user LLM keys do this in the app; `api` would demand a server `GOOGLE_API_KEY`) |
+| `TRANSLATE_MODEL` / `CORRECT_MODEL` | Gemini model for server-side translate/correct when `=api` (default `gemini-flash-latest`) |
+| `OCR_LANG_VN` | Vietnamese OCR language code for Re-OCR Việt (default `vi`) |
 | `WORKER_POLL_S` | queue poll interval (default 2s) |
 | `GOOGLE_SHEET_ID` | target spreadsheet id for the Corpus "Sync sheet" export (optional) |
 | `GOOGLE_SHEETS_CREDENTIALS_B64` | service-account JSON, base64-encoded (or `GOOGLE_SHEETS_CREDENTIALS_FILE` = mounted path) |
@@ -354,18 +365,32 @@ use a GPU to speed it up.
 
 ## 12. Development
 
-- **Repo layout**: `pipeline/` (shared: layouts, ocr, db, llm, runner, schema),
-  `app/` (FastAPI + static UI), `worker/` (queue loop), `tests/`, `docs/`.
-- **Tests**: `pytest` (31 tests — two_column extraction, jobstore, registries,
-  translate, quality/regression). Run: `pytest -o addopts=""` (repo pins `--cov`).
-  Tests use the SQLite store + mock fixtures, so **no Postgres/OCR needed**.
+- **Repo layout**: `pipeline/` (shared: layouts, ocr, db, llm, runner, schema,
+  autoscan, sheets), `app/` (FastAPI + static UI), `worker/` (queue loop),
+  `tests/`, `docs/`.
+- **Tests**: `pytest` (48 tests — two_column extraction, jobstore, registries,
+  translate, quality/regression, autoscan, Gemini batch, Google Sheets export).
+  Run: `pytest -o addopts=""` (repo pins `--cov`). Tests use the SQLite store +
+  mock fixtures, so **no Postgres/OCR needed**.
+- **CI**: `.github/workflows/ci.yml` — ruff lint/format, mypy, pytest across
+  Python 3.10–3.12 with coverage.
 - **Two Python envs** (heavy OCR deps don't fit one): app deps in
   `requirements-app.txt` (fastapi, uvicorn, psycopg, PyJWT, bcrypt, LLM SDKs,
   httpx pinned); worker deps in `requirements-worker*.txt` (paddleocr, paddlepaddle
   CPU/GPU, pdfplumber, pdf2image, psycopg).
 - **LLM providers** (`pipeline/llm/`): `base.py` protocol (`complete` +
   `complete_vision` + `supports_vision`), `__init__.py` registry, one file per
-  vendor. Add a provider = new file + one `register(...)` call.
+  vendor (`gemini.py`, `openai_provider.py`, `anthropic_provider.py`,
+  `deepseek.py`). Add a provider = new file + one `register(...)` call.
+- **Gemini Batch** (`pipeline/llm/gemini_batch.py`): submit/poll/fetch for
+  asynchronous page scans via the Gemini Batch API.
+- **Autoscan helpers** (`pipeline/autoscan.py`): image size detection, bounding-box
+  conversion, record building for LLM full-page scans.
+- **Google Sheets export** (`pipeline/sheets/exporter.py`): builds 2 tabs
+  ("Hán–Việt" and "Chi tiết") from verified corpus data.
+- **SDK note**: the app uses `google-genai` (pinned `==1.38.0` to avoid an httpx
+  client-pooling regression in ≥1.39.0); the worker uses the older
+  `google-generativeai` package.
 
 ---
 
@@ -385,3 +410,9 @@ use a GPU to speed it up.
   the *previous* entry; verify the direction if an entry starts on the later page.
 - **GPU** is optional; CPU works everywhere but is the throughput bottleneck for the
   one-time bulk OCR.
+- **Batch AI scan is Gemini-only** — the asynchronous Batch API is only available
+  for Gemini; other providers use synchronous per-page scanning.
+- **Batch results are best-effort** — auto-applied as pending records; human
+  verification is still required.
+- **No batch cancellation UI** — batches run to completion; cancel only via the
+  Google Cloud console.

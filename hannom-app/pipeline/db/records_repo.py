@@ -302,18 +302,25 @@ def cascade_status_to_parts(
         return cur.rowcount
 
 
-def previous_entry_head(dsn: str, job_id: int, page: int, line_no: int) -> str | None:
+def previous_entry_head(
+    dsn: str, job_id: int, page: int, line_no: int, exclude_human_id: str | None = None,
+) -> str | None:
     """Head id of the entry immediately BEFORE (page, line_no) in reading order.
 
     Resolves through continuations so the returned id is always a head — so a bài
     spanning 3+ pages chains every part to the same head.
+
+    *exclude_human_id* prevents the record from matching itself (important for
+    newly-drawn boxes whose line_no is 0, which would otherwise match a peer on
+    the same page instead of crossing to the previous page).
     """
     with connect(dsn) as conn:
         row = conn.execute(
             "SELECT human_id, part_of FROM records "
-            "WHERE job_id=%s AND (page < %s OR (page = %s AND line_no < %s)) "
+            "WHERE job_id=%s AND human_id != %s "
+            "AND (page < %s OR (page = %s AND line_no < %s)) "
             "ORDER BY page DESC, line_no DESC, id DESC LIMIT 1",
-            (job_id, page, page, line_no),
+            (job_id, exclude_human_id or "", page, page, line_no),
         ).fetchone()
     if not row:
         return None

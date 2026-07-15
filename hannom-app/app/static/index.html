@@ -678,7 +678,18 @@
 
     function step(delta) {
       const recs = pageRecords(), i = recs.findIndex(r => r.id === R.selId), next = recs[i + delta];
-      if (next) selectRecord(next.id);
+      if (next) { selectRecord(next.id); return; }
+      // Cross page: go to next/prev page when at the edge of the current one.
+      const pi = R.pages.indexOf(R.page);
+      const nextPage = R.pages[pi + delta];
+      if (nextPage != null) {
+        gotoPage(nextPage);
+        // After page renders, select first or last record depending on direction.
+        setTimeout(() => {
+          const pr = pageRecords();
+          if (pr.length) selectRecord(delta > 0 ? pr[0].id : pr[pr.length - 1].id);
+        }, 100);
+      }
     }
 
     form.addEventListener('submit', async (e) => {

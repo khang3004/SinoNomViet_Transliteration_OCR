@@ -767,7 +767,8 @@ def link_record(job_id: int, req: LinkRecord, request: Request) -> dict:
         head_id = head.get("part_of") or req.head_id  # resolve to the true head
     else:
         head_id = records_repo.previous_entry_head(
-            DATABASE_URL, job_id, tail.get("page") or 0, tail.get("line_no") or 0
+            DATABASE_URL, job_id, tail.get("page") or 0, tail.get("line_no") or 0,
+            exclude_human_id=tail.get("human_id"),
         )
         if not head_id:
             raise HTTPException(status_code=400, detail="no previous entry to link to")
