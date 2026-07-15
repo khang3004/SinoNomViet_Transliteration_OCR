@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-bash "${ROOT}/dags/deploy_airflow.sh" upload

@@ -1,229 +1,269 @@
 # hvb-processing
 
-OCR pipeline: chạy nhiều model để compare hiệu suất, deploy DAG lên Airflow qua MinIO.
+Pipeline OCR Châu bản triều Nguyễn (Hán Nôm ↔ Quốc ngữ) trên **K3s + Airflow + MinIO + Qdrant**.
 
-## Structure
+Phiên bản hiện tại: **v2.2 — TOC/STT + refine/stitch/confidence**.
+
+Đơn vị lưu trữ nghiệp vụ là **STT** (số thứ tự mục trong sách), không phải “một trang = một đề tài”.
+
+---
+
+## `page_kind` là gì?
+
+`page_kind` bảo OCR biết **loại trang** đang xử lý để chọn đúng prompt + schema JSON.
+
+| Giá trị | Nghĩa | Dùng khi |
+|---------|--------|----------|
+| **`toc`** | *Table of Contents* = **mục lục / trích yếu** | Trang có nhiều mục `1.` `2.` `3.`, mỗi mục có Ngày / Tờ-Tập / Loại / Đề tài + khối TRÍCH YẾU 2 cột |
+| **`body`** | Trang **thân văn** (chiếu/sắc đầy đủ) | Một (hoặc ít) văn bản chạy dài; schema cũ `de_tai` + `blocks` |
+
+### Vì sao phải tách?
+
+Trang mục lục (vd. scan page 49) thường có **nhiều đề tài** trên cùng một trang.  
+Nếu OCR kiểu `body` (một field `de_tai` / trang), model hay **gộp 2–3 đề tài thành 1** → Qdrant cũng sai.
+
+Với `page_kind=toc`, output là:
+
+```json
+{
+  "page_type": "muc_luc",
+  "page_header": "MỤC LỤC CHÂU BẢN TRIỀU NGUYỄN",
+  "printed_page": 3,
+  "entries": [
+    { "stt": 1, "de_tai": "...", "trich_yeu": { "han_nom": "...", "quoc_ngu": "..." } },
+    { "stt": 2, "de_tai": "...", "trich_yeu": { "han_nom": "...", "quoc_ngu": "..." } }
+  ]
+}
+```
+
+- `page_header` — tiêu đề đầu trang  
+- `printed_page` — số in ở chân trang (khác `page_no` = số file scan)  
+- `entries[]` — mỗi STT một đề tài riêng  
+
+Alias tương đương `toc`: `muc_luc`, `catalog` (env `HVB_PAGE_KIND`).
+
+Smoke hiện tại **49–58** → luôn dùng **`page_kind=toc`** (mặc định pipeline).
+
+---
+
+## Luồng hiện tại (v2.2)
+
+```text
+preprocess → OCR(toc) → build_catalog → refine → stitch → index_catalog
+```
+
+- **confidence / flags** trên mỗi `stt_*.json` (`ocr_confidence`, `refine_confidence`, `flags`)
+- **refine** (DeepSeek): chỉ entry conf thấp / có cờ
+- **stitch**: nối entry cắt trang / trích yếu rỗng bằng context trang kế
+- **index**: bỏ entry rác / conf < `index_min_confidence` (mặc định 0.45)
+
+---
+
+## Thứ tự chạy DAG
+
+### A. Lần đầu / sau khi đổi schema TOC
+
+```text
+1. hvb_cleanup_toc_state_pipeline   # đã chạy sẵn khi migrate v2.2
+2. hvb_v2_full_pipeline             # preprocess→OCR→catalog→refine→stitch→index
+```
+
+Hoặc từng bước:
+
+```text
+1. hvb_opencv_preprocess_pages_pipeline
+2. hvb_ocr_v2_pages_pipeline          # page_kind=toc
+3. hvb_build_catalog_pipeline
+4. hvb_refine_entries_pipeline
+5. hvb_stitch_entries_pipeline
+6. hvb_index_catalog_qdrant_pipeline
+```
+
+### B. Re-OCR một vài trang (vd. 52)
+
+```text
+1. hvb_ocr_v2_pages_pipeline          # force=true, pages="52", page_kind=toc
+2. hvb_build_catalog_pipeline
+3. hvb_refine_entries_pipeline
+4. hvb_stitch_entries_pipeline
+5. hvb_index_catalog_qdrant_pipeline
+```
+
+### C. Full pipeline (một nút)
+
+DAG: **`hvb_v2_full_pipeline`**
+
+```
+preprocess → OCR(toc) → catalog → refine → stitch → index
+```
+
+Ví dụ conf:
+
+```json
+{
+  "doc_id": "hvb_base",
+  "pages": "49-58",
+  "page_kind": "toc",
+  "force": false,
+  "qdrant_recreate": false
+}
+```
+
+| Param | Ý nghĩa |
+|-------|---------|
+| `doc_id` | Tài liệu (`hvb_base`) |
+| `pages` | `49-58`, `52`, `1,3,5` — trống = theo manifest |
+| `page_kind` | `toc` (mục lục) hoặc `body` (thân văn) |
+| `force` | `true` = gọi lại API dù MinIO đã có artifact |
+| `qdrant_recreate` | `true` = xóa/tạo lại collection pairs trước khi index |
+
+---
+
+## State / skip API
+
+Nếu object đã có trên MinIO → **không gọi lại** preprocess / OCR / align (tiết kiệm quota).
+
+| Muốn | Cách |
+|------|------|
+| Chạy tiếp bình thường | `force=false` (mặc định) |
+| Re-OCR / re-preprocess | `force=true` hoặc env `HVB_FORCE=true` |
+| Xóa state sóng TOC rồi làm lại | `hvb_cleanup_toc_state_pipeline` |
+
+---
+
+## MinIO buckets (v2.1)
+
+| Bucket | Nội dung |
+|--------|----------|
+| `hvb-raw` | PDF split + manifest |
+| `hvb-preprocessed` | PNG sau OpenCV `{doc}/page_XXXX.png` |
+| `hvb-ocr` | JSON OCR trang (TOC: `entries[]`; body: `blocks`) |
+| `hvb-aligned` | JSON align (chỉ **body**) |
+| `hvb-catalog` | `{doc}/catalog.json` — danh sách STT |
+| `hvb-entries` | `{doc}/stt_NNNN.json` — entry theo số thứ tự |
+| `hvb-layout` | Dự phòng YOLO (chưa dùng) |
+
+---
+
+## Qdrant
+
+- Collection: `hvb_chau_ban_pairs`
+- TOC: **1 point / cặp trích yếu của 1 STT**
+- Payload quan trọng: `stt`, `entry_id`, `de_tai`, `page_no`, `printed_page`, `page_type`
+
+---
+
+## Danh sách DAG
+
+| DAG | Vai trò |
+|-----|---------|
+| `hvb_pdf_split_pipeline` | Tách PDF → pages + manifest |
+| `hvb_cleanup_toc_state_pipeline` | Dọn OCR/aligned/catalog/entries + recreate Qdrant |
+| `hvb_opencv_preprocess_pages_pipeline` | PDF page → PNG denoised |
+| `hvb_ocr_v2_pages_pipeline` | OCR Gemini (`page_kind=toc\|body`) |
+| `hvb_build_catalog_pipeline` | TOC OCR → catalog + `stt_*.json` (+ flags/confidence) |
+| `hvb_refine_entries_pipeline` | DeepSeek refine entry yếu / có cờ |
+| `hvb_stitch_entries_pipeline` | Nối cắt trang bằng OCR trang kế |
+| `hvb_index_catalog_qdrant_pipeline` | Entries sạch → Qdrant |
+| `hvb_v2_full_pipeline` | TOC end-to-end (kèm refine+stitch) |
+| `hvb_align_v2_pages_pipeline` | Align DeepSeek (**body only**) |
+| `hvb_index_pairs_qdrant_pipeline` | Index aligned pages (**body only**) |
+
+> Align / index_pairs **bỏ qua** trang `page_type=muc_luc` — dùng `build_catalog` + `index_catalog` thay thế.
+
+---
+
+## Cấu trúc repo
 
 ```text
 hvb-processing/
-├── data/
-│   ├── raw/          # PDF input (local dev)
-│   └── output/       # JSON OCR output (local dev)
 ├── dags/
-│   ├── config.ini.example   # template config (commit được)
-│   ├── config.ini           # config thật (không commit — xem .gitignore)
+│   ├── config.ini              # runtime (không commit secret)
 │   ├── deploy_airflow.sh
-│   ├── jobs/                # OCR logic + từng model
-│   └── pipelines/           # Airflow DAGs (file .py phẳng — KHÔNG đặt trong subfolder)
-│       ├── pdf_split_pipeline.py
-│       ├── ocr_paddle_pipeline.py
-│       ├── ocr_kandianguji_pipeline.py
-│       ├── ocr_google_vision_pipeline.py
-│       ├── ocr_chatgpt_pipeline.py
-│       ├── ocr_gemini_pipeline.py
-│       └── ocr_compare_pipeline.py
-└── scripts/
-    ├── upload_hvb_base.sh
-    ├── read_ocr_results.sh
-    ├── deploy_paddle_ocr.sh
-    ├── setup_ocr_secrets.sh
-    └── deploy.sh
-├── services/
-│   └── paddle_ocr/          # PaddleOCR microservice (FastAPI)
-└── k8s/
-    └── paddle-ocr.yaml
+│   ├── jobs/                   # runners + common/
+│   └── pipelines/              # Airflow DAG .py (phẳng, không subfolder)
+└── scripts/                    # upload / init Qdrant / secrets
 ```
 
-## `config.ini.example` là gì?
-
-Đây là **file mẫu** để bạn tạo config thật:
+Deploy code lên Airflow:
 
 ```bash
-cp dags/config.ini.example dags/config.ini
-# rồi sửa access_key, endpoint... theo môi trường của bạn
-```
-
-| File | Commit git? | Mục đích |
-|------|-------------|----------|
-| `config.ini.example` | Có | Template, không chứa secret thật — chia sẻ trong team |
-| `config.ini` | Không | Config chạy thật trên máy/pod Airflow |
-
-Khi deploy, `config.ini` được upload lên MinIO cùng DAG code để pod Airflow đọc được.
-
-## Quick Start
-
-```bash
-cp dags/config.ini.example dags/config.ini
-pip install -r dags/requirements.txt
-# bỏ PDF vào data/raw/ rồi đồng bộ lên MinIO source
-bash scripts/upload_hvb_base.sh          # chỉ upload source PDFs -> hvb-raw/hvb_base/source
-bash scripts/run_split.sh                 # upload source + split từ MinIO -> pages + manifest
-bash scripts/run_batch.sh paddle          # 1 model
-bash scripts/run_local.sh                 # compare tất cả model
-```
-
-## Deploy Airflow
-
-```text
-MinIO:  airflow/dags/hvb-processing/
-Pod:    /opt/airflow/dags/hvb-processing/
-```
-
-```bash
+export KUBECONFIG=~/.kube/config.k3s-new   # nếu cần
 bash dags/deploy_airflow.sh upload
-# hoặc
-bash scripts/deploy.sh
 ```
 
-Script `deploy_airflow.sh` mirror toàn bộ `dags/` lên MinIO và **xóa DAG cũ** không còn trong repo (ví dụ `hvb_ocr_batch_pipeline`).
+DAGs sync từ MinIO: `airflow/dags/hvb-processing/`.
 
-## Airflow DAGs
+---
 
-| DAG | Mô tả |
-|-----|--------|
-| `hvb_pdf_split_pipeline` | Đọc PDF từ `hvb-raw/hvb_base/source`, tách trang và ghi `pages + manifest` |
-| `hvb_ocr_paddle_pages_pipeline` | OCR Paddle từng trang → `ocr/paddle/{doc_id}/page_XXXX.json` (K8s pod) |
-| `hvb_ocr_gemini_pages_pipeline` | OCR Gemini từng trang → `ocr/gemini/{doc_id}/page_XXXX.json` (K8s pod) |
-| `hvb_index_qdrant_pipeline` | Index JSON từ MinIO → Qdrant (`model_folder`: `paddle` hoặc `gemini`) |
-| `hvb_ocr_paddle_pipeline` | OCR Paddle (legacy batch, 1 file/doc) |
-| `hvb_ocr_kandianguji_pipeline` | OCR với KanDianGuJi |
-| `hvb_ocr_google_vision_pipeline` | OCR với Google Vision |
-| `hvb_ocr_chatgpt_pipeline` | OCR với ChatGPT Vision |
-| `hvb_ocr_gemini_pipeline` | OCR Gemini (legacy batch, 1 file/doc) |
-| `hvb_ocr_compare_pipeline` | (Tuỳ chọn) Compare nhiều model cùng lúc |
-
-Mỗi model có **file pipeline riêng** trong `dags/pipelines/` (cùng cấp với `pdf_split_pipeline.py`).
-
-> **Lưu ý:** Airflow cluster này **không quét DAG trong subfolder** `pipelines/ocr/`. Không tạo `pipelines/__init__.py`.
-
-### Hybrid Paddle + Gemini (khuyến nghị)
-
-1. **Paddle** — thân bản Hán Nôm: `hvb_ocr_paddle_pages_pipeline`
-2. **Gemini** — mục lục/metadata Latin: `hvb_ocr_gemini_pages_pipeline`
-3. **Index** — chạy `hvb_index_qdrant_pipeline` hai lần với `model_folder` khác nhau:
-
-```json
-{"doc_id":"hvb_base","model_folder":"paddle","pages":"11-1216"}
-{"doc_id":"hvb_base","model_folder":"gemini","pages":"1-10"}
-```
-
-MinIO paths: `ocr/paddle/...` và `ocr/gemini/...` — cùng collection Qdrant, point ID tách theo `model_name`.
-
-### Trigger trên Airflow UI
-
-1. `hvb_pdf_split_pipeline` — tách trang
-2. Một trong các DAG OCR, ví dụ `hvb_ocr_gemini_pipeline`
-3. Param `upload_minio` (mặc định `true`) nếu form hiện khi Trigger
-
-**Chọn trang / tài liệu** (params khi Trigger):
-
-| Param | Ví dụ | Ý nghĩa |
-|-------|-------|---------|
-| `doc_id` | `hvb_base` | Chỉ OCR 1 tài liệu |
-| `pages` | `1` | Chỉ trang 1 |
-| `pages` | `1,3,5` | Các trang cụ thể |
-| `pages` | `1-10` | Trang 1 đến 10 |
-| (trống) | | Tất cả trang |
-
-JSON kết quả khi chọn trang: `hvb_base_gemini_p1-3.json` (không ghi đè file full).
-
-Trigger w/ config ví dụ:
-```json
-{"doc_id": "hvb_base", "pages": "1-5", "upload_minio": true}
-```
-
-Compare nhiều model: `hvb_ocr_compare_pipeline` với `models=paddle,gemini,...`
-
-## OCR Models (đã tích hợp)
-
-| Model | Cách chạy trên K3s | Cần chuẩn bị |
-|-------|-------------------|--------------|
-| Gemini | Gọi API từ Airflow pod | `gemini.api_key` hoặc `HVB_GEMINI_API_KEY` |
-| ChatGPT | Gọi API từ Airflow pod | `openai.api_key` hoặc `HVB_OPENAI_API_KEY` |
-| Google Vision | Gọi API từ Airflow pod | GCP service account JSON |
-| PaddleOCR | Microservice riêng `hvb-paddle-ocr` | Deploy `scripts/deploy_paddle_ocr.sh` |
-| KanDianGuJi | HTTP API tương thích `POST /ocr` | `kandianguji.service_url` + `api_key` |
-
-### Setup lần đầu
+## Setup nhanh
 
 ```bash
-# 1. Cập nhật config (copy section mới từ config.ini.example)
-cp dags/config.ini.example dags/config.ini   # nếu chưa có
-# điền api_key / service_url trong config.ini
-
-# 2. Cài dependencies trên Airflow (restart scheduler)
-bash dags/patch_airflow_hvb_requirements.sh
-
-# 3. Deploy DAG code + config.ini lên MinIO
-bash dags/deploy_airflow.sh upload
-
-# 4. (Tuỳ chọn) Deploy PaddleOCR service — không cần Docker trên Mac:
-bash scripts/deploy_paddle_ocr_k3s.sh          # CPU, 1 replica
-bash scripts/deploy_paddle_ocr_k3s.sh --gpu    # GPU, 2 replicas (load-balance 2 node)
-# Hoặc build image Docker (cần Docker Desktop): bash scripts/deploy_paddle_ocr.sh
-
-# 5. Tạo K8s secret cho Gemini (bắt buộc cho gemini_pages pipeline)
-export GEMINI_API_KEY=your-key
+# 1. Config + secret API (Ramclouds / Gemini)
+cp dags/config.ini.example dags/config.ini   # nếu có example
+export GEMINI_OPENCV_API_KEY='sk-...'
 bash scripts/setup_ocr_secrets.sh
+
+# 2. Upload PDF nguồn + split (một lần)
+bash scripts/upload_hvb_base.sh
+# Airflow: hvb_pdf_split_pipeline
+
+# 3. Deploy DAG
+bash dags/deploy_airflow.sh upload
+
+# 4. Airflow: hvb_v2_full_pipeline
+# conf: {"doc_id":"hvb_base","pages":"49-58","page_kind":"toc"}
 ```
 
-### Chạy pipeline
+Config chính `[gemini_opencv]`, `[align]`, `[qdrant]`, `[pipeline]`:
 
-1. `bash scripts/upload_hvb_base.sh`
-2. Airflow: `hvb_pdf_split_pipeline`
-3. Airflow: `hvb_ocr_gemini_pipeline` (hoặc model khác)
-4. `bash scripts/read_ocr_results.sh download` → đọc JSON trong `data/output/`
+- `default_page_kind = toc`
+- `force_reprocess = false`
+- OCR model mặc định: `gemini-3.5-flash-low` (Ramclouds)
+- Align (body): `deepseek-v4-flash`
 
-### Đọc kết quả OCR
+Env ghi đè: `HVB_GEMINI_OPENCV_API_KEY`, `HVB_PAGE_KIND`, `HVB_FORCE`, `HVB_QDRANT_RECREATE`, …
 
-```bash
-bash scripts/read_ocr_results.sh list
-bash scripts/read_ocr_results.sh cat hvb_base_gemini.json
-bash scripts/read_ocr_results.sh download
+---
+
+## Entry schema (tóm tắt)
+
+`hvb-entries/hvb_base/stt_0001.json`:
+
+```json
+{
+  "entry_id": "hvb_base_stt_0001",
+  "stt": 1,
+  "chi_muc": {
+    "ngay_thang": "...",
+    "to_tap": "1/1",
+    "the_loai": "Chiếu",
+    "xuat_xu": "Đại Nội",
+    "de_tai": "Tập hợp con cháu trong họ."
+  },
+  "page_header": "MỤC LỤC CHÂU BẢN TRIỀU NGUYỄN",
+  "trich_yeu": { "han_nom": "...", "quoc_ngu": "..." },
+  "content_alignment": [ /* cặp từ trích yếu; body bổ sung sau */ ],
+  "source_pages": [{ "page_no": 49, "printed_page": 3, "page_type": "muc_luc" }],
+  "status": "catalog_only"
+}
 ```
 
-## Config (`dags/config.ini`)
+---
 
-| Section | Keys |
-|---------|------|
-| `[paths]` | `raw_dir`, `staging_dir`, `output_dir` |
-| `[minio]` | endpoint, credentials, buckets, prefixes |
-| `[gemini]` | `api_key`, `model` |
-| `[openai]` | `api_key`, `model` |
-| `[google_vision]` | `credentials_json` (hoặc env `GOOGLE_APPLICATION_CREDENTIALS`) |
-| `[paddle]` | `service_url` (mặc định `http://hvb-paddle-ocr.ocr.svc.cluster.local:8080`) |
-| `[kandianguji]` | `service_url`, `api_key` |
+## Roadmap ngắn
 
-Biến môi trường ghi đè config: `HVB_GEMINI_API_KEY`, `HVB_OPENAI_API_KEY`, ...
+| Wave | Việc |
+|------|------|
+| **A (đang làm)** | TOC `entries[]` → catalog theo STT → Qdrant |
+| **B** | OCR/align thân văn + assemble vào `stt_*.json` |
+| **C** | Stitch cắt trang + context trang trước (cùng STT) |
+| **D** | YOLO layout (sau khi annotate) |
 
-## Git policy for K3s deploy and secrets
+---
 
-### Nên commit lên git
+## Git / secrets
 
-- `k8s/*.yaml` (manifest deploy)
-- `scripts/deploy_*.sh`, `dags/deploy_airflow.sh` (runbook/deploy script)
-- `dags/config.ini.example` (template không chứa secret thật)
-
-Lý do: K3s đang chạy chỉ là runtime state; repo cần là source of truth để tái tạo môi trường.
-
-### Không commit lên git
-
-- `dags/config.ini`, `dags/config.k3s-new`
-- Bất kỳ file chứa API key/token/password
-- OCR output local, logs, temp files (`scripts/data/output/`, `*.log`, `tmp/`, ...)
-
-### API key có nên mã hóa trong repo không?
-
-Không nên lưu API key trong repo (kể cả mã hóa thủ công). Cách đúng:
-
-1. Lưu key ở môi trường runtime: K8s Secret hoặc env vars.
-2. Commit duy nhất file template (`config.ini.example`) với giá trị rỗng/placeholder.
-3. Dùng `scripts/setup_ocr_secrets.sh` để tạo/update secret trong cluster.
-
-Nếu bắt buộc chia sẻ secret trong git nội bộ, dùng công cụ quản lý secret chuyên dụng (`SOPS`, `Sealed Secrets`, `Vault`) thay vì tự mã hóa.
-
-### Nếu đã lỡ commit key thật
-
-1. Rotate/revoke key ngay ở nhà cung cấp.
-2. Xóa key khỏi code/config và cập nhật `.gitignore`.
-3. Rewrite git history để loại key khỏi commit cũ (`git filter-repo` hoặc BFG), sau đó push lại theo quy trình team.
+- Commit: code DAG, `config.ini.example`, scripts, k8s manifests  
+- Không commit: `config.ini` có key thật, kubeconfig, output OCR local  
+- API key → K8s Secret qua `scripts/setup_ocr_secrets.sh`

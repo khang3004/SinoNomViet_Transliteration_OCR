@@ -3,6 +3,11 @@ dags/config.ini
 dags/config.k3s-new
 .mc/
 
+# Local ops / service trees (not part of Airflow deploy) / Thư mục ops/service local (không deploy Airflow)
+scripts/
+services/
+k8s/
+
 # Python / Python cache
 __pycache__/
 *.pyc
@@ -12,8 +17,6 @@ __pycache__/
 data/raw/
 data/output/
 data/staging/
-scripts/data/output/
-scripts/data/staging/
 
 # Local environments and secrets / Môi trường local và secret
 .venv/

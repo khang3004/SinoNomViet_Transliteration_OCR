@@ -36,7 +36,6 @@ def get_minio_client(
 ) -> "Minio":
     # Create reusable MinIO client from config / Tạo MinIO client từ config
     try:
-        # Import lazily to avoid breaking DAG parsing / Import trễ để tránh vỡ DAG lúc parse
         from minio import Minio
     except ModuleNotFoundError as exc:
         raise RuntimeError(
@@ -67,31 +66,11 @@ def ensure_bucket(client: "Minio", bucket: str) -> None:
         client.make_bucket(bucket)
 
 
-def upload_output_dir(output_dir: str) -> list[str]:
-    # Upload all JSON outputs to configured MinIO bucket / Upload toàn bộ JSON output lên MinIO
-    cfg = load_config()
-    bucket = get_value(cfg, "minio", "bucket_output")
-    client = get_minio_client()
-    # Ensure target bucket once before batch upload / Đảm bảo bucket đích một lần trước khi upload hàng loạt
-    ensure_bucket(client, bucket)
-    local_root = Path(output_dir)
-    if not local_root.exists():
-        print(f"[minio] skip upload_output_dir: missing local dir {local_root}")
-        return []
-    uploaded: list[str] = []
-    for file_path in sorted(local_root.glob("*.json")):
-        object_name = f"ocr/{file_path.name}"
-        client.fput_object(bucket_name=bucket, object_name=object_name, file_path=str(file_path))
-        uploaded.append(f"{bucket}/{object_name}")
-    return uploaded
-
-
 def upload_files_with_prefix(
     bucket: str, local_dir: Path, object_prefix: str, glob_pattern: str
 ) -> list[str]:
     # Upload all files matching pattern under a MinIO prefix / Upload tất cả file theo pattern lên MinIO prefix
     client = get_minio_client()
-    # Ensure target bucket once before prefix upload / Đảm bảo bucket đích một lần trước khi upload theo prefix
     ensure_bucket(client, bucket)
     uploaded: list[str] = []
     for file_path in sorted(local_dir.glob(glob_pattern)):
@@ -101,27 +80,108 @@ def upload_files_with_prefix(
     return uploaded
 
 
-def ocr_page_object_key(model_folder: str, doc_id: str, page_no: int, prefix: str = "ocr") -> str:
-    # Build MinIO key for one OCR page JSON / Tạo object key MinIO cho JSON một trang OCR
+def v2_preprocessed_page_key(doc_id: str, page_no: int) -> str:
+    # v2 PNG key in hvb-preprocessed bucket / Key PNG v2 trong bucket hvb-preprocessed
+    return f"{doc_id}/page_{page_no:04d}.png"
+
+
+def v2_ocr_page_key(doc_id: str, page_no: int) -> str:
+    # v2 OCR JSON key in hvb-ocr bucket / Key JSON OCR v2 trong bucket hvb-ocr
+    return f"{doc_id}/page_{page_no:04d}.json"
+
+
+def v2_aligned_page_key(doc_id: str, page_no: int) -> str:
+    # v2 aligned JSON key in hvb-aligned bucket / Key JSON align v2 trong bucket hvb-aligned
+    return f"{doc_id}/page_{page_no:04d}.json"
+
+
+def v2_catalog_key(doc_id: str) -> str:
+    # Catalog JSON key (STT index) / Key JSON catalog theo STT
+    return f"{doc_id}/catalog.json"
+
+
+def v2_entry_key(doc_id: str, stt: int, tap_id: str | None = None) -> str:
+    """Entry JSON key scoped by tap_id (STT resets per volume).
+
+    Key JSON entry theo tap_id — STT reset mỗi tập.
+    """
+    if tap_id:
+        return f"{doc_id}/taps/{tap_id}/stt_{stt:04d}.json"
+    # Legacy path without tap / Path cũ khi chưa có tap
+    return f"{doc_id}/stt_{stt:04d}.json"
+
+
+def entry_object_key(doc_id: str, entry: dict) -> str:
+    # Resolve MinIO key from entry.tap / Suy ra key MinIO từ entry.tap
+    tap = entry.get("tap") if isinstance(entry, dict) else None
+    tap_id = None
+    if isinstance(tap, dict):
+        tap_id = tap.get("tap_id")
+    elif isinstance(entry, dict):
+        tap_id = entry.get("tap_id")
+    return v2_entry_key(doc_id, int(entry["stt"]), str(tap_id) if tap_id else None)
+
+
+def object_exists(bucket: str, object_name: str) -> bool:
+    # Check whether MinIO object already exists / Kiểm tra object MinIO đã tồn tại chưa
+    from minio.error import S3Error
+
+    client = get_minio_client()
+    try:
+        client.stat_object(bucket, object_name)
+        return True
+    except S3Error as exc:
+        if getattr(exc, "code", "") in {"NoSuchKey", "NoSuchBucket", "NotFound"}:
+            return False
+        # Some MinIO setups raise 404 without NoSuchKey / Một số MinIO trả 404 không kèm NoSuchKey
+        if "NoSuchKey" in str(exc) or "not found" in str(exc).lower():
+            return False
+        raise
+
+
+def delete_object(bucket: str, object_name: str) -> bool:
+    # Delete one object if present / Xóa một object nếu có
+    client = get_minio_client()
+    if not client.bucket_exists(bucket):
+        return False
+    if not object_exists(bucket, object_name):
+        return False
+    client.remove_object(bucket, object_name)
+    return True
+
+
+def delete_objects_with_prefix(bucket: str, prefix: str, suffix: str | None = None) -> int:
+    # Delete objects under prefix (optional suffix) / Xóa object theo prefix (tuỳ chọn lọc đuôi)
+    client = get_minio_client()
+    if not client.bucket_exists(bucket):
+        return 0
+    keys = list_objects_with_prefix(bucket=bucket, prefix=prefix, suffix=suffix)
+    for key in keys:
+        client.remove_object(bucket, key)
+    return len(keys)
+
+
+def preprocessed_page_object_key(doc_id: str, page_no: int, prefix: str | None = None) -> str:
+    # Build MinIO key for denoised page PNG / Tạo object key PNG trang đã lọc nhiễu
+    if prefix is None:
+        return v2_preprocessed_page_key(doc_id, page_no)
     normalized_prefix = prefix.strip("/")
-    return f"{normalized_prefix}/{model_folder}/{doc_id}/page_{page_no:04d}.json"
+    if not normalized_prefix:
+        return v2_preprocessed_page_key(doc_id, page_no)
+    return f"{normalized_prefix}/{doc_id}/page_{page_no:04d}.png"
 
 
-def upload_page_ocr_result(
-    result_payload: dict,
-    *,
-    model_folder: str,
-    doc_id: str,
-    page_no: int,
-    bucket: str | None = None,
-    prefix: str | None = None,
-) -> str:
-    # Upload single-page OCR JSON to model-specific folder / Upload JSON OCR một trang vào folder model
-    cfg = load_config()
-    target_bucket = bucket or get_value(cfg, "minio", "bucket_output")
-    ocr_prefix = prefix or get_value(cfg, "minio", "ocr_output_prefix", fallback="ocr")
-    object_name = ocr_page_object_key(model_folder, doc_id, page_no, prefix=ocr_prefix)
-    return upload_json_payload(target_bucket, object_name, result_payload)
+def upload_png_bytes(bucket: str, object_name: str, png_bytes: bytes) -> str:
+    # Upload PNG bytes to MinIO / Upload bytes PNG lên MinIO
+    temp_path = Path("/tmp") / f"{Path(object_name).name}.tmp.png"
+    temp_path.write_bytes(png_bytes)
+    try:
+        client = get_minio_client()
+        upload_file(client, bucket, object_name, temp_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+    return f"{bucket}/{object_name}"
 
 
 def upload_json_payload(bucket: str, object_name: str, payload: dict) -> str:

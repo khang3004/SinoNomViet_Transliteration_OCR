@@ -12,6 +12,8 @@ from kubernetes.client import models as k8s  # type: ignore
 
 WORKSPACE_VOLUME = "hvb-workspace"
 WORKSPACE_MOUNT = "/workspace"
+DEPS_VOLUME = "hvb-python-deps"
+DEPS_MOUNT = "/opt/hvb-deps"
 
 
 def _k8s_settings() -> dict[str, str]:
@@ -39,6 +41,9 @@ def _k8s_settings() -> dict[str, str]:
         "ocr_secret_name": get_value(
             cfg, "kubernetes", "ocr_secret_name", fallback="hvb-ocr-keys"
         ),
+        # Persistent venv PVC so pods skip reinstall / PVC venv để pod khỏi cài lại
+        "deps_pvc": get_value(cfg, "kubernetes", "deps_pvc", fallback="hvb-python-deps"),
+        "deps_mount": get_value(cfg, "kubernetes", "deps_mount", fallback=DEPS_MOUNT),
     }
 
 
@@ -87,18 +92,52 @@ def _init_container(settings: dict[str, str]) -> k8s.V1Container:
     )
 
 
-def _main_container_command() -> list[str]:
-    # Install deps and run HVB job CLI / Cài dependency và chạy CLI job HVB
-    run_script = (
-        "set -euo pipefail && "
-        "export HVB_CONFIG_PATH=/workspace/hvb-processing/config.ini && "
-        "export HVB_PATHS_OUTPUT_DIR=/tmp/hvb-output && "
-        "export HVB_SKIP_LOCAL_OUTPUT=true && "
-        "export PYTHONUNBUFFERED=1 && "
-        "pip install --no-cache-dir -q -r /workspace/hvb-processing/requirements.txt && "
-        "cd /workspace/hvb-processing/jobs && "
-        "exec python3 run_k8s_job.py"
-    )
+def _main_container_command(deps_mount: str) -> list[str]:
+    """Install into PVC venv once (hash marker), then run job.
+
+    Cài vào venv trên PVC một lần (theo hash requirements), lần sau bỏ qua pip.
+    """
+    # Cache venv on PVC; skip pip when requirements hash matches /
+    # Cache venv trên PVC; bỏ pip khi hash requirements trùng
+    run_script = f"""
+set -euo pipefail
+export HVB_CONFIG_PATH=/workspace/hvb-processing/config.ini
+export HVB_PATHS_OUTPUT_DIR=/tmp/hvb-output
+export HVB_SKIP_LOCAL_OUTPUT=true
+export PYTHONUNBUFFERED=1
+
+REQ_FILE=/workspace/hvb-processing/requirements.txt
+DEPS_ROOT={deps_mount}
+VENV_DIR="$DEPS_ROOT/venv"
+MARKER="$DEPS_ROOT/.requirements.sha256"
+REQ_HASH=$(sha256sum "$REQ_FILE" | awk '{{print $1}}')
+mkdir -p "$DEPS_ROOT"
+
+need_install=1
+if [ -x "$VENV_DIR/bin/python" ] && [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$REQ_HASH" ]; then
+  # Smoke-check a few critical imports / Smoke-check vài import quan trọng
+  if "$VENV_DIR/bin/python" -c "import minio, cv2, qdrant_client, openai, fitz" >/dev/null 2>&1; then
+    need_install=0
+    echo "[hvb-deps] cache hit hash=$REQ_HASH — skip pip"
+  else
+    echo "[hvb-deps] marker ok but imports failed — reinstall"
+  fi
+fi
+
+if [ "$need_install" -eq 1 ]; then
+  echo "[hvb-deps] installing into $VENV_DIR (hash=$REQ_HASH)"
+  # Recreate venv for clean installs / Tạo lại venv khi cần cài sạch
+  rm -rf "$VENV_DIR"
+  python3 -m venv --system-site-packages "$VENV_DIR"
+  "$VENV_DIR/bin/pip" install --upgrade pip
+  "$VENV_DIR/bin/pip" install -r "$REQ_FILE"
+  echo "$REQ_HASH" > "$MARKER"
+  echo "[hvb-deps] install done"
+fi
+
+cd /workspace/hvb-processing/jobs
+exec "$VENV_DIR/bin/python" run_k8s_job.py
+""".strip()
     return ["bash", "-lc", run_script]
 
 
@@ -120,6 +159,7 @@ def build_hvb_k8s_pod_task(
     Tạo pod job HVB tách biệt; chỉ giữ pod khi task failed để debug.
     """
     settings = _k8s_settings()
+    deps_mount = settings["deps_mount"]
     pod_env = {
         "HVB_JOB": job_name,
         "HVB_PATHS_OUTPUT_DIR": "/tmp/hvb-output",
@@ -137,7 +177,7 @@ def build_hvb_k8s_pod_task(
         },
     )
 
-    run_command = _main_container_command()
+    run_command = _main_container_command(deps_mount)
     env_from: list[k8s.V1EnvFromSource] | None = None
     if cloud_api_secret:
         # Mount Gemini/OpenAI keys from K8s secret / Gắn API key cloud từ secret K8s
@@ -146,6 +186,20 @@ def build_hvb_k8s_pod_task(
                 secret_ref=k8s.V1SecretEnvSource(name=settings["ocr_secret_name"])
             )
         ]
+    volumes = [
+        k8s.V1Volume(name=WORKSPACE_VOLUME, empty_dir=k8s.V1EmptyDirVolumeSource()),
+        # Shared deps venv across sequential HVB pods / Venv deps dùng chung giữa các pod HVB tuần tự
+        k8s.V1Volume(
+            name=DEPS_VOLUME,
+            persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
+                claim_name=settings["deps_pvc"],
+            ),
+        ),
+    ]
+    volume_mounts = [
+        k8s.V1VolumeMount(name=WORKSPACE_VOLUME, mount_path=WORKSPACE_MOUNT),
+        k8s.V1VolumeMount(name=DEPS_VOLUME, mount_path=deps_mount),
+    ]
     return KubernetesPodOperator(
         task_id=task_id,
         name=f"hvb-{job_name.replace('_', '-')}",
@@ -156,10 +210,8 @@ def build_hvb_k8s_pod_task(
         env_vars=pod_env,
         env_from=env_from,
         service_account_name=settings["service_account_name"],
-        volumes=[k8s.V1Volume(name=WORKSPACE_VOLUME, empty_dir=k8s.V1EmptyDirVolumeSource())],
-        volume_mounts=[
-            k8s.V1VolumeMount(name=WORKSPACE_VOLUME, mount_path=WORKSPACE_MOUNT),
-        ],
+        volumes=volumes,
+        volume_mounts=volume_mounts,
         init_containers=[_init_container(settings)],
         container_resources=resources,
         get_logs=True,

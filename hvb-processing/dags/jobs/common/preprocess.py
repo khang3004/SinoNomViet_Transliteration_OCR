@@ -9,13 +9,22 @@ DEFAULT_DPI = 300
 
 def get_render_dpi() -> int:
     # Resolve PDF render DPI from env or config / Lấy DPI render PDF từ env hoặc config
-    env_dpi = os.environ.get("HVB_PADDLE_RENDER_DPI", "").strip()
+    env_dpi = os.environ.get("HVB_OPENCV_PREPROCESS_RENDER_DPI", "").strip() or os.environ.get(
+        "HVB_PADDLE_RENDER_DPI", ""
+    ).strip()
     if env_dpi:
         return int(env_dpi)
     try:
         from common.config import get_value, load_config
 
-        return int(get_value(load_config(), "paddle", "render_dpi", fallback=str(DEFAULT_DPI)))
+        return int(
+            get_value(
+                load_config(),
+                "opencv_preprocess",
+                "render_dpi",
+                fallback=str(DEFAULT_DPI),
+            )
+        )
     except Exception:
         return DEFAULT_DPI
 

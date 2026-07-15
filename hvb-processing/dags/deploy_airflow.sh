@@ -95,17 +95,13 @@ upload_dags() {
     local EXIT_CODE=0
     local TARGET="local-minio/${MINIO_BUCKET}/dags/${DAGS_PREFIX}"
 
-    echo "DAG layout:"
+    echo "DAG layout (v2):"
     echo "  - hvb_pdf_split_pipeline"
-    echo "  - hvb_ocr_paddle_pipeline"
-    echo "  - hvb_ocr_paddle_pages_pipeline"
-    echo "  - hvb_ocr_gemini_pages_pipeline"
-    echo "  - hvb_index_qdrant_pipeline"
-    echo "  - hvb_ocr_kandianguji_pipeline"
-    echo "  - hvb_ocr_google_vision_pipeline"
-    echo "  - hvb_ocr_chatgpt_pipeline"
-    echo "  - hvb_ocr_gemini_pipeline"
-    echo "  - hvb_ocr_compare_pipeline (optional benchmark)"
+    echo "  - hvb_opencv_preprocess_pages_pipeline   (step)"
+    echo "  - hvb_ocr_v2_pages_pipeline              (step)"
+    echo "  - hvb_align_v2_pages_pipeline            (step)"
+    echo "  - hvb_index_pairs_qdrant_pipeline        (step)"
+    echo "  - hvb_v2_full_pipeline (preprocess→OCR→align→index)"
 
     if command -v mc &> /dev/null; then
         echo "Using mc (MinIO Client) for upload..."

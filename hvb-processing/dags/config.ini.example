@@ -12,11 +12,13 @@ secure = false
 bucket_raw = hvb-raw
 bucket_output = hvb-ocr-result
 ocr_output_prefix = ocr
+refined_output_prefix = refined
 bucket_airflow = airflow
 airflow_dags_prefix = hvb-processing
 raw_prefix = hvb_base/source
 pages_prefix = hvb_base/pages
 manifest_prefix = hvb_base/manifests
+preprocessed_prefix = preprocessed
 
 # Cloud OCR — set keys here or via env HVB_<SECTION>_<KEY>
 [gemini]
@@ -26,6 +28,36 @@ model = gemini-2.5-flash
 max_image_side = 1536
 max_retries = 6
 page_delay_sec = 20
+
+[gemini_opencv]
+# Ramclouds: use model from dashboard (e.g. gemini-3.5-flash-low)
+api_key =
+base_url = https://ramclouds.me/v1
+model = gemini-3.5-flash-low
+max_image_side = 1536
+max_retries = 6
+max_tokens = 4096
+page_delay_sec = 5
+
+[opencv_preprocess]
+render_dpi = 380
+# light = gentle flatten only (safe for LƯU TRỮ VN); dark = fan inpaint; both = both
+remove_watermark = true
+watermark_mode = light
+watermark_flatten_sigma = 22
+watermark_flatten_blend = 0.45
+watermark_blackhat_kernel = 35
+watermark_blackhat_threshold = 12
+watermark_min_blob_area = 350
+watermark_max_blob_area = 25000
+watermark_max_inpaint_ratio = 0.08
+watermark_inpaint_radius = 3
+watermark_inpaint_passes = 1
+watermark_dilate_px = 2
+denoise_strength = 7
+use_clahe = true
+clahe_clip_limit = 1.5
+bilateral_d = 3
 
 [openai]
 api_key =
@@ -38,20 +70,32 @@ credentials_json =
 # On-prem OCR services on K3s
 [paddle]
 service_url = http://hvb-paddle-ocr.ocr.svc.cluster.local:8080
-render_dpi = 400
-max_image_side = 3072
+# Match PADDLE_MAX_IMAGE_SIDE on GPU pod (2400) to avoid OOM with Latin dual-pass / Khớp env pod GPU
+render_dpi = 380
+max_image_side = 2400
 metadata_fix_enabled = true
-# Paddle pod env: PADDLE_OCR_TIER=server|mobile, PADDLE_LATIN_ENABLED=true, PADDLE_LATIN_LANG=vi
-# PADDLE_PREPROCESS=clahe, PADDLE_MAX_IMAGE_SIDE=3072
+# GPU pod (k8s/paddle-ocr-gpu-kubectl.yaml): replicas=1, node g512lv, PADDLE_LATIN_ENABLED=true,
+# PADDLE_MAX_IMAGE_SIDE=2400, NVIDIA_VISIBLE_DEVICES=0, FLAGS_fraction_of_gpu_memory_to_use=0.88
 
 [ollama]
-# CPU-only post-process for Paddle metadata pages (safe with 1x GPU) / Refine metadata Paddle qua CPU
+# CPU-only post-process for Paddle (safe with 1x GPU) / Refine Paddle qua CPU, không tranh VRAM
 enabled = true
+# false = OCR uploads raw Paddle text; use hvb_refine_vietnamese_pages_pipeline / false = ocr/ thô, refine qua DAG riêng
+inline_after_ocr = false
 base_url = http://ollama.llm.svc.cluster.local:11434
-model = qwen2.5:3b
-metadata_max_page = 10
-timeout_sec = 120
+model = qwen2.5:7b
+metadata_max_page = 30
+vi_refine_enabled = true
+vi_refine_latin_ratio = 0.35
+vi_refine_max_page = 50
+timeout_sec = 600
 temperature = 0.1
+page_delay_sec = 2
+# Long TOC pages: split by line before Ollama / Trang mục lục dài: chia theo dòng trước khi gọi Ollama
+refine_chunk_lines = 8
+refine_chunk_min_chars = 400
+toc_refine_chunk_lines = 4
+toc_refine_chunk_min_chars = 200
 
 [kandianguji]
 service_url =
@@ -72,6 +116,7 @@ model = sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 passage_prefix =
 
 # HVB job pods (KubernetesPodOperator in orchestrator namespace)
+# deps_pvc: shared venv — first pod installs, later pods skip pip (RWO → 1 HVB pod at a time)
 [kubernetes]
 namespace = orchestrator
 image = apache/airflow:2.10.5-python3.12
@@ -79,6 +124,8 @@ init_image = minio/mc:latest
 service_account_name = default
 minio_secret_name = airflow-minio-secret
 ocr_secret_name = hvb-ocr-keys
+deps_pvc = hvb-python-deps
+deps_mount = /opt/hvb-deps
 pod_cpu_request = 500m
 pod_cpu_limit = 2
 pod_memory_request = 1Gi

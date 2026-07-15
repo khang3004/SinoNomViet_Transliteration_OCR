@@ -1,0 +1,287 @@
+{
+  "doc_id": "hvb_base",
+  "total_pages": 1216,
+  "parents": [
+    {
+      "page_no": 48,
+      "label": "GIA LONG TẬP 1",
+      "trieu_dai": "GIA LONG",
+      "tap_so": 1,
+      "tap_id": "gia_long_tap_01",
+      "parent_page_no": 48
+    },
+    {
+      "page_no": 223,
+      "label": "GIA LONG TẬP 2",
+      "trieu_dai": "GIA LONG",
+      "tap_so": 2,
+      "tap_id": "gia_long_tap_02",
+      "parent_page_no": 223
+    },
+    {
+      "page_no": 267,
+      "label": "GIA LONG TẬP 3",
+      "trieu_dai": "GIA LONG",
+      "tap_so": 3,
+      "tap_id": "gia_long_tap_03",
+      "parent_page_no": 267
+    },
+    {
+      "page_no": 335,
+      "label": "GIA LONG TẬP 4",
+      "trieu_dai": "GIA LONG",
+      "tap_so": 4,
+      "tap_id": "gia_long_tap_04",
+      "parent_page_no": 335
+    },
+    {
+      "page_no": 345,
+      "label": "GIA LONG TẬP 5",
+      "trieu_dai": "GIA LONG",
+      "tap_so": 5,
+      "tap_id": "gia_long_tap_05",
+      "parent_page_no": 345
+    },
+    {
+      "page_no": 481,
+      "label": "MINH MỆNH TẬP 1",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 1,
+      "tap_id": "minh_menh_tap_01",
+      "parent_page_no": 481
+    },
+    {
+      "page_no": 561,
+      "label": "MINH MỆNH TẬP 2",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 2,
+      "tap_id": "minh_menh_tap_02",
+      "parent_page_no": 561
+    },
+    {
+      "page_no": 755,
+      "label": "MINH MỆNH TẬP 3",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 3,
+      "tap_id": "minh_menh_tap_03",
+      "parent_page_no": 755
+    },
+    {
+      "page_no": 781,
+      "label": "MINH MỆNH TẬP 4",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 4,
+      "tap_id": "minh_menh_tap_04",
+      "parent_page_no": 781
+    },
+    {
+      "page_no": 813,
+      "label": "MINH MỆNH TẬP 5",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 5,
+      "tap_id": "minh_menh_tap_05",
+      "parent_page_no": 813
+    },
+    {
+      "page_no": 851,
+      "label": "MINH MỆNH TẬP 6",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 6,
+      "tap_id": "minh_menh_tap_06",
+      "parent_page_no": 851
+    },
+    {
+      "page_no": 963,
+      "label": "MINH MỆNH TẬP 7",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 7,
+      "tap_id": "minh_menh_tap_07",
+      "parent_page_no": 963
+    },
+    {
+      "page_no": 989,
+      "label": "MINH MỆNH TẬP 8",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 8,
+      "tap_id": "minh_menh_tap_08",
+      "parent_page_no": 989
+    },
+    {
+      "page_no": 1073,
+      "label": "MINH MỆNH TẬP 9",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 9,
+      "tap_id": "minh_menh_tap_09",
+      "parent_page_no": 1073
+    },
+    {
+      "page_no": 1133,
+      "label": "MINH MỆNH TẬP 10",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 10,
+      "tap_id": "minh_menh_tap_10",
+      "parent_page_no": 1133
+    }
+  ],
+  "blank_pages": [
+    222,
+    224,
+    268,
+    334,
+    336,
+    344,
+    346,
+    480,
+    482,
+    756,
+    812,
+    814,
+    850,
+    852,
+    962,
+    964,
+    988,
+    990,
+    1072,
+    1074,
+    1134
+  ],
+  "note": "page_no = MinIO PDF index (page_XXXX), not printed footer number",
+  "batches_by_tap": [
+    {
+      "tap": "GIA LONG TẬP 1",
+      "parent_page": 48,
+      "pages": "48-222",
+      "toc_pages_hint": "49-222",
+      "tap_id": "gia_long_tap_01",
+      "trieu_dai": "GIA LONG",
+      "tap_so": 1
+    },
+    {
+      "tap": "GIA LONG TẬP 2",
+      "parent_page": 223,
+      "pages": "223-266",
+      "toc_pages_hint": "224-266",
+      "tap_id": "gia_long_tap_02",
+      "trieu_dai": "GIA LONG",
+      "tap_so": 2
+    },
+    {
+      "tap": "GIA LONG TẬP 3",
+      "parent_page": 267,
+      "pages": "267-334",
+      "toc_pages_hint": "268-334",
+      "tap_id": "gia_long_tap_03",
+      "trieu_dai": "GIA LONG",
+      "tap_so": 3
+    },
+    {
+      "tap": "GIA LONG TẬP 4",
+      "parent_page": 335,
+      "pages": "335-344",
+      "toc_pages_hint": "336-344",
+      "tap_id": "gia_long_tap_04",
+      "trieu_dai": "GIA LONG",
+      "tap_so": 4
+    },
+    {
+      "tap": "GIA LONG TẬP 5",
+      "parent_page": 345,
+      "pages": "345-480",
+      "toc_pages_hint": "346-480",
+      "tap_id": "gia_long_tap_05",
+      "trieu_dai": "GIA LONG",
+      "tap_so": 5
+    },
+    {
+      "tap": "MINH MỆNH TẬP 1",
+      "parent_page": 481,
+      "pages": "481-560",
+      "toc_pages_hint": "482-560",
+      "tap_id": "minh_menh_tap_01",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 1
+    },
+    {
+      "tap": "MINH MỆNH TẬP 2",
+      "parent_page": 561,
+      "pages": "561-754",
+      "toc_pages_hint": "562-754",
+      "tap_id": "minh_menh_tap_02",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 2
+    },
+    {
+      "tap": "MINH MỆNH TẬP 3",
+      "parent_page": 755,
+      "pages": "755-780",
+      "toc_pages_hint": "756-780",
+      "tap_id": "minh_menh_tap_03",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 3
+    },
+    {
+      "tap": "MINH MỆNH TẬP 4",
+      "parent_page": 781,
+      "pages": "781-812",
+      "toc_pages_hint": "782-812",
+      "tap_id": "minh_menh_tap_04",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 4
+    },
+    {
+      "tap": "MINH MỆNH TẬP 5",
+      "parent_page": 813,
+      "pages": "813-850",
+      "toc_pages_hint": "814-850",
+      "tap_id": "minh_menh_tap_05",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 5
+    },
+    {
+      "tap": "MINH MỆNH TẬP 6",
+      "parent_page": 851,
+      "pages": "851-962",
+      "toc_pages_hint": "852-962",
+      "tap_id": "minh_menh_tap_06",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 6
+    },
+    {
+      "tap": "MINH MỆNH TẬP 7",
+      "parent_page": 963,
+      "pages": "963-988",
+      "toc_pages_hint": "964-988",
+      "tap_id": "minh_menh_tap_07",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 7
+    },
+    {
+      "tap": "MINH MỆNH TẬP 8",
+      "parent_page": 989,
+      "pages": "989-1072",
+      "toc_pages_hint": "990-1072",
+      "tap_id": "minh_menh_tap_08",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 8
+    },
+    {
+      "tap": "MINH MỆNH TẬP 9",
+      "parent_page": 1073,
+      "pages": "1073-1132",
+      "toc_pages_hint": "1074-1132",
+      "tap_id": "minh_menh_tap_09",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 9
+    },
+    {
+      "tap": "MINH MỆNH TẬP 10",
+      "parent_page": 1133,
+      "pages": "1133-1213",
+      "toc_pages_hint": "1134-1213",
+      "tap_id": "minh_menh_tap_10",
+      "trieu_dai": "MINH MỆNH",
+      "tap_so": 10
+    }
+  ]
+}
