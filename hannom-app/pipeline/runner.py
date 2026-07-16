@@ -229,6 +229,79 @@ def _process_pdf(pdf_path: str, doc: str, engine, config: Config, output_path: s
     return all_records
 
 
+def process_pdf_pages(
+    input_path: str,
+    output_path: str,
+    config: Config,
+    pages: list[int],
+    source_doc: str = "",
+    engine=None,
+) -> list[Record]:
+    """Process only specific pages of a PDF (1-based page numbers).
+
+    Used by the "add pages" feature: OCR only the requested pages and return
+    their records. The caller inserts them into an existing job.
+    """
+    config.validate()
+    if engine is None:
+        engine = ocr.get_engine(config.ocr_backend)
+
+    import pdfplumber
+    from pipeline.pdf_text import render_page
+
+    doc = source_doc or _infer_source_doc(input_path)
+    with pdfplumber.open(input_path) as pdf:
+        total = len(pdf.pages)
+
+    pages_dir = os.path.join(config.output_dir, "pages")
+    os.makedirs(pages_dir, exist_ok=True)
+    stem = _safe_stem(output_path)
+
+    all_records: list[Record] = []
+    failed: list[int] = []
+    for page_no in sorted(pages):
+        page_index = page_no - 1
+        if page_index < 0 or page_index >= total:
+            logger.warning("Page %d out of range (PDF has %d pages), skipping.", page_no, total)
+            failed.append(page_no)
+            continue
+        try:
+            image, _scale = render_page(input_path, page_index, config.pdf_dpi)
+            img_name = f"{stem}_p{page_no:04d}.png"
+            image.save(os.path.join(pages_dir, img_name))
+
+            ctx = PageContext(
+                source_doc=doc,
+                page=page_no,
+                image_path=img_name,
+                pdf_path=input_path,
+                pdf_page_index=page_index,
+                ocr_engine=engine,
+                config=config,
+                render_dpi=config.pdf_dpi,
+                page_width=float(image.width),
+                prerendered_image=image,
+            )
+            handler = layouts.route(ctx)
+            all_records.extend(handler.extract(ctx))
+        except Exception as exc:
+            failed.append(page_no)
+            logger.warning(
+                "Skipping page %d of %s (%s: %s).",
+                page_no, os.path.basename(input_path), type(exc).__name__, exc,
+            )
+    if failed:
+        logger.warning(
+            "%s: processed %d page(s); skipped %d: %s",
+            os.path.basename(input_path), len(pages) - len(failed), len(failed), failed,
+        )
+
+    _apply_correction(all_records, config)
+    _apply_translation(all_records, config)
+    write_jsonl(all_records, output_path)
+    return all_records
+
+
 def _safe_stem(output_path: str) -> str:
     """ASCII-safe, URL-safe stem derived from the output file name."""
     import re

@@ -19,7 +19,7 @@ import time
 from pipeline import ocr
 from pipeline.config import load_config
 from pipeline.jobstore import get_store
-from pipeline.runner import process_file, reocr_region
+from pipeline.runner import process_file, process_pdf_pages, reocr_region
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -43,6 +43,8 @@ def run_once(store, config, engine) -> bool:
     try:
         if job.kind == "reocr":
             _run_reocr(store, config, engine, job)
+        elif job.kind == "add_pages":
+            _run_add_pages(store, config, engine, job)
         else:
             _run_extract(store, config, engine, job)
     except Exception as exc:  # noqa: BLE001 - record failure, keep the worker alive
@@ -111,6 +113,35 @@ def _run_reocr(store, config, engine, job) -> None:
         json.dump(result, fh, ensure_ascii=False)
     store.mark_done(job.id, out_path)
     logger.info("Reocr job %d done: %r (conf=%.2f)", job.id, result["text"], result["conf"])
+
+
+def _run_add_pages(store, config, engine, job) -> None:
+    """Add specific pages from a PDF into an existing job."""
+    args = json.loads(job.payload or "{}")
+    target_job_id = args["target_job_id"]
+    pages = args["pages"]  # list of 1-based page numbers
+    input_path = args["input_path"]
+    source_doc = args.get("source_doc", "")
+    logger.info(
+        "Claimed add_pages job %d: adding pages %s to job %d from %s.",
+        job.id, pages, target_job_id, os.path.basename(input_path),
+    )
+    out_name = f"job_{target_job_id}_add_{os.path.splitext(os.path.basename(input_path))[0]}.jsonl"
+    out_path = os.path.join(config.output_dir, out_name)
+    records = process_pdf_pages(
+        input_path, out_path, config, pages,
+        source_doc=source_doc, engine=engine,
+    )
+    if getattr(config, "database_url", ""):
+        from pipeline.db.records_repo import insert_many
+
+        n = insert_many(config.database_url, target_job_id, [r.to_dict() for r in records])
+        logger.info("add_pages job %d: inserted %d record(s) into job %d.", job.id, n, target_job_id)
+    store.mark_done(job.id, out_path)
+    logger.info(
+        "add_pages job %d done: %d record(s) added to job %d.",
+        job.id, len(records), target_job_id,
+    )
 
 
 def main() -> None:

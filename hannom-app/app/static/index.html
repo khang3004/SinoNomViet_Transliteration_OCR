@@ -161,6 +161,15 @@
           </span>
           <span class="muted" id="autoscan-status" style="font-size:0.78rem"></span>
         </div>
+        <div class="toolbar" id="addpages-bar" style="margin-top:0.3rem;display:none">
+          <button class="ghost" onclick="toggleAddPages()" id="btn-addpages-toggle" style="font-size:0.78rem">+ Add pages</button>
+          <span id="addpages-form" style="display:none;font-size:0.78rem">
+            <input type="file" id="addpages-file" accept=".pdf" style="width:180px;font-size:0.75rem;padding:0.2rem" />
+            <input type="text" id="addpages-nums" placeholder="e.g. 124,125" title="Comma-separated page numbers (1-based) from the PDF" style="width:120px;padding:0.2rem" />
+            <button class="blue" onclick="submitAddPages()" style="font-size:0.78rem;padding:0.2rem 0.6rem">Upload &amp; OCR</button>
+            <span class="muted" id="addpages-status"></span>
+          </span>
+        </div>
         <div class="legend">
           <span class="sw" style="background:rgba(179,18,42,.85)"></span>Hán
           <span class="sw" style="background:rgba(21,101,192,.85)"></span>Việt
@@ -266,6 +275,7 @@
         document.getElementById('as-to').value = R.pages[R.pages.length - 1];
       }
       loadJobBatches();  // surface/resume any in-flight batch for this job
+      document.getElementById('addpages-bar').style.display = (ME && ME.role === 'admin') ? '' : 'none';
     }
     function closeReview() { stopBatchPolling(); document.getElementById('review-card').style.display = 'none'; }
     function pageRecords() { return R.records.filter(r => r.page === R.page); }
@@ -632,6 +642,32 @@
       } catch {}
     }
 
+    // ----- add pages to existing job (admin only) -----
+    function toggleAddPages() {
+      const form = document.getElementById('addpages-form');
+      form.style.display = form.style.display === 'none' ? '' : 'none';
+    }
+    async function submitAddPages() {
+      const fileInput = document.getElementById('addpages-file');
+      const pagesInput = document.getElementById('addpages-nums');
+      const status = document.getElementById('addpages-status');
+      const file = fileInput.files[0];
+      if (!file) { status.textContent = 'Select a PDF file.'; return; }
+      const pages = pagesInput.value.trim();
+      if (!pages) { status.textContent = 'Enter page numbers.'; return; }
+      const data = new FormData();
+      data.append('file', file);
+      data.append('pages', pages);
+      status.textContent = 'Uploading…';
+      try {
+        const res = await fetch(`/jobs/${R.jobId}/add-pages`, { method: 'POST', body: data });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.detail || res.status);
+        status.innerHTML = `✓ Queued — pages ${esc(j.pages.join(', '))} processing. Reload when done.`;
+        fileInput.value = ''; pagesInput.value = '';
+      } catch (err) { status.innerHTML = `<span class="failed">Failed: ${esc(String(err.message || err))}</span>`; }
+    }
+
     // ----- spanning entries: link a fragment to the previous entry -----
     async function reloadRecords() {
       try { const j = await (await fetch('/jobs/' + R.jobId + '/records')).json(); R.records = j.records || []; } catch {}
@@ -714,7 +750,7 @@
     async function refresh() {
       const j = await (await fetch('/jobs')).json(); const tbody = document.getElementById('jobs'); tbody.innerHTML = '';
       for (const job of j.jobs) {
-        if (job.filename && job.filename.startsWith('reocr')) continue;  // hide internal reocr jobs
+        if (job.filename && (job.filename.startsWith('reocr') || job.filename.startsWith('add_pages'))) continue;  // hide internal jobs
         const tr = document.createElement('tr'); let out = '—';
         if (job.status === 'done') out = `<a onclick="viewJob(${job.id})">review</a> · <a href="/jobs/${job.id}/output">.jsonl</a>`;
         else if (job.status === 'failed') out = `<span class="muted" title="${esc(job.error)}">${esc(job.error) || 'failed'}</span>`;

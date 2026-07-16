@@ -323,6 +323,65 @@ async def upload(
     return JSONResponse({"job_id": job_id, "filename": os.path.basename(dest)})
 
 
+@app.post("/jobs/{job_id}/add-pages")
+async def add_pages_to_job(
+    job_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    pages: str = Form(...),
+) -> JSONResponse:
+    """Add specific pages from a PDF into an existing job (admin only).
+
+    ``pages`` is a comma-separated list of 1-based page numbers, e.g. "124,125".
+    The PDF is uploaded, and a background worker job OCRs only those pages and
+    inserts the resulting records into the target job.
+    """
+    user = getattr(request.state, "user", None)
+    if user is not None and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="only admins can add pages")
+    # Validate target job exists.
+    target = store.get(job_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    # Parse page numbers.
+    try:
+        page_list = sorted(set(int(p.strip()) for p in pages.split(",") if p.strip()))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="pages must be comma-separated integers")
+    if not page_list or any(p < 1 for p in page_list):
+        raise HTTPException(status_code=400, detail="pages must be positive integers")
+    # Save the uploaded PDF.
+    filename = os.path.basename(file.filename or "add_pages.pdf")
+    dest = os.path.join(config.uploads_dir, filename)
+    dest = _unique_path(dest)
+    with open(dest, "wb") as out:
+        out.write(await file.read())
+    # Enqueue an add_pages worker job.
+    payload = json.dumps({
+        "target_job_id": job_id,
+        "pages": page_list,
+        "input_path": dest,
+        "source_doc": getattr(target, "source_doc", "") or "",
+    })
+    worker_job_id = store.create(
+        filename=f"add_pages_{os.path.basename(dest)}",
+        input_path=dest,
+        source_doc=getattr(target, "source_doc", "") or "",
+        kind="add_pages",
+        payload=payload,
+    )
+    logger.info(
+        "Enqueued add_pages job %d: pages %s → job %d from %s",
+        worker_job_id, page_list, job_id, dest,
+    )
+    return JSONResponse({
+        "ok": True,
+        "worker_job_id": worker_job_id,
+        "target_job_id": job_id,
+        "pages": page_list,
+    })
+
+
 def _assigned_job_ids(user: dict | None) -> set[int] | None:
     """Job ids a reviewer is assigned to (None when auth/DB is off = full access)."""
     if not (DATABASE_URL and user):
