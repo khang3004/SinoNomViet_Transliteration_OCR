@@ -165,8 +165,8 @@
           <button class="ghost" onclick="toggleAddPages()" id="btn-addpages-toggle" style="font-size:0.78rem">+ Add pages</button>
           <span id="addpages-form" style="display:none;font-size:0.78rem">
             <input type="file" id="addpages-file" accept=".pdf" style="width:180px;font-size:0.75rem;padding:0.2rem" />
-            <input type="text" id="addpages-nums" placeholder="e.g. 124,125" title="Comma-separated page numbers (1-based) from the PDF" style="width:120px;padding:0.2rem" />
-            <button class="blue" onclick="submitAddPages()" style="font-size:0.78rem;padding:0.2rem 0.6rem">Upload &amp; OCR</button>
+            <input type="text" id="addpages-nums" placeholder="e.g. 123-129, 256, 898-900" title="Pages to add (ranges OK). Uses the same PDF as this job." style="width:200px;padding:0.2rem" />
+            <button class="blue" onclick="submitAddPages()" style="font-size:0.78rem;padding:0.2rem 0.6rem">Add &amp; OCR</button>
             <span class="muted" id="addpages-status"></span>
           </span>
         </div>
@@ -647,24 +647,56 @@
       const form = document.getElementById('addpages-form');
       form.style.display = form.style.display === 'none' ? '' : 'none';
     }
+    // Expand "123-129, 256, 898-900" → [123,124,...,129,256,898,899,900]
+    function expandPageRanges(s) {
+      const pages = [];
+      for (const part of s.split(',')) {
+        const t = part.trim(); if (!t) continue;
+        const m = t.match(/^(\d+)\s*-\s*(\d+)$/);
+        if (m) { const a = +m[1], b = +m[2]; for (let i = Math.min(a,b); i <= Math.max(a,b); i++) pages.push(i); }
+        else if (/^\d+$/.test(t)) pages.push(+t);
+        else return null;  // invalid
+      }
+      return [...new Set(pages)].sort((a,b) => a-b);
+    }
     async function submitAddPages() {
       const fileInput = document.getElementById('addpages-file');
       const pagesInput = document.getElementById('addpages-nums');
       const status = document.getElementById('addpages-status');
       const file = fileInput.files[0];
       if (!file) { status.textContent = 'Select a PDF file.'; return; }
-      const pages = pagesInput.value.trim();
-      if (!pages) { status.textContent = 'Enter page numbers.'; return; }
+      const raw = pagesInput.value.trim();
+      if (!raw) { status.textContent = 'Enter page numbers.'; return; }
+      const pageList = expandPageRanges(raw);
+      if (!pageList || !pageList.length) { status.textContent = 'Invalid format. Use e.g. 123-129, 256, 898-900'; return; }
+      // pages = trang_so (same PDF, same numbering)
+      const pages = pageList.join(',');
       const data = new FormData();
       data.append('file', file);
       data.append('pages', pages);
-      status.textContent = 'Uploading…';
+      status.textContent = `Uploading ${pageList.length} page(s)…`;
       try {
         const res = await fetch(`/jobs/${R.jobId}/add-pages`, { method: 'POST', body: data });
         const j = await res.json();
         if (!res.ok) throw new Error(j.detail || res.status);
-        status.innerHTML = `✓ Queued — pages ${esc(j.pages.join(', '))} processing. Reload when done.`;
         fileInput.value = ''; pagesInput.value = '';
+        // Poll the worker job until done, then reload records.
+        const wid = j.worker_job_id;
+        status.textContent = `⏳ Processing ${j.pages.length} page(s)…`;
+        for (let i = 0; i < 120; i++) {
+          await new Promise(s => setTimeout(s, 3000));
+          const st = await (await fetch('/jobs/' + wid)).json();
+          if (st.status === 'done') {
+            status.innerHTML = `✓ ${j.pages.length} page(s) added. Reloading…`;
+            await reloadRecords();
+            R.pages = [...new Set(R.records.map(r => r.page))].sort((a, b) => a - b);
+            renderPageSelector();
+            status.innerHTML = `✓ ${j.pages.length} page(s) added.`;
+            return;
+          }
+          if (st.status === 'failed') { status.innerHTML = `<span class="failed">Worker failed: ${esc(st.error || 'unknown')}</span>`; return; }
+        }
+        status.textContent = 'Timed out waiting check worker logs.';
       } catch (err) { status.innerHTML = `<span class="failed">Failed: ${esc(String(err.message || err))}</span>`; }
     }
 

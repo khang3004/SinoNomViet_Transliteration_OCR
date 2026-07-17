@@ -104,15 +104,20 @@ def insert_many(dsn: str, job_id: int, records: list[dict]) -> int:
     now = time.time()
     cols = _COLUMNS + ["job_id", "created_at"]
     placeholders = ", ".join(["%s"] * len(cols))
-    sql = f"INSERT INTO records ({', '.join(cols)}) VALUES ({placeholders})"
+    sql = (
+        f"INSERT INTO records ({', '.join(cols)}) VALUES ({placeholders}) "
+        "ON CONFLICT (job_id, human_id) DO NOTHING"
+    )
+    inserted = 0
     with connect(dsn) as conn:
         with conn.cursor() as cur:
             for rec in records:
                 row = _rec_to_row(job_id, rec)
                 vals = [_wrap(c, row[c]) for c in _COLUMNS] + [job_id, now]
                 cur.execute(sql, vals)
+                inserted += cur.rowcount
         conn.commit()
-    return len(records)
+    return inserted
 
 
 def has_verified_on_page(dsn: str, job_id: int, page: int) -> bool:

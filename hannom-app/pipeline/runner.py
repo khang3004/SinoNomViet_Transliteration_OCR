@@ -234,13 +234,20 @@ def process_pdf_pages(
     output_path: str,
     config: Config,
     pages: list[int],
+    page_map: dict[int, int] | None = None,
     source_doc: str = "",
     engine=None,
 ) -> list[Record]:
-    """Process only specific pages of a PDF (1-based page numbers).
+    """Process specific pages of a PDF and assign custom Trang số values.
 
-    Used by the "add pages" feature: OCR only the requested pages and return
-    their records. The caller inserts them into an existing job.
+    ``pages`` — 1-based PDF page numbers to process.
+    ``page_map`` — optional ``{pdf_page: trang_so}`` mapping.  When provided
+    each PDF page is assigned the given Trang số (e.g. PDF page 1 → Trang số
+    706).  When absent, the PDF page number is used as-is.
+
+    If no layout handler matches a page (common for single-page PDFs without a
+    text layer), a **blank placeholder record** is created so the page image
+    appears in the review UI — the user can then draw boxes and use LLM OCR.
     """
     config.validate()
     if engine is None:
@@ -259,20 +266,21 @@ def process_pdf_pages(
 
     all_records: list[Record] = []
     failed: list[int] = []
-    for page_no in sorted(pages):
-        page_index = page_no - 1
+    for pdf_page in sorted(pages):
+        page_index = pdf_page - 1
+        trang_so = (page_map or {}).get(pdf_page, pdf_page)
         if page_index < 0 or page_index >= total:
-            logger.warning("Page %d out of range (PDF has %d pages), skipping.", page_no, total)
-            failed.append(page_no)
+            logger.warning("PDF page %d out of range (PDF has %d pages), skipping.", pdf_page, total)
+            failed.append(pdf_page)
             continue
         try:
             image, _scale = render_page(input_path, page_index, config.pdf_dpi)
-            img_name = f"{stem}_p{page_no:04d}.png"
+            img_name = f"{stem}_p{trang_so:04d}.png"
             image.save(os.path.join(pages_dir, img_name))
 
             ctx = PageContext(
                 source_doc=doc,
-                page=page_no,
+                page=trang_so,
                 image_path=img_name,
                 pdf_path=input_path,
                 pdf_page_index=page_index,
@@ -282,13 +290,31 @@ def process_pdf_pages(
                 page_width=float(image.width),
                 prerendered_image=image,
             )
-            handler = layouts.route(ctx)
-            all_records.extend(handler.extract(ctx))
+            try:
+                handler = layouts.route(ctx)
+                all_records.extend(handler.extract(ctx))
+            except RuntimeError:
+                # No layout matched — create a blank placeholder so the page
+                # image is visible in the review UI (user draws boxes manually).
+                logger.info(
+                    "No layout handler matched page %d (Trang số %d); "
+                    "creating placeholder record.",
+                    pdf_page, trang_so,
+                )
+                all_records.append(Record(
+                    id=f"{doc}.{trang_so:03d}.01",
+                    source_doc=doc,
+                    page=trang_so,
+                    line_no=1,
+                    image_path=img_name,
+                    layout_type="two_column",
+                ))
         except Exception as exc:
-            failed.append(page_no)
+            failed.append(pdf_page)
             logger.warning(
-                "Skipping page %d of %s (%s: %s).",
-                page_no, os.path.basename(input_path), type(exc).__name__, exc,
+                "Skipping PDF page %d (Trang số %d) of %s (%s: %s).",
+                pdf_page, trang_so, os.path.basename(input_path),
+                type(exc).__name__, exc,
             )
     if failed:
         logger.warning(

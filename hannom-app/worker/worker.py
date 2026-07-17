@@ -119,18 +119,22 @@ def _run_add_pages(store, config, engine, job) -> None:
     """Add specific pages from a PDF into an existing job."""
     args = json.loads(job.payload or "{}")
     target_job_id = args["target_job_id"]
-    pages = args["pages"]  # list of 1-based page numbers
+    pages = args["pages"]  # list of 1-based PDF page numbers
+    page_map = args.get("page_map")  # {pdf_page: trang_so} or None
     input_path = args["input_path"]
     source_doc = args.get("source_doc", "")
     logger.info(
-        "Claimed add_pages job %d: adding pages %s to job %d from %s.",
-        job.id, pages, target_job_id, os.path.basename(input_path),
+        "Claimed add_pages job %d: adding pages %s (map=%s) to job %d from %s.",
+        job.id, pages, page_map, target_job_id, os.path.basename(input_path),
     )
     out_name = f"job_{target_job_id}_add_{os.path.splitext(os.path.basename(input_path))[0]}.jsonl"
     out_path = os.path.join(config.output_dir, out_name)
+    # Convert page_map keys from strings (JSON keys are always strings) to ints.
+    if page_map:
+        page_map = {int(k): int(v) for k, v in page_map.items()}
     records = process_pdf_pages(
         input_path, out_path, config, pages,
-        source_doc=source_doc, engine=engine,
+        page_map=page_map, source_doc=source_doc, engine=engine,
     )
     if getattr(config, "database_url", ""):
         from pipeline.db.records_repo import insert_many

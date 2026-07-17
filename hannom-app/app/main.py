@@ -329,12 +329,15 @@ async def add_pages_to_job(
     request: Request,
     file: UploadFile = File(...),
     pages: str = Form(...),
+    trang_so: str = Form(""),
 ) -> JSONResponse:
     """Add specific pages from a PDF into an existing job (admin only).
 
-    ``pages`` is a comma-separated list of 1-based page numbers, e.g. "124,125".
-    The PDF is uploaded, and a background worker job OCRs only those pages and
-    inserts the resulting records into the target job.
+    ``pages`` — comma-separated 1-based **PDF page numbers** to OCR, e.g. "1,2".
+    ``trang_so`` — comma-separated **target Trang số** values for the records,
+    e.g. "706,707".  Must be the same length as ``pages``.  When omitted the PDF
+    page numbers are used as-is.  This lets you upload a small 1-page PDF
+    (PDF page 1) and have the record land on Trang số 706.
     """
     user = getattr(request.state, "user", None)
     if user is not None and user.get("role") != "admin":
@@ -350,6 +353,20 @@ async def add_pages_to_job(
         raise HTTPException(status_code=400, detail="pages must be comma-separated integers")
     if not page_list or any(p < 1 for p in page_list):
         raise HTTPException(status_code=400, detail="pages must be positive integers")
+    # Parse Trang số mapping (optional).
+    page_map = None
+    trang_so_str = trang_so.strip()
+    if trang_so_str:
+        try:
+            trang_list = [int(t.strip()) for t in trang_so_str.split(",") if t.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="trang_so must be comma-separated integers")
+        if len(trang_list) != len(page_list):
+            raise HTTPException(
+                status_code=400,
+                detail=f"trang_so has {len(trang_list)} values but pages has {len(page_list)}",
+            )
+        page_map = dict(zip(page_list, trang_list))
     # Save the uploaded PDF.
     filename = os.path.basename(file.filename or "add_pages.pdf")
     dest = os.path.join(config.uploads_dir, filename)
@@ -360,6 +377,7 @@ async def add_pages_to_job(
     payload = json.dumps({
         "target_job_id": job_id,
         "pages": page_list,
+        "page_map": page_map,
         "input_path": dest,
         "source_doc": getattr(target, "source_doc", "") or "",
     })
