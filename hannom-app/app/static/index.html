@@ -3,967 +3,182 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>hannom-app — Han-Nom OCR corpus builder</title>
+  <title>Han Scanner — Facebook Image Checker</title>
   <style>
-    :root { --accent: #b3122a; --primary: #2563eb; --amber: #f59e0b; }
-    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 1.5rem auto; max-width: 1400px; color: #1e293b; }
-    h1 { font-size: 1.4rem; } h2 { font-size: 1.05rem; }
-    .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; background: #fff; }
-    label { display: block; margin: 0.4rem 0 0.2rem; font-weight: 600; font-size: 0.82rem; }
-    input, select, textarea { font-size: 0.95rem; padding: 0.45rem; border: 1px solid #e5e7eb; border-radius: 4px; font-family: inherit; box-sizing: border-box; width: 100%; }
-    button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; font-size: 0.9rem; }
-    button.ghost { background: #eee; color: #333; } button.blue { background: var(--primary); } button.amber { background: var(--amber); } button.danger { background: #dc2626; }
-    button:hover { filter: brightness(0.95); }
-    button:disabled { background: #94a3b8; cursor: not-allowed; }
-    table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
-    th, td { border-bottom: 1px solid #eee; text-align: left; padding: 0.4rem 0.5rem; }
-    .status { font-weight: 600; }
-    .pending { color: #b07900; } .running { color: #1565c0; } .done { color: #2e7d32; } .failed { color: #c62828; }
-    a { color: var(--accent); cursor: pointer; } .muted { color: #777; font-size: 0.8rem; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f1f5f9; color: #1e293b; padding: 1.5rem; }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 1.4rem; margin-bottom: 0.3rem; }
+    .subtitle { color: #64748b; font-size: 0.85rem; margin-bottom: 1.5rem; }
 
-    .review-head { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
-    .progress b { color: #2e7d32; }
-    .toolbar { display: flex; gap: 0.5rem; align-items: center; margin: 0.3rem 0 0.5rem; font-size: 0.8rem; }
-    .workspace { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items: start; }
-    @media (max-width: 860px) { .workspace { grid-template-columns: 1fr; } }
+    .card { background: #fff; border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; border: 1px solid #e2e8f0; }
+    label { display: block; font-weight: 600; font-size: 0.85rem; margin-bottom: 0.3rem; }
+    textarea { width: 100%; height: 220px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.75rem; font-family: "Cascadia Code", "Fira Code", monospace; font-size: 0.82rem; resize: vertical; }
+    textarea:focus { outline: 2px solid #3b82f6; border-color: transparent; }
 
-    .overlay-wrap { position: relative; display: block; line-height: 0; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; user-select: none; }
-    .overlay-wrap img { width: 100%; display: block; }
-    .overlay-wrap.draw { cursor: crosshair; }
-    .box { position: absolute; box-sizing: border-box; cursor: pointer; }
-    .box-han { border: 2px solid rgba(179,18,42,.55); background: rgba(179,18,42,.06); }
-    .box-vi  { border: 2px solid rgba(21,101,192,.5); background: rgba(21,101,192,.04); }
-    .box:hover { background: rgba(245,158,11,.28); }
-    .box.sel { border-color: var(--amber); background: rgba(245,158,11,.28); z-index: 5; box-shadow: 0 0 8px rgba(245,158,11,.5); }
-    .box.edit { cursor: move; }
-    .box.ok { border-color: #22c55e; } .box.ok.box-han, .box.ok.box-vi { background: rgba(34,197,94,.16); }
-    .box-num { position: absolute; top: 0; left: 0; transform: translateY(-100%); font-size: 0.62rem; background: rgba(179,18,42,.85); color: #fff; padding: 0 4px; border-radius: 3px 3px 0 0; pointer-events: none; }
-    .handle { position: absolute; width: 11px; height: 11px; background: #fff; border: 2px solid var(--amber); border-radius: 2px; z-index: 20; }
-    .legend { font-size: 0.72rem; color: #555; margin: 0.2rem 0; }
-    .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 0.2rem 0 0.6rem; vertical-align: middle; }
+    .actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+    button { border: none; border-radius: 6px; padding: 0.55rem 1.2rem; font-size: 0.9rem; cursor: pointer; font-weight: 600; }
+    button:hover { filter: brightness(0.93); }
+    .btn-scan { background: #dc2626; color: #fff; }
+    .btn-scan:disabled { background: #94a3b8; cursor: wait; }
+    .btn-clear { background: #e2e8f0; color: #475569; }
+    .btn-sample { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
 
-    .editor { display: flex; flex-direction: column; gap: 0.6rem; }
-    .editor.disabled { opacity: 0.5; pointer-events: none; }
-    .row { display: flex; gap: 0.75rem; } .row > div { flex: 1; }
-    .ta-han { font-family: "MingLiU", "Noto Serif CJK TC", "SimSun", serif; font-size: 20px; min-height: 120px; line-height: 1.7; resize: vertical; }
-    .ta-vi { min-height: 80px; font-size: 15px; resize: vertical; }
-    .raw { font-size: 0.75rem; color: #94a3b8; } .raw .d { color: #c62828; }
-    .verify { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; padding: 0.55rem; border-radius: 6px; background: #fee2e2; color: #b91c1c; }
-    .verify.on { background: #dcfce7; color: #166534; } .verify input { width: auto; }
-    .btn-save { background: var(--primary); padding: 0.7rem; font-size: 1rem; font-weight: 700; }
-    .btnrow { display: flex; gap: 0.5rem; } .btnrow button { flex: 1; }
+    .spinner { display: none; margin-left: 0.5rem; }
+    .spinner.show { display: inline-block; }
+    .spinner::after { content: ""; display: inline-block; width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Result area */
+    .result-area { margin-top: 1rem; }
+    .result-card { padding: 1rem 1.25rem; border-radius: 8px; margin-bottom: 0.75rem; }
+    .result-card.valid { background: #f0fdf4; border: 1px solid #86efac; }
+    .result-card.invalid { background: #fef2f2; border: 1px solid #fca5a5; }
+    .result-card.error { background: #fffbeb; border: 1px solid #fcd34d; }
+
+    .result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .badge { padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; }
+    .badge.yes { background: #16a34a; color: #fff; }
+    .badge.no { background: #dc2626; color: #fff; }
+
+    .stat { display: inline-block; margin-right: 1.2rem; font-size: 0.85rem; }
+    .stat strong { font-size: 1.1rem; }
+
+    .texts-list { margin-top: 0.5rem; font-size: 0.82rem; color: #475569; max-height: 120px; overflow-y: auto; padding: 0.5rem; background: #f8fafc; border-radius: 4px; }
+    .texts-list p { margin-bottom: 0.2rem; }
+
+    .preview-img { max-width: 200px; max-height: 200px; border-radius: 6px; margin-top: 0.5rem; border: 1px solid #e2e8f0; }
+    .meta { font-size: 0.78rem; color: #94a3b8; margin-top: 0.4rem; }
+    .meta a { color: #3b82f6; }
   </style>
 </head>
 <body>
-  <div id="login-view" style="position:fixed;inset:0;background:#f8fafc;display:none;align-items:center;justify-content:center;z-index:1000">
-    <div class="card" style="width:330px;max-width:90vw">
-      <h2 style="margin-top:0">🏮 hannom-app — Sign in</h2>
-      <label for="lg-user">Username</label>
-      <input id="lg-user" autocomplete="username" />
-      <label for="lg-pass">Password</label>
-      <input id="lg-pass" type="password" autocomplete="current-password"
-             onkeydown="if(event.key==='Enter')doLogin()" />
-      <p id="lg-msg" class="muted" style="color:#c62828;min-height:1.1em"></p>
-      <button onclick="doLogin()" style="width:100%">Sign in</button>
-    </div>
-  </div>
+  <div class="container">
+    <h1>Han Scanner</h1>
+    <p class="subtitle">Paste Facebook post JSON below. The scanner will check if the image has Han/Chinese characters.</p>
 
-  <h1>🏮 hannom-app — Han-Nom OCR corpus builder</h1>
-  <p class="muted">Upload a page (image, or a text-layer Mục lục PDF). Review, fix boxes, re-OCR, and verify.</p>
-  <div id="userbar" class="muted" style="display:none;margin-bottom:1rem">
-    Signed in as <b id="ub-name"></b> (<span id="ub-role"></span>)
-    <a onclick="doLogout()" style="margin-left:0.5rem">log out</a>
-  </div>
-
-  <div id="nav" style="display:none;margin-bottom:1rem;font-size:0.95rem">
-    <a onclick="showJobs()" id="nav-jobs"><b>Jobs</b></a> ·
-    <a onclick="showCorpus()" id="nav-corpus">📚 Corpus</a>
-  </div>
-
-  <div id="jobs-view">
-  <div class="card" id="upload-card">
-    <h2>Upload</h2>
-    <form id="form">
-      <label for="file">Document (image or PDF)</label>
-      <input id="file" name="file" type="file" accept=".png,.jpg,.jpeg,.tif,.tiff,.pdf" required />
-      <label for="source_doc">Source doc hint (optional)</label>
-      <input id="source_doc" name="source_doc" type="text" placeholder="ChauBan / UcTraiTap" />
-      <br /><br />
-      <button type="submit">Upload &amp; enqueue</button>
-    </form>
-    <p id="msg" class="muted"></p>
-  </div>
-
-  <div class="card">
-    <h2>Jobs <button class="ghost" type="button" onclick="refresh()" style="font-size:0.75rem;padding:0.2rem 0.6rem">↻</button></h2>
-    <table><thead><tr><th>#</th><th>File</th><th>Status</th><th>Output</th></tr></thead><tbody id="jobs"></tbody></table>
-  </div>
-
-  <div class="card" id="admin-card" style="display:none">
-    <h2>👑 Admin — reviewers &amp; page ranges</h2>
-    <div class="workspace">
-      <div>
-        <h3 style="font-size:0.9rem">Create reviewer</h3>
-        <label for="au-user">Username</label><input id="au-user" />
-        <label for="au-pass">Password</label><input id="au-pass" type="password" />
-        <label for="au-role">Role</label>
-        <select id="au-role"><option value="reviewer">reviewer</option><option value="admin">admin</option></select>
-        <br /><br /><button onclick="adminCreateUser()">Create user</button>
-        <p id="au-msg" class="muted"></p>
-        <h3 style="font-size:0.9rem;margin-top:0.8rem">Users</h3>
-        <table><tbody id="admin-users"></tbody></table>
-      </div>
-      <div>
-        <h3 style="font-size:0.9rem">Assign a page range</h3>
-        <label for="as-user">Reviewer</label><select id="as-user"></select>
-        <div class="row">
-          <div><label for="as-job">Job #</label><input id="as-job" type="number" min="1" /></div>
-          <div><label for="as-start">From page</label><input id="as-start" type="number" min="1" /></div>
-          <div><label for="as-end">To page</label><input id="as-end" type="number" min="1" /></div>
-        </div>
-        <br /><button onclick="adminAssign()">Assign range</button>
-        <p id="as-msg" class="muted"></p>
-        <h3 style="font-size:0.9rem;margin-top:0.8rem">Assignments</h3>
-        <table><thead><tr><th>Reviewer</th><th>Job</th><th>Pages</th><th></th></tr></thead><tbody id="admin-assigns"></tbody></table>
+    <div class="card">
+      <label for="json-input">Post JSON (single object or array)</label>
+      <textarea id="json-input" placeholder='{"id": "...", "images": ["https://..."], "label": "...", "author": "..."}'></textarea>
+      <div class="actions">
+        <button class="btn-scan" id="btn-scan" onclick="doScan()">
+          Scan <span class="spinner" id="spinner"></span>
+        </button>
+        <button class="btn-clear" onclick="clearAll()">Clear</button>
+        <button class="btn-sample" onclick="loadSample()">Load Sample</button>
       </div>
     </div>
-    <h3 style="font-size:0.9rem;margin-top:1rem">Reviewer progress</h3>
-    <table><thead><tr><th>Reviewer</th><th>Job</th><th>Pages</th><th>Verified</th><th>On page</th><th>Last active</th></tr></thead><tbody id="admin-progress"></tbody></table>
-  </div>
 
-  <div class="card" id="review-card" style="display:none">
-    <div class="review-head">
-      <h2 id="review-title" style="margin:0">Review</h2>
-      <span class="progress" id="progress"></span>
-      <span class="pagesel" id="pagesel"></span>
-      <span style="flex:1"></span>
-      <select id="ai-provider" onchange="onProviderChange()" title="LLM provider for AI-correct" style="font-size:0.78rem;padding:0.25rem"></select>
-      <input id="ai-model" list="ai-model-list" placeholder="model" title="Model — the provider default is filled in; type or pick a newer one"
-             oninput="sessionStorage.setItem('llm_model', this.value)" style="font-size:0.78rem;width:150px;padding:0.3rem" />
-      <datalist id="ai-model-list"></datalist>
-      <input id="ai-key" type="password" placeholder="your API key" title="Your own LLM key — used per request, never stored server-side"
-             oninput="sessionStorage.setItem('llm_key', this.value)" style="font-size:0.78rem;width:150px;padding:0.3rem" />
-      <button class="ghost" onclick="closeReview()" style="font-size:0.75rem;padding:0.2rem 0.6rem">✕ close</button>
-    </div>
-    <div class="workspace">
-      <div>
-        <div class="toolbar">
-          <button class="ghost" id="draw-han-btn" onclick="toggleDraw('han')">🖊 Draw Hán</button>
-          <button class="ghost" id="draw-vi-btn" onclick="toggleDraw('meaning')">🖊 Draw Việt</button>
-          <span class="muted" id="draw-hint">Click a box to edit · drag its handles to resize · drag body to move</span>
-        </div>
-        <div class="toolbar" id="autoscan-bar" style="margin-top:0.3rem">
-          <button class="blue" id="btn-autoscan" onclick="submitBatchScan()" title="Queue a Gemini Batch job that reads this job's UNVERIFIED pages (async, ~50% cheaper, no rate-limit failures). It places Hán+Việt boxes, OCRs them, and detects continuations; results are written as UNVERIFIED records for you to check. Default model gemini-2.5-flash.">🤖 Batch AI scan</button>
-          <span class="muted" style="font-size:0.78rem">unverified pages
-            <input type="number" id="as-from" min="1" style="width:64px;padding:0.2rem" title="from page (optional)" />
-            →
-            <input type="number" id="as-to" min="1" style="width:64px;padding:0.2rem" title="to page (optional)" />
-          </span>
-          <span class="muted" id="autoscan-status" style="font-size:0.78rem"></span>
-        </div>
-        <div class="toolbar" id="addpages-bar" style="margin-top:0.3rem;display:none">
-          <button class="ghost" onclick="toggleAddPages()" id="btn-addpages-toggle" style="font-size:0.78rem">+ Add pages</button>
-          <span id="addpages-form" style="display:none;font-size:0.78rem">
-            <input type="file" id="addpages-file" accept=".pdf" style="width:180px;font-size:0.75rem;padding:0.2rem" />
-            <input type="text" id="addpages-nums" placeholder="e.g. 123-129, 256, 898-900" title="Pages to add (ranges OK). Uses the same PDF as this job." style="width:200px;padding:0.2rem" />
-            <button class="blue" onclick="submitAddPages()" style="font-size:0.78rem;padding:0.2rem 0.6rem">Add &amp; OCR</button>
-            <span class="muted" id="addpages-status"></span>
-          </span>
-        </div>
-        <div class="legend">
-          <span class="sw" style="background:rgba(179,18,42,.85)"></span>Hán
-          <span class="sw" style="background:rgba(21,101,192,.85)"></span>Việt
-          <span class="sw" style="background:#22c55e"></span>verified</div>
-        <div class="overlay-wrap" id="wrap"><p class="muted" style="padding:1rem">(loading…)</p></div>
-      </div>
-      <div class="editor disabled" id="editor">
-        <div class="row">
-          <div><label>Bài số (entry)</label><input type="number" id="f-entry" /></div>
-          <div><label>Trang số (page)</label><input type="number" id="f-page" min="1" /></div>
-        </div>
-        <div>
-          <label>Hán tự (Traditional)</label>
-          <textarea class="ta-han" id="f-han"></textarea>
-          <div class="raw" id="f-raw"></div>
-        </div>
-        <div>
-          <label>Quốc ngữ (phiên âm / dịch nghĩa)</label>
-          <textarea class="ta-vi" id="f-meaning"></textarea>
-        </div>
-        <div class="btnrow" style="margin-top:0.2rem">
-          <button class="amber" id="btn-reocr" onclick="reocrBox()" title="OCR the Hán box from the image">🔁 Re-OCR Hán</button>
-          <button class="amber" id="btn-reocr-vi" onclick="reocrVi()" title="OCR the Vietnamese box from the image (rough — AI enhance cleans it)">🔁 Re-OCR Việt</button>
-          <button class="blue" id="btn-llm-ocr" onclick="llmOcr()" title="Let the LLM read (OCR) the Hán &amp; Việt straight from the box images">✨ LLM OCR</button>
-          <button class="danger" id="btn-del" onclick="deleteBox()">🗑 Delete</button>
-        </div>
-        <div id="link-row" class="muted" style="font-size:0.8rem;min-height:1.2em"></div>
-        <div class="row">
-          <div><label>Ngày</label><input type="text" id="m-ngay" /></div>
-          <div><label>Tờ/Tập</label><input type="text" id="m-to_tap" /></div>
-          <div><label>Loại</label><input type="text" id="m-loai" /></div>
-        </div>
-        <div class="row">
-          <div><label>Xuất xứ</label><input type="text" id="m-xuat_xu" /></div>
-          <div><label>Đề tài</label><input type="text" id="m-de_tai" /></div>
-        </div>
-        <div id="ro-note" style="display:none;padding:0.55rem;border-radius:6px;background:#fef3c7;color:#92400e;font-weight:600;font-size:0.85rem">
-          🔒 Read-only — this page isn't in your assigned range.
-        </div>
-        <label class="verify" id="verify-box">
-          <input type="checkbox" id="f-verify" onchange="onVerify()" /> I confirm this record is correct
-        </label>
-        <button class="btn-save" id="btn-save" disabled onclick="saveRecord()">💾 Save to corpus</button>
-        <div class="btnrow"><button class="ghost" onclick="step(-1)">← Prev</button><button class="ghost" onclick="step(1)">Next →</button></div>
-      </div>
-    </div>
-  </div>
-  </div><!-- /jobs-view -->
-
-  <div class="card" id="corpus-card" style="display:none">
-    <div class="review-head">
-      <h2 style="margin:0">📚 Corpus</h2>
-      <span class="muted" id="corpus-summary"></span>
-      <span style="flex:1"></span>
-      <span id="corpus-member-wrap" style="display:none;font-size:0.85rem">
-        member: <select id="corpus-member" onchange="loadCorpus(0)"></select>
-      </span>
-      <span id="corpus-sync-wrap" style="display:none;font-size:0.85rem;margin-left:0.7rem">
-        <button class="ghost" id="btn-sync-sheet" onclick="syncSheet()" title="Push the verified corpus to the shared Google Sheet">☁ Sync sheet</button>
-        <span class="muted" id="sync-status"></span>
-      </span>
-    </div>
-    <div class="workspace">
-      <div>
-        <div class="muted" style="font-size:0.8rem;margin-bottom:0.3rem">Completed pages (Trang số) — only pages with verified work, across all uploads.</div>
-        <table><thead><tr><th>Trang số</th><th>Verified</th><th>Reviewer(s)</th><th>Uploads</th><th></th></tr></thead><tbody id="corpus-pages"></tbody></table>
-        <div class="btnrow" style="margin-top:0.5rem;align-items:center">
-          <button class="ghost" id="corpus-prev" onclick="corpusPage(-1)">‹ prev</button>
-          <span class="muted" id="corpus-pageinfo" style="flex:1;text-align:center"></span>
-          <button class="ghost" id="corpus-next" onclick="corpusPage(1)">next ›</button>
-        </div>
-      </div>
-      <div>
-        <h3 id="corpus-read-title" style="font-size:1rem;margin-top:0">Select a page to read</h3>
-        <div id="corpus-read"></div>
-      </div>
-    </div>
+    <div class="result-area" id="result-area"></div>
   </div>
 
   <script>
-    // Any 401 (e.g. an expired session) drops back to the login screen.
-    const _fetch = window.fetch.bind(window);
-    window.fetch = async (...args) => {
-      const r = await _fetch(...args);
-      if (r.status === 401 && !String(args[0]).includes('/auth/')) showLogin();
-      return r;
+    const SAMPLE = {
+      "id": "948677faaccae6dc182088aaadf56a98",
+      "label": "【\n年歲漸長 心要活得自由】\n年輕時總以為...",
+      "images": ["https://scontent.fsgn2-3.fna.fbcdn.net/v/t39.30808-6/765853078_3565650060268868_1058326410674324754_n.jpg?stp=dst-jpg_tt6&cstp=mx1170x1461&ctp=s640x640&_nc_cat=107&ccb=1-7&_nc_sid=aa7b47&_nc_eui2=AeG_W3OLcCHdNZWOtDtpWMjHlJabuzb1CEqUlpu7NvUISolf6vZDfgh9-SI9Twqw86vDGtnc5z_qLs0WizZBoJrW&_nc_ohc=qyCt_624K3oQ7kNvwFomYni&_nc_oc=Adr0agkm3r2GKnv4ENSpIz_mRSUAENSiIHz8_HdcaL5mBctiPMnz8A8KFSrVY3O81ffKWVWQlUgbLjIszCXC1YWq&_nc_zt=23&_nc_ht=scontent.fsgn2-3.fna&_nc_gid=KgnTrR694hmtXhTI_M5ZDQ&_nc_ss=7b2a8&oh=00_AQHojgAPf-PBszKFOBAlCwrbr5MzVIGBPz17JHnutVyg6w&oe=6A812953"],
+      "post_link": "https://www.facebook.com/groups/1792625541124212/posts/2786427191744037/?comment_id=2787086311678125",
+      "author": "董惠珍"
     };
-    const form = document.getElementById('form'), msg = document.getElementById('msg');
-    const esc = s => (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-    const cssEsc = s => (window.CSS && CSS.escape) ? CSS.escape(s) : s;
-    let R = { jobId: null, records: [], pages: [], page: null, selId: null, img: null, wrap: null, drawMode: false };
 
-    async function viewJob(id) {
-      const card = document.getElementById('review-card');
-      card.style.display = ''; document.getElementById('review-title').textContent = `Review — job #${id}`;
-      card.scrollIntoView({ behavior: 'smooth' });
-      const j = await (await fetch('/jobs/' + id + '/records')).json();
-      R = { jobId: id, records: j.records || [], pages: [], page: null, selId: null, img: null, wrap: null, drawMode: false };
-      R.pages = [...new Set(R.records.map(r => r.page))].sort((a, b) => a - b);
-      R.page = R.pages[0]; renderPageSelector(); renderPage();
-      if (R.pages.length) {  // default the batch-scan range to the whole job
-        document.getElementById('as-from').value = R.pages[0];
-        document.getElementById('as-to').value = R.pages[R.pages.length - 1];
-      }
-      loadJobBatches();  // surface/resume any in-flight batch for this job
-      document.getElementById('addpages-bar').style.display = (ME && ME.role === 'admin') ? '' : 'none';
-    }
-    function closeReview() { stopBatchPolling(); document.getElementById('review-card').style.display = 'none'; }
-    function pageRecords() { return R.records.filter(r => r.page === R.page); }
-    function getRec(id) { return R.records.find(r => r.id === id); }
-
-    function updateProgress() {
-      const v = R.records.filter(r => r.review_status === 'verified').length;
-      document.getElementById('progress').innerHTML = `verified <b>${v}</b> / ${R.records.length}`;
-    }
-    function renderPageSelector() {
-      const el = document.getElementById('pagesel');
-      el.innerHTML = R.pages.length <= 1 ? '' : 'page: ' + R.pages.map(p =>
-        p === R.page ? `<b>${p}</b>` : `<a onclick="gotoPage(${p})">${p}</a>`).join(' · ');
-      updateProgress();
-    }
-    function gotoPage(p) { R.page = p; R.selId = null; renderPageSelector(); renderPage(); }
-
-    function renderPage() {
-      const recs = pageRecords(), wrap = document.getElementById('wrap');
-      R.pageEditable = (ME && ME.role === 'admin') || recs.some(r => r.editable !== false);
-      document.getElementById('draw-han-btn').disabled = !R.pageEditable;
-      document.getElementById('draw-vi-btn').disabled = !R.pageEditable;
-      wrap.innerHTML = ''; R.wrap = wrap;
-      const img = document.createElement('img'); R.img = img; img.alt = 'page ' + R.page;
-      img.onload = () => { drawBoxes(); if (recs.length) selectRecord(recs[0].id); else fillEditor(null); };
-      img.onerror = () => { wrap.innerHTML = '<p class="muted" style="padding:1rem">(source image unavailable)</p>'; };
-      img.src = '/pages/' + encodeURIComponent(recs[0]?.image_path || '');
-      wrap.appendChild(img);
+    function loadSample() {
+      document.getElementById("json-input").value = JSON.stringify(SAMPLE, null, 2);
     }
 
-    function pct(v, d) { return (100 * v / d) + '%'; }
-
-    function drawBoxes() {
-      const wrap = R.wrap, img = R.img, nw = img.naturalWidth, nh = img.naturalHeight;
-      wrap.querySelectorAll('.box').forEach(b => b.remove());
-      if (!nw || !nh) return;
-      for (const r of pageRecords()) {
-        const verified = r.review_status === 'verified', sel = r.id === R.selId;
-        for (const [cls, bb, num] of [['box-han', r.han_bbox, r.part_of ? '⤷' : r.entry_no], ['box-vi', r.meaning_bbox, null]]) {
-          if (!bb || bb.length !== 4 || bb[2] <= bb[0] || bb[3] <= bb[1]) continue;
-          const d = document.createElement('div');
-          d.className = 'box ' + cls + (verified ? ' ok' : '') + (sel ? ' sel' : '');
-          d.dataset.id = r.id; d.dataset.kind = cls;
-          d.style.left = pct(bb[0], nw); d.style.top = pct(bb[1], nh);
-          d.style.width = pct(bb[2] - bb[0], nw); d.style.height = pct(bb[3] - bb[1], nh);
-          if (num != null) d.innerHTML = `<span class="box-num">${esc(num)}${verified ? ' ✓' : ''}</span>`;
-          d.addEventListener('mousedown', (e) => onBoxDown(e, r, cls));
-          // The selected record's boxes (Hán + Việt) are draggable only if the
-          // viewer may edit this record (admin, or their assigned range).
-          if (sel && r.editable !== false) { d.classList.add('edit'); addHandles(d, cls); }
-          wrap.appendChild(d);
-        }
-      }
+    function clearAll() {
+      document.getElementById("json-input").value = "";
+      document.getElementById("result-area").innerHTML = "";
     }
 
-    const HANDLES = ['nw','n','ne','e','se','s','sw','w'];
-    function addHandles(box, cls) {
-      for (const dir of HANDLES) {
-        const h = document.createElement('div'); h.className = 'handle'; h.dataset.dir = dir;
-        const v = { n: ['50%', '0'], s: ['50%', '100%'], e: ['100%', '50%'], w: ['0', '50%'],
-                    nw: ['0','0'], ne: ['100%','0'], sw: ['0','100%'], se: ['100%','100%'] }[dir];
-        h.style.left = `calc(${v[0]} - 5px)`; h.style.top = `calc(${v[1]} - 5px)`;
-        h.style.cursor = (dir==='n'||dir==='s')?'ns-resize':(dir==='e'||dir==='w')?'ew-resize':(dir==='nw'||dir==='se')?'nwse-resize':'nesw-resize';
-        h.addEventListener('mousedown', (e) => onResizeDown(e, dir, cls));
-        box.appendChild(h);
-      }
-    }
+    async function doScan() {
+      const btn = document.getElementById("btn-scan");
+      const spinner = document.getElementById("spinner");
+      const raw = document.getElementById("json-input").value.trim();
 
-    // ----- coordinate helpers -----
-    function toNatural(clientX, clientY) {
-      const rect = R.wrap.getBoundingClientRect();
-      const sx = R.img.naturalWidth / rect.width, sy = R.img.naturalHeight / rect.height;
-      return [(clientX - rect.left) * sx, (clientY - rect.top) * sy];
-    }
+      if (!raw) { alert("Paste some JSON first!"); return; }
 
-    // ----- box selection & drag/move (works on the Hán OR Việt box) -----
-    const fieldFor = (cls) => cls === 'box-vi' ? 'meaning_bbox' : 'han_bbox';
-    function onBoxDown(e, rec, cls) {
-      if (rec.id !== R.selId) { selectRecord(rec.id); return; }
-      e.preventDefault(); e.stopPropagation();
-      startDrag('move', rec, e, fieldFor(cls));
-    }
-    function onResizeDown(e, dir, cls) {
-      e.preventDefault(); e.stopPropagation();
-      startDrag(dir, getRec(R.selId), e, fieldFor(cls));
-    }
-
-    let drag = null;
-    function startDrag(mode, rec, e, field) {
-      drag = { mode, rec, field, start: toNatural(e.clientX, e.clientY),
-               startClient: { x: e.clientX, y: e.clientY }, box: [...(rec[field] || rec.han_bbox)], armed: false };
-      document.addEventListener('mousemove', onDragMove);
-      document.addEventListener('mouseup', onDragUp);
-    }
-    function onDragMove(e) {
-      if (!drag) return;
-      // Don't move/resize until the pointer has actually travelled a few px —
-      // so a plain click to SELECT never nudges the box.
-      if (!drag.armed) {
-        if (Math.hypot(e.clientX - drag.startClient.x, e.clientY - drag.startClient.y) < 4) return;
-        drag.armed = true;
-      }
-      const [mx, my] = toNatural(e.clientX, e.clientY);
-      const dx = mx - drag.start[0], dy = my - drag.start[1];
-      let [x0, y0, x1, y1] = drag.box;
-      if (drag.mode === 'move') { x0 += dx; x1 += dx; y0 += dy; y1 += dy; }
-      else { const d = drag.mode;
-        if (d.includes('n')) y0 = my; if (d.includes('s')) y1 = my;
-        if (d.includes('w')) x0 = mx; if (d.includes('e')) x1 = mx; }
-      x0 = Math.max(0, Math.min(x0, x1 - 8)); y0 = Math.max(0, Math.min(y0, y1 - 8));
-      x1 = Math.min(R.img.naturalWidth, x1); y1 = Math.min(R.img.naturalHeight, y1);
-      drag.rec[drag.field] = [x0, y0, x1, y1];
-      drawBoxes();  // re-render with live geometry + handles
-    }
-    function onDragUp() {
-      document.removeEventListener('mousemove', onDragMove);
-      document.removeEventListener('mouseup', onDragUp);
-      drag = null;  // geometry kept in local state; persisted on Save / used by Re-OCR
-    }
-
-    // ----- draw a new box -----
-    // Draw mode: 'han' creates a NEW entry from the drawn Hán box; 'meaning' sets
-    // the SELECTED entry's Việt box. Clicking the active button again turns it off.
-    function toggleDraw(mode) {
-      R.drawMode = (R.drawMode === mode) ? null : mode;
-      document.getElementById('draw-han-btn').classList.toggle('blue', R.drawMode === 'han');
-      document.getElementById('draw-vi-btn').classList.toggle('blue', R.drawMode === 'meaning');
-      if (R.wrap) R.wrap.classList.toggle('draw', !!R.drawMode);
-      document.getElementById('draw-hint').textContent =
-        R.drawMode === 'han' ? 'Draw the Hán box → creates a new entry'
-        : R.drawMode === 'meaning' ? 'Draw the Việt box for the SELECTED entry'
-        : 'Click a box to edit · drag its handles to resize · drag body to move';
-    }
-    document.addEventListener('mousedown', (e) => {
-      if (!R.drawMode || !R.wrap || R.pageEditable === false) return;
-      if (e.target !== R.img && e.target !== R.wrap) return;
-      e.preventDefault();
-      const mode = R.drawMode;
-      const [sx, sy] = toNatural(e.clientX, e.clientY);
-      const temp = document.createElement('div');
-      temp.className = 'box ' + (mode === 'meaning' ? 'box-vi' : 'box-han') + ' sel'; R.wrap.appendChild(temp);
-      const draw = { sx, sy };
-      const mv = (ev) => { const [mx, my] = toNatural(ev.clientX, ev.clientY);
-        const x0 = Math.min(sx, mx), y0 = Math.min(sy, my), x1 = Math.max(sx, mx), y1 = Math.max(sy, my);
-        draw.box = [x0, y0, x1, y1];
-        temp.style.left = pct(x0, R.img.naturalWidth); temp.style.top = pct(y0, R.img.naturalHeight);
-        temp.style.width = pct(x1 - x0, R.img.naturalWidth); temp.style.height = pct(y1 - y0, R.img.naturalHeight); };
-      const up = async () => {
-        document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up);
-        temp.remove();
-        if (!draw.box || (draw.box[2]-draw.box[0]) < 8 || (draw.box[3]-draw.box[1]) < 8) { toggleDraw(mode); return; }
-        if (mode === 'meaning') {
-          // Attach the Việt box to the entry whose Hán box lines up vertically with
-          // it (same y-band = same bài), so drawing several Việt boxes never
-          // overwrites the wrong entry — regardless of what's currently selected.
-          const cy = (draw.box[1] + draw.box[3]) / 2;
-          const cands = pageRecords().filter(r => r.han_bbox && r.han_bbox.length === 4);
-          let target = cands.find(r => cy >= r.han_bbox[1] && cy <= r.han_bbox[3]);
-          if (!target && cands.length) {
-            target = cands.reduce((a, b) =>
-              Math.abs((b.han_bbox[1] + b.han_bbox[3]) / 2 - cy) < Math.abs((a.han_bbox[1] + a.han_bbox[3]) / 2 - cy) ? b : a);
-          }
-          target = target || getRec(R.selId);
-          if (!target) { alert('Draw the Hán box first (or select an entry), then its Việt box.'); toggleDraw(mode); return; }
-          target.meaning_bbox = draw.box;   // local; saved with the record on Save
-          toggleDraw(mode); drawBoxes(); selectRecord(target.id);
-          return;
-        }
-        // 'han' → create a new entry with this Hán box
-        const pageImg = (pageRecords()[0] || {}).image_path || '';
-        const res = await fetch(`/jobs/${R.jobId}/record/new`, { method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ page: R.page, han_bbox: draw.box, image_path: pageImg }) });
-        const j = await res.json(); R.records.push(j.record);
-        toggleDraw(mode); drawBoxes(); selectRecord(j.record.id); updateProgress();
-      };
-      document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
-    });
-
-    // ----- editor -----
-    function selectRecord(id) { R.selId = id; drawBoxes(); fillEditor(getRec(id)); }
-    function fillEditor(rec) {
-      const ed = document.getElementById('editor');
-      if (!rec) { ed.classList.add('disabled'); return; }
-      ed.classList.remove('disabled');
-      const m = rec.entry_meta || {};
-      f('f-entry', rec.entry_no ?? ''); f('f-page', rec.page ?? '');
-      f('f-han', rec.han || ''); f('f-meaning', rec.meaning || '');
-      for (const k of ['ngay','to_tap','loai','xuat_xu','de_tai']) f('m-' + k, m[k] || '');
-      const raw = document.getElementById('f-raw');
-      raw.innerHTML = (rec.han_raw && rec.han_raw !== rec.han) ? `raw OCR: <span class="d">${esc(rec.han_raw)}</span>` : '';
-      // Spanning-entry link control.
-      const lr = document.getElementById('link-row'), ce = rec.editable !== false;
-      if (rec.part_of) lr.innerHTML = `⤷ continuation of <b>${esc(rec.part_of)}</b>` + (ce ? ` · <a onclick="unlinkRec()">unlink</a>` : '');
-      else lr.innerHTML = ce ? `<a onclick="linkPrev()" title="This bài continues from the entry before it (e.g. across a page break)">⤷ mark as continuation of previous entry</a>` : '';
-      document.getElementById('f-verify').checked = rec.review_status === 'verified';
-      applyEditable(rec); onVerify();
-    }
-    function f(id, v) { document.getElementById(id).value = v; }
-    // View-all / edit-own: reviewers can only edit records the API marked editable.
-    function applyEditable(rec) {
-      const canEdit = !rec || rec.editable !== false;
-      R.selEditable = canEdit;
-      ['f-entry','f-page','f-han','f-meaning','m-ngay','m-to_tap','m-loai','m-xuat_xu','m-de_tai']
-        .forEach(id => { document.getElementById(id).readOnly = !canEdit; });
-      ['btn-reocr','btn-reocr-vi','btn-llm-ocr','btn-del','f-verify'].forEach(id => { document.getElementById(id).disabled = !canEdit; });
-      document.getElementById('ro-note').style.display = canEdit ? 'none' : '';
-    }
-    function onVerify() {
-      const on = document.getElementById('f-verify').checked;
-      document.getElementById('btn-save').disabled = !on || R.selEditable === false;
-      document.getElementById('verify-box').classList.toggle('on', on);
-    }
-
-    async function reocrField(field, bbox, targetId, btnId) {
-      const rec = getRec(R.selId); if (!rec) return;
-      if (!bbox || bbox.length !== 4) { alert('This record has no box to re-OCR.'); return; }
-      const btn = document.getElementById(btnId), label = btn.textContent;
-      btn.disabled = true; btn.textContent = '⏳ OCR…';
+      let data;
       try {
-        const r = await (await fetch(`/jobs/${R.jobId}/reocr`, { method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ image_path: rec.image_path, bbox, page: rec.page, field }) })).json();
-        const rid = r.reocr_job_id;
-        for (let i = 0; i < 40; i++) {
-          await new Promise(s => setTimeout(s, 700));
-          const p = await (await fetch('/reocr/' + rid)).json();
-          if (p.status === 'done') {
-            document.getElementById(targetId).value = p.text || '';
-            if (field === 'han') rec.han = p.text || ''; else rec.meaning = p.text || '';
-            break;
-          }
-          if (p.status === 'failed') { alert('Re-OCR failed: ' + (p.error||'')); break; }
-        }
-      } catch (err) { alert('Re-OCR error: ' + err); }
-      btn.disabled = false; btn.textContent = label;
-    }
-    function reocrBox() { const rec = getRec(R.selId); if (rec) reocrField('han', rec.han_bbox, 'f-han', 'btn-reocr'); }
-    function reocrVi()  { const rec = getRec(R.selId); if (rec) reocrField('meaning', rec.meaning_bbox, 'f-meaning', 'btn-reocr-vi'); }
-
-    // Crop a bbox (natural pixels) from the page image to a PNG data URL, or null.
-    // Large crops are downscaled (longest side <= MAX px) so the LLM upload/read is
-    // fast — text stays legible well below the 300-DPI render size.
-    function cropBoxPng(bb) {
-      const img = R.img;
-      if (!bb || bb.length !== 4 || !img || !img.naturalWidth) return null;
-      const x0 = Math.max(0, Math.round(bb[0])), y0 = Math.max(0, Math.round(bb[1]));
-      const w = Math.max(1, Math.round(bb[2] - bb[0])), h = Math.max(1, Math.round(bb[3] - bb[1]));
-      const MAX = 1200, scale = Math.min(1, MAX / Math.max(w, h));
-      const ow = Math.max(1, Math.round(w * scale)), oh = Math.max(1, Math.round(h * scale));
-      const cv = document.createElement('canvas'); cv.width = ow; cv.height = oh;
-      cv.getContext('2d').drawImage(img, x0, y0, w, h, 0, 0, ow, oh);
-      return cv.toDataURL('image/png');
-    }
-
-    async function loadProviders() {
-      try {
-        const j = await (await fetch('/llm/providers')).json();
-        window.PROVIDERS = {}; window.PROVIDER_INFO = {};
-        for (const p of j.providers) { window.PROVIDERS[p.name] = p.supports_vision !== false; window.PROVIDER_INFO[p.name] = p; }
-        document.getElementById('ai-provider').innerHTML =
-          j.providers.map(p => `<option value="${p.name}">${esc(p.name)}</option>`).join('');
-        onProviderChange();
-      } catch (e) { /* ignore */ }
-      const k = sessionStorage.getItem('llm_key'); if (k) document.getElementById('ai-key').value = k;
-    }
-    // Fill the model box (+ suggestions) for the chosen provider; user can edit it.
-    function onProviderChange() {
-      const info = (window.PROVIDER_INFO || {})[document.getElementById('ai-provider').value] || {};
-      document.getElementById('ai-model-list').innerHTML =
-        (info.suggested_models || []).map(m => `<option value="${esc(m)}"></option>`).join('');
-      document.getElementById('ai-model').value = info.default_model || '';
-    }
-    function currentModel() { return (document.getElementById('ai-model').value || '').trim() || null; }
-
-    // LLM OCR: the LLM reads (OCRs) BOTH crops and returns Hán + Việt transcriptions.
-    async function llmOcr() {
-      const rec = getRec(R.selId); if (!rec) return;
-      const provider = document.getElementById('ai-provider').value || 'gemini';
-      if (window.PROVIDERS && window.PROVIDERS[provider] === false) {
-        alert(`${provider} has no image model. Pick Gemini, OpenAI, or Anthropic for LLM OCR.`); return;
+        data = JSON.parse(raw);
+      } catch (e) {
+        alert("Bad JSON: " + e.message);
+        return;
       }
-      const api_key = (document.getElementById('ai-key').value || '').trim();
-      if (!api_key) { alert(`Paste your ${provider} API key in the field at the top-right of Review.`); return; }
-      if (!R.img || !R.img.naturalWidth) { alert('Page image not loaded yet.'); return; }
-      const han_b64 = cropBoxPng(rec.han_bbox);
-      if (!han_b64) { alert('This record has no Hán box to crop.'); return; }
-      const vi_b64 = cropBoxPng(rec.meaning_bbox) || '';
-      const btn = document.getElementById('btn-llm-ocr'), label = btn.textContent;
-      btn.disabled = true; btn.textContent = '✨ …';
-      try {
-        const res = await fetch(`/jobs/${R.jobId}/llm_ocr`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: rec.id, provider, api_key, model: currentModel(), han_b64, vi_b64,
-            han_text: document.getElementById('f-han').value || '', vi_text: document.getElementById('f-meaning').value || '' }) });
-        const j = await res.json();
-        if (!res.ok) throw new Error(j.detail || res.status);
-        if (j.han) { document.getElementById('f-han').value = j.han; rec.han = j.han; }
-        if (j.meaning) { document.getElementById('f-meaning').value = j.meaning; rec.meaning = j.meaning; }
-      } catch (err) { alert('LLM OCR failed: ' + err); }
-      btn.disabled = false; btn.textContent = label;
-    }
 
-    // ----- AI batch auto-scan (Gemini Batch API): whole-job, async -----
-    let BATCH = { name: null, timer: null };
-    function batchStatusEl() { return document.getElementById('autoscan-status'); }
-    function batchKey() { return (document.getElementById('ai-key').value || '').trim(); }
-    function batchModel() {
-      const m = currentModel();
-      const def = (window.PROVIDER_INFO && window.PROVIDER_INFO.gemini && window.PROVIDER_INFO.gemini.default_model) || '';
-      return (!m || m === def) ? 'gemini-2.5-flash' : m;  // batch default, unless user typed one
-    }
-    async function submitBatchScan() {
-      const provider = document.getElementById('ai-provider').value || 'gemini';
-      if (provider !== 'gemini') { alert('Batch scan is Gemini-only. Choose Gemini as the provider.'); return; }
-      const api_key = batchKey();
-      if (!api_key) { alert('Paste your Gemini API key (top-right of Review).'); return; }
-      const model = batchModel();
-      const body = { provider, api_key, model };
-      const from = parseInt(document.getElementById('as-from').value); if (from >= 1) body.page_from = from;
-      const to = parseInt(document.getElementById('as-to').value); if (to >= 1) body.page_to = to;
-      if (!confirm(`Queue a Gemini batch scan of this job's UNVERIFIED pages with ${model}? It runs in the background (minutes–hours); results are written as pending records for review. Verified pages are skipped.`)) return;
-      const btn = document.getElementById('btn-autoscan'); btn.disabled = true;
-      batchStatusEl().textContent = 'Submitting…';
+      btn.disabled = true;
+      spinner.classList.add("show");
+      document.getElementById("result-area").innerHTML = "<p>Scanning...</p>";
+
       try {
-        const res = await fetch(`/jobs/${R.jobId}/autoscan_batch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        const j = await res.json();
-        if (!res.ok) throw new Error(j.detail || res.status);
-        BATCH.name = j.batch_name;
-        batchStatusEl().textContent = `Batch submitted · ${j.pages} page(s) · scanning…`;
-        startBatchPolling();
-      } catch (err) { batchStatusEl().innerHTML = `<span class="failed">Submit failed: ${esc(String(err.message || err))}</span>`; }
-      btn.disabled = false;
-    }
-    function startBatchPolling() { if (BATCH.timer) clearInterval(BATCH.timer); pollBatchOnce(); BATCH.timer = setInterval(pollBatchOnce, 45000); }
-    function stopBatchPolling() { if (BATCH.timer) { clearInterval(BATCH.timer); BATCH.timer = null; } }
-    async function pollBatchOnce() {
-      if (!BATCH.name || !R.jobId) return;
-      const api_key = batchKey();
-      if (!api_key) { batchStatusEl().textContent = 'Paste your Gemini key to check batch status.'; return; }
-      try {
-        const res = await fetch(`/jobs/${R.jobId}/autoscan_batch/status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ batch_name: BATCH.name, api_key }) });
-        const j = await res.json();
-        if (!res.ok) throw new Error(j.detail || res.status);
-        if (j.state === 'applied') {
-          stopBatchPolling(); const n = BATCH.name; BATCH.name = null;
-          batchStatusEl().textContent = `✓ Batch done · applied ${j.created_entries} entries. Reloading…`;
-          await reloadRecords();
-          batchStatusEl().innerHTML = `✓ Batch done · applied <b>${j.created_entries}</b> entries.`;
-        } else if (['failed', 'cancelled', 'expired'].includes(j.state)) {
-          stopBatchPolling(); BATCH.name = null;
-          batchStatusEl().innerHTML = `<span class="failed">Batch ${j.state}${j.error ? ': ' + esc(j.error) : ''}</span>`;
+        let results;
+        if (Array.isArray(data)) {
+          const resp = await fetch("/scan/batch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+          if (!resp.ok) throw new Error(await resp.text());
+          results = await resp.json();
         } else {
-          batchStatusEl().textContent = `Batch ${j.state || 'running'}… (auto-checks every 45s)`;
+          const resp = await fetch("/scan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+          if (!resp.ok) throw new Error(await resp.text());
+          results = [await resp.json()];
         }
-      } catch (err) { batchStatusEl().innerHTML = `<span class="failed">Status check failed: ${esc(String(err.message || err))}</span>`; }
+        renderResults(results);
+      } catch (e) {
+        document.getElementById("result-area").innerHTML =
+          `<div class="result-card error"><strong>Error:</strong> ${e.message}</div>`;
+      } finally {
+        btn.disabled = false;
+        spinner.classList.remove("show");
+      }
     }
-    async function loadJobBatches() {  // resume an in-flight batch when a job is opened
-      stopBatchPolling(); BATCH.name = null; batchStatusEl().textContent = '';
-      try {
-        const j = await (await fetch(`/jobs/${R.jobId}/autoscan_batch`)).json();
-        const active = (j.batches || []).find(b => !['applied', 'failed', 'cancelled', 'expired'].includes(b.state));
-        if (active) {
-          BATCH.name = active.batch_name;
-          batchStatusEl().innerHTML = `Batch in progress (${active.pages} page(s)) — <a onclick="startBatchPolling()">check status</a>`;
+
+    function renderResults(results) {
+      const area = document.getElementById("result-area");
+      area.innerHTML = "";
+
+      for (const r of results) {
+        const cls = r.valid_pic ? "valid" : "invalid";
+        const badgeCls = r.valid_pic ? "yes" : "no";
+        const badgeText = r.valid_pic ? "HAS HAN" : "NO HAN";
+
+        let textsHtml = "";
+        if (r.texts && r.texts.length > 0) {
+          textsHtml = `<div class="texts-list">${r.texts.map(t => `<p>${esc(t)}</p>`).join("")}</div>`;
         }
-      } catch {}
-    }
 
-    // ----- add pages to existing job (admin only) -----
-    function toggleAddPages() {
-      const form = document.getElementById('addpages-form');
-      form.style.display = form.style.display === 'none' ? '' : 'none';
-    }
-    // Expand "123-129, 256, 898-900" → [123,124,...,129,256,898,899,900]
-    function expandPageRanges(s) {
-      const pages = [];
-      for (const part of s.split(',')) {
-        const t = part.trim(); if (!t) continue;
-        const m = t.match(/^(\d+)\s*-\s*(\d+)$/);
-        if (m) { const a = +m[1], b = +m[2]; for (let i = Math.min(a,b); i <= Math.max(a,b); i++) pages.push(i); }
-        else if (/^\d+$/.test(t)) pages.push(+t);
-        else return null;  // invalid
-      }
-      return [...new Set(pages)].sort((a,b) => a-b);
-    }
-    async function submitAddPages() {
-      const fileInput = document.getElementById('addpages-file');
-      const pagesInput = document.getElementById('addpages-nums');
-      const status = document.getElementById('addpages-status');
-      const file = fileInput.files[0];
-      if (!file) { status.textContent = 'Select a PDF file.'; return; }
-      const raw = pagesInput.value.trim();
-      if (!raw) { status.textContent = 'Enter page numbers.'; return; }
-      const pageList = expandPageRanges(raw);
-      if (!pageList || !pageList.length) { status.textContent = 'Invalid format. Use e.g. 123-129, 256, 898-900'; return; }
-      // pages = trang_so (same PDF, same numbering)
-      const pages = pageList.join(',');
-      const data = new FormData();
-      data.append('file', file);
-      data.append('pages', pages);
-      status.textContent = `Uploading ${pageList.length} page(s)…`;
-      try {
-        const res = await fetch(`/jobs/${R.jobId}/add-pages`, { method: 'POST', body: data });
-        const j = await res.json();
-        if (!res.ok) throw new Error(j.detail || res.status);
-        fileInput.value = ''; pagesInput.value = '';
-        // Poll the worker job until done, then reload records.
-        const wid = j.worker_job_id;
-        status.textContent = `⏳ Processing ${j.pages.length} page(s)…`;
-        for (let i = 0; i < 120; i++) {
-          await new Promise(s => setTimeout(s, 3000));
-          const st = await (await fetch('/jobs/' + wid)).json();
-          if (st.status === 'done') {
-            status.innerHTML = `✓ ${j.pages.length} page(s) added. Reloading…`;
-            await reloadRecords();
-            R.pages = [...new Set(R.records.map(r => r.page))].sort((a, b) => a - b);
-            renderPageSelector();
-            status.innerHTML = `✓ ${j.pages.length} page(s) added.`;
-            return;
-          }
-          if (st.status === 'failed') { status.innerHTML = `<span class="failed">Worker failed: ${esc(st.error || 'unknown')}</span>`; return; }
-        }
-        status.textContent = 'Timed out waiting check worker logs.';
-      } catch (err) { status.innerHTML = `<span class="failed">Failed: ${esc(String(err.message || err))}</span>`; }
-    }
+        let metaHtml = "";
+        if (r.author) metaHtml += `Author: <strong>${esc(r.author)}</strong> `;
+        if (r.post_link) metaHtml += `| <a href="${esc(r.post_link)}" target="_blank">View post</a>`;
 
-    // ----- spanning entries: link a fragment to the previous entry -----
-    async function reloadRecords() {
-      try { const j = await (await fetch('/jobs/' + R.jobId + '/records')).json(); R.records = j.records || []; } catch {}
-      drawBoxes(); fillEditor(getRec(R.selId) || null); updateProgress();
-    }
-    async function linkPrev() {
-      const rec = getRec(R.selId); if (!rec) return;
-      const res = await fetch(`/jobs/${R.jobId}/record/link`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: rec.id }) });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); alert('Link failed: ' + (j.detail || res.status)); return; }
-      await reloadRecords();
-    }
-    async function unlinkRec() {
-      const rec = getRec(R.selId); if (!rec) return;
-      const res = await fetch(`/jobs/${R.jobId}/record/unlink`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: rec.id }) });
-      if (res.ok) await reloadRecords(); else alert('Unlink failed');
-    }
-
-    async function deleteBox() {
-      const rec = getRec(R.selId); if (!rec) return;
-      if (!confirm('Delete this box/record?')) return;
-      await fetch(`/jobs/${R.jobId}/record/delete`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id: rec.id }) });
-      R.records = R.records.filter(x => x.id !== rec.id); R.selId = null;
-      drawBoxes(); const recs = pageRecords(); if (recs.length) selectRecord(recs[0].id); else fillEditor(null);
-      updateProgress();
-    }
-
-    async function saveRecord() {
-      const rec = getRec(R.selId); if (!rec) return;
-      const body = { id: rec.id, han: document.getElementById('f-han').value, meaning: document.getElementById('f-meaning').value,
-        entry_no: parseInt(document.getElementById('f-entry').value) || null,
-        page: parseInt(document.getElementById('f-page').value) || rec.page,
-        entry_meta: Object.fromEntries(['ngay','to_tap','loai','xuat_xu','de_tai'].map(k => [k, document.getElementById('m-'+k).value])),
-        han_bbox: rec.han_bbox, meaning_bbox: rec.meaning_bbox, review_status: 'verified' };
-      const btn = document.getElementById('btn-save'); btn.disabled = true; btn.textContent = 'Saving…';
-      try {
-        const res = await fetch(`/jobs/${R.jobId}/record`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-        if (!res.ok) throw new Error((await res.json()).detail || res.status);
-        Object.assign(rec, (await res.json()).record);
-        btn.textContent = '✓ Saved'; updateProgress(); drawBoxes();
-        setTimeout(() => { btn.textContent = '💾 Save to corpus'; }, 1000);
-        step(1);
-      } catch (err) { btn.textContent = '💾 Save to corpus'; btn.disabled = false; alert('Save failed: ' + err); }
-    }
-
-    function step(delta) {
-      const recs = pageRecords(), i = recs.findIndex(r => r.id === R.selId), next = recs[i + delta];
-      if (next) { selectRecord(next.id); return; }
-      // Cross page: go to next/prev page when at the edge of the current one.
-      const pi = R.pages.indexOf(R.page);
-      const nextPage = R.pages[pi + delta];
-      if (nextPage != null) {
-        gotoPage(nextPage);
-        // After page renders, select first or last record depending on direction.
-        setTimeout(() => {
-          const pr = pageRecords();
-          if (pr.length) selectRecord(delta > 0 ? pr[0].id : pr[pr.length - 1].id);
-        }, 100);
+        area.innerHTML += `
+          <div class="result-card ${cls}">
+            <div class="result-header">
+              <span>
+                <span class="stat"><strong>${r.han_words}</strong> Han chars</span>
+                <span class="stat"><strong>${r.boxes}</strong> text boxes</span>
+              </span>
+              <span class="badge ${badgeCls}">${badgeText}</span>
+            </div>
+            ${textsHtml}
+            <img class="preview-img" src="${esc(r.image_url)}" onerror="this.style.display='none'" />
+            <div class="meta">${metaHtml}</div>
+            <div class="meta">ID: ${esc(r.id)}</div>
+          </div>
+        `;
       }
     }
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const data = new FormData();
-      data.append('file', document.getElementById('file').files[0]);
-      data.append('source_doc', document.getElementById('source_doc').value);
-      msg.textContent = 'Uploading…';
-      try {
-        const r = await fetch('/upload', { method: 'POST', body: data }); const j = await r.json();
-        msg.textContent = r.ok ? `Enqueued job #${j.job_id} (${j.filename}).` : `Error: ${j.detail}`; refresh();
-      } catch (err) { msg.textContent = 'Upload failed: ' + err; }
-    });
-
-    async function deleteJob(id) {
-      if (!confirm(`Delete job #${id} and ALL its records, assignments, and page images? This cannot be undone.`)) return;
-      const r = await fetch('/jobs/' + id, { method: 'DELETE' });
-      if (r.ok) { if (R.jobId === id) closeReview(); refresh(); }
-      else alert('Delete failed: ' + ((await r.json().catch(() => ({}))).detail || r.status));
+    function esc(s) {
+      const d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
     }
-
-    async function refresh() {
-      const j = await (await fetch('/jobs')).json(); const tbody = document.getElementById('jobs'); tbody.innerHTML = '';
-      for (const job of j.jobs) {
-        if (job.filename && (job.filename.startsWith('reocr') || job.filename.startsWith('add_pages'))) continue;  // hide internal jobs
-        const tr = document.createElement('tr'); let out = '—';
-        if (job.status === 'done') out = `<a onclick="viewJob(${job.id})">review</a> · <a href="/jobs/${job.id}/output">.jsonl</a>`;
-        else if (job.status === 'failed') out = `<span class="muted" title="${esc(job.error)}">${esc(job.error) || 'failed'}</span>`;
-        const del = (ME && ME.role === 'admin') ? ` · <a onclick="deleteJob(${job.id})" title="delete job" style="color:#c62828">🗑</a>` : '';
-        tr.innerHTML = `<td>${job.id}</td><td>${esc(job.filename)}</td><td class="status ${job.status}">${job.status}</td><td>${out}${del}</td>`;
-        tbody.appendChild(tr);
-      }
-    }
-    // ----- admin panel (users + page-range assignments) -----
-    async function loadAdmin() {
-      if (!ME || ME.role !== 'admin') return;
-      document.getElementById('admin-card').style.display = '';
-      const us = ((await (await fetch('/admin/users')).json()).users) || [];
-      document.getElementById('admin-users').innerHTML =
-        us.map(u => `<tr><td>${esc(u.username)}</td><td class="muted">${esc(u.role)}</td>` +
-          `<td><a onclick="adminSetPw(${u.id})">set password</a></td></tr>`).join('');
-      document.getElementById('as-user').innerHTML =
-        us.filter(u => u.role === 'reviewer').map(u => `<option value="${u.id}">${esc(u.username)}</option>`).join('');
-      const as = ((await (await fetch('/admin/assignments')).json()).assignments) || [];
-      document.getElementById('admin-assigns').innerHTML = as.map(a =>
-        `<tr><td>${esc(a.username)}</td><td>${a.job_id}</td><td>${a.page_start}–${a.page_end}</td>` +
-        `<td><a onclick="adminDelAssign(${a.id})">remove</a></td></tr>`).join('');
-      const pr = ((await (await fetch('/admin/progress')).json()).progress) || [];
-      document.getElementById('admin-progress').innerHTML = pr.map(p => {
-        const pct = p.total ? Math.round(100 * p.verified / p.total) : 0;
-        const cur = p.current_page != null ? ('p' + p.current_page) : '✓ done';
-        const la = p.last_active ? new Date(p.last_active * 1000).toLocaleString() : '—';
-        return `<tr><td>${esc(p.username)}</td><td>${p.job_id}</td><td>${p.page_start}–${p.page_end}</td>` +
-          `<td><span style="display:inline-block;width:90px;height:9px;background:#e5e7eb;border-radius:4px;vertical-align:middle">` +
-          `<span style="display:block;height:9px;background:#22c55e;border-radius:4px;width:${pct}%"></span></span> ${p.verified}/${p.total} (${pct}%)</td>` +
-          `<td>${cur}</td><td class="muted">${esc(la)}</td></tr>`;
-      }).join('');
-    }
-    // Refresh the admin progress table periodically while an admin is viewing.
-    setInterval(() => { if (ME && ME.role === 'admin') loadAdmin(); }, 15000);
-    async function adminCreateUser() {
-      const b = { username: document.getElementById('au-user').value.trim(),
-        password: document.getElementById('au-pass').value, role: document.getElementById('au-role').value };
-      const m = document.getElementById('au-msg'); m.textContent = '';
-      const r = await fetch('/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
-      const j = await r.json().catch(() => ({}));
-      m.textContent = r.ok ? `created ${b.username}` : (j.detail || 'failed');
-      if (r.ok) { document.getElementById('au-user').value = ''; document.getElementById('au-pass').value = ''; loadAdmin(); }
-    }
-    async function adminAssign() {
-      const b = { user_id: +document.getElementById('as-user').value, job_id: +document.getElementById('as-job').value,
-        page_start: +document.getElementById('as-start').value, page_end: +document.getElementById('as-end').value };
-      const m = document.getElementById('as-msg'); m.textContent = '';
-      const r = await fetch('/admin/assignments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
-      const j = await r.json().catch(() => ({}));
-      m.textContent = r.ok ? 'assigned' : (j.detail || 'failed'); if (r.ok) loadAdmin();
-    }
-    async function adminDelAssign(id) { await fetch('/admin/assignments/' + id, { method: 'DELETE' }); loadAdmin(); }
-    async function adminSetPw(id) {
-      const pw = prompt('New password for this user:');
-      if (!pw) return;
-      const r = await fetch(`/admin/users/${id}/password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) });
-      if (r.ok) alert('Password updated.'); else alert('Failed: ' + ((await r.json().catch(() => ({}))).detail || r.status));
-    }
-
-    // ----- corpus view (whole corpus by Trang số, across all uploads) -----
-    let CORPUS = { offset: 0, limit: 25, total: 0 };
-    function showJobs() {
-      document.getElementById('jobs-view').style.display = '';
-      document.getElementById('corpus-card').style.display = 'none';
-      document.getElementById('nav-jobs').innerHTML = '<b>Jobs</b>';
-      document.getElementById('nav-corpus').innerHTML = '📚 Corpus';
-    }
-    function showCorpus() {
-      document.getElementById('jobs-view').style.display = 'none';
-      document.getElementById('corpus-card').style.display = '';
-      document.getElementById('nav-jobs').innerHTML = 'Jobs';
-      document.getElementById('nav-corpus').innerHTML = '<b>📚 Corpus</b>';
-      if (ME && ME.role === 'admin') {
-        document.getElementById('corpus-member-wrap').style.display = '';
-        document.getElementById('corpus-sync-wrap').style.display = '';
-        populateCorpusMembers();
-      }
-      loadCorpus(0);
-    }
-    async function populateCorpusMembers() {
-      try {
-        const us = ((await (await fetch('/admin/users')).json()).users) || [];
-        document.getElementById('corpus-member').innerHTML =
-          ['<option value="">all members</option>'].concat(
-            us.filter(u => u.role === 'reviewer').map(u => `<option value="${u.id}">${esc(u.username)}</option>`)
-          ).join('');
-      } catch {}
-    }
-    async function syncSheet() {
-      const btn = document.getElementById('btn-sync-sheet'), st = document.getElementById('sync-status');
-      const label = btn.textContent;
-      btn.disabled = true; btn.textContent = '☁ Syncing…'; st.textContent = '';
-      try {
-        const res = await fetch('/corpus/sync-sheet', { method: 'POST' });
-        const j = await res.json();
-        if (!res.ok) throw new Error(j.detail || res.status);
-        st.innerHTML = `✓ Synced ${j.entry_count} entries · ` +
-          `<a href="${esc(j.spreadsheet_url)}" target="_blank" rel="noopener">open sheet ▸</a>`;
-      } catch (err) { st.innerHTML = `<span class="failed">Sync failed: ${esc(String(err.message || err))}</span>`; }
-      btn.disabled = false; btn.textContent = label;
-    }
-    async function loadCorpus(offset) {
-      CORPUS.offset = offset;
-      const member = (ME && ME.role === 'admin') ? (document.getElementById('corpus-member').value || '') : '';
-      const q = new URLSearchParams({ offset: CORPUS.offset, limit: CORPUS.limit });
-      if (member) q.set('member', member);
-      const [pg, sm] = await Promise.all([
-        (await fetch('/corpus/pages?' + q)).json(),
-        (await fetch('/corpus/summary' + (member ? '?member=' + member : ''))).json()
-      ]);
-      CORPUS.total = pg.total || 0;
-      document.getElementById('corpus-summary').textContent =
-        `${sm.page_count} done page(s) · ${sm.verified_count} verified / ${sm.entry_count} entries`;
-      document.getElementById('corpus-pages').innerHTML = (pg.pages || []).map(p =>
-        `<tr><td><b>${p.page}</b></td><td>${p.verified}/${p.entries}</td>` +
-        `<td>${esc((p.reviewers || []).join(', '))}</td>` +
-        `<td class="muted">${(p.jobs || []).join(', ')}</td>` +
-        `<td><a onclick="readCorpusPage(${p.page})">read ▸</a></td></tr>`).join('') ||
-        '<tr><td colspan="5" class="muted">No completed pages yet.</td></tr>';
-      const from = CORPUS.total ? CORPUS.offset + 1 : 0, to = Math.min(CORPUS.offset + CORPUS.limit, CORPUS.total);
-      document.getElementById('corpus-pageinfo').textContent = `${from}–${to} of ${CORPUS.total}`;
-      document.getElementById('corpus-prev').disabled = CORPUS.offset <= 0;
-      document.getElementById('corpus-next').disabled = CORPUS.offset + CORPUS.limit >= CORPUS.total;
-    }
-    function corpusPage(dir) {
-      const next = CORPUS.offset + dir * CORPUS.limit;
-      if (next >= 0 && next < CORPUS.total) loadCorpus(next);
-    }
-    async function readCorpusPage(page) {
-      document.getElementById('corpus-read-title').textContent = 'Trang số ' + page;
-      const el = document.getElementById('corpus-read'); el.innerHTML = '<p class="muted">loading…</p>';
-      const d = await (await fetch('/corpus/page/' + page)).json();
-      const rows = (d.entries || []).map(e =>
-        `<div style="border-bottom:1px solid #eee;padding:0.5rem 0">
-           <div class="muted" style="font-size:0.72rem">entry ${e.entry_no ?? '—'} · upload ${e.job_id} · ${esc(e.review_status)}${e.spans_pages ? ' · ⤷ spanning' : ''}</div>
-           <div style="font-family:'MingLiU','Noto Serif CJK TC','SimSun',serif;font-size:18px;line-height:1.6">${esc(e.han)}</div>
-           <div style="font-size:14px;color:#334155">${esc(e.meaning)}</div>
-         </div>`).join('');
-      const editLink = (d.editable && d.entries && d.entries.length)
-        ? `<a onclick="editInReview(${d.entries[0].job_id}, ${page})">✎ edit in review</a>` : '';
-      el.innerHTML = (rows || '<p class="muted">No entries on this page.</p>') + `<div style="margin-top:0.6rem">${editLink}</div>`;
-    }
-    async function editInReview(jobId, page) {
-      showJobs(); await viewJob(jobId);
-      if (R.pages && R.pages.includes(page)) gotoPage(page);
-    }
-
-    // ----- auth / login gate -----
-    let ME = null;
-    function showLogin() { document.getElementById('login-view').style.display = 'flex'; }
-    function hideLogin() { document.getElementById('login-view').style.display = 'none'; }
-    async function doLogin() {
-      const u = document.getElementById('lg-user').value.trim();
-      const p = document.getElementById('lg-pass').value;
-      const m = document.getElementById('lg-msg'); m.textContent = '';
-      try {
-        const r = await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: u, password: p }) });
-        if (!r.ok) { const j = await r.json().catch(() => ({})); m.textContent = j.detail || 'login failed'; return; }
-        ME = (await r.json()).user; startApp();
-      } catch (e) { m.textContent = 'login error: ' + e; }
-    }
-    async function doLogout() { try { await fetch('/auth/logout', { method: 'POST' }); } catch {} location.reload(); }
-    function startApp() {
-      hideLogin();
-      document.getElementById('userbar').style.display = '';
-      document.getElementById('nav').style.display = '';
-      document.getElementById('ub-name').textContent = ME.username;
-      document.getElementById('ub-role').textContent = ME.role;
-      document.body.dataset.role = ME.role;
-      document.getElementById('upload-card').style.display = ME.role === 'admin' ? '' : 'none';
-      refresh(); if (!window._poll) window._poll = setInterval(refresh, 3000); loadProviders(); loadAdmin();
-    }
-    (async function init() {
-      try {
-        const r = await _fetch('/auth/me');
-        ME = r.ok ? (await r.json()).user : null;
-      } catch { ME = null; }
-      if (ME) startApp(); else showLogin();
-    })();
   </script>
 </body>
 </html>
