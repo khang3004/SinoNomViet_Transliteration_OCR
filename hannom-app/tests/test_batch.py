@@ -97,7 +97,7 @@ def fake_download(tmp_path):
 class StubOcr(BatchRunner):
     """Image 0 has Han, image 1 does not — deterministic, no PaddleOCR needed."""
 
-    async def _phase_ocr(self, job_dir, state, downloads):
+    async def _phase_ocr(self, job_dir, state, downloads, on_chunk=None):
         state.phase = Phase.OCR
         outcomes = {}
         for key, download in downloads.items():

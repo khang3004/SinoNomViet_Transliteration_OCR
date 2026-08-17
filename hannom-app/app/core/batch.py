@@ -111,15 +111,35 @@ class BatchRunner:
                 return state  # gated on confirmation, or nothing to do
 
             downloads = await self._phase_download(job_dir, state, posts)
+            published: set[str] = set()
+
             if run_ocr:
-                outcomes = await self._phase_ocr(job_dir, state, downloads)
+                async def flush(outcomes_so_far: dict[str, ScanOutcome]) -> None:
+                    """Make finished posts durable mid-run.
+
+                    Without this, stopping a multi-hour scan discards every image
+                    already processed — the posts were never checkpointed, so the
+                    next run repeats all of it.
+                    """
+                    await self._phase_publish(
+                        job_dir, state, posts, downloads, outcomes_so_far,
+                        run_ocr=True, published=published,
+                    )
+                    state.phase = Phase.OCR
+                    job_dir.save_state(state)
+
+                outcomes = await self._phase_ocr(
+                    job_dir, state, downloads, on_chunk=flush
+                )
             else:
                 outcomes = {}
                 job_dir.append_event(
                     "info", "OCR skipped — producing signed image URLs only"
                 )
+
             await self._phase_publish(
-                job_dir, state, posts, downloads, outcomes, run_ocr=run_ocr
+                job_dir, state, posts, downloads, outcomes,
+                run_ocr=run_ocr, published=published,
             )
 
             state.phase = Phase.CANCELLED if state.cancel_requested else Phase.DONE
@@ -322,7 +342,11 @@ class BatchRunner:
     # ------------------------------------------------------------------
 
     async def _phase_ocr(
-        self, job_dir: JobDir, state: JobState, downloads: dict[str, DownloadResult]
+        self,
+        job_dir: JobDir,
+        state: JobState,
+        downloads: dict[str, DownloadResult],
+        on_chunk: Callable[[dict[str, ScanOutcome]], Any] | None = None,
     ) -> dict[str, ScanOutcome]:
         state.phase = Phase.OCR
         job_dir.save_state(state)
@@ -400,6 +424,10 @@ class BatchRunner:
                         state.counts.scanned += 1
                     else:
                         state.counts.scan_failed += 1
+
+                # Publish what is now complete before starting the next chunk.
+                if on_chunk is not None:
+                    await on_chunk(outcomes)
 
                 workers = self._enforce_memory_guard(job_dir, pool, workers)
                 job_dir.heartbeat(state)
@@ -555,6 +583,30 @@ class BatchRunner:
     # Phase 3 - publish
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _post_is_resolved(
+        post: PostObject,
+        downloads: dict[str, DownloadResult],
+        outcomes: dict[str, ScanOutcome],
+        run_ocr: bool,
+    ) -> bool:
+        """Every image has reached a terminal state.
+
+        Only fully-resolved posts are published. A half-scanned post is left
+        unpublished and unmarked so a later run reclaims it whole — publishing
+        it early would record a han_valid computed from some of its images.
+        """
+        for idx in range(len(post.image_urls)):
+            key = f"{post.post_id}:{idx}"
+            download = downloads.get(key)
+            if download is None:
+                return False
+            if not download.ok:
+                continue  # a failed download is resolved
+            if run_ocr and key not in outcomes:
+                return False
+        return True
+
     async def _phase_publish(
         self,
         job_dir: JobDir,
@@ -563,7 +615,15 @@ class BatchRunner:
         downloads: dict[str, DownloadResult],
         outcomes: dict[str, ScanOutcome],
         run_ocr: bool = True,
+        published: set[str] | None = None,
     ) -> None:
+        """Publish resolved posts and checkpoint them.
+
+        Called repeatedly during OCR, not just at the end: a kill mid-run should
+        cost one chunk, not every image scanned so far. ``published`` tracks what
+        earlier calls already emitted.
+        """
+        published = published if published is not None else set()
         state.phase = Phase.PUBLISH
         job_dir.save_state(state)
 
@@ -575,7 +635,15 @@ class BatchRunner:
         records: list[HanScanRecord] = []
         errors: list[HanScanError] = []
 
-        for post in posts:
+        pending = [
+            p for p in posts
+            if p.post_id not in published
+            and self._post_is_resolved(p, downloads, outcomes, run_ocr)
+        ]
+        if not pending:
+            return
+
+        for post in pending:
             images: list[ScannedImage] = []
             failed = 0
 
@@ -672,14 +740,16 @@ class BatchRunner:
                 )
             )
 
-        state.counts.han_valid = sum(1 for r in records if r.han_valid)
-        state.counts.han_invalid = sum(
+        # += not =, since this runs once per chunk.
+        state.counts.han_valid += sum(1 for r in records if r.han_valid)
+        state.counts.han_invalid += sum(
             1 for r in records if r.scan_status == SCAN_SCANNED and not r.han_valid
         )
-        state.counts.ready_for_ocr = sum(
+        state.counts.ready_for_ocr += sum(
             1 for r in records if r.scan_status == SCAN_SKIPPED
         )
-        state.counts.published = len(records)
+        state.counts.published += len(records)
+        published.update(r.post_id for r in records)
 
         await asyncio.to_thread(self.sink.write_results, records, state.scan_run_id)
         await asyncio.to_thread(self.sink.write_errors, errors, state.scan_run_id)

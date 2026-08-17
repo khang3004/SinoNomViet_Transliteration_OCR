@@ -97,7 +97,7 @@ def fake_download(monkeypatch):
 class NeverOcr(BatchRunner):
     """Fails loudly if the OCR phase is entered at all."""
 
-    async def _phase_ocr(self, job_dir, state, downloads):
+    async def _phase_ocr(self, job_dir, state, downloads, on_chunk=None):
         raise AssertionError("OCR phase must not run when run_ocr=False")
 
 
@@ -244,7 +244,7 @@ class TestOcrStillWorks:
     @pytest.mark.asyncio
     async def test_scanned_records_keep_real_verdicts(self, settings, fake_download):
         class StubOcr(BatchRunner):
-            async def _phase_ocr(self, job_dir, state, downloads):
+            async def _phase_ocr(self, job_dir, state, downloads, on_chunk=None):
                 out = {}
                 for key, download in downloads.items():
                     if not download.ok:

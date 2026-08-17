@@ -267,6 +267,15 @@ does not handle; nothing else changes.
 
 - Every terminal state is fsynced as it happens — append-only logs, nothing
   memory-only. Resume replays them and skips finished work.
+- **Results publish during the run, not only at the end.** Finished posts are
+  written and checkpointed after each OCR chunk, so stopping a multi-hour scan
+  costs one chunk rather than everything scanned so far. A post is published only
+  once *all* its images are resolved — a half-scanned post would carry a
+  `han_valid` computed from part of the evidence, so it stays unpublished and
+  gets reclaimed whole later.
+- **Images already on disk are never re-downloaded.** An interrupted run costs no
+  bandwidth to redo, which matters because those signed CDN URLs may have expired
+  in the meantime.
 - A poison image cannot kill a run: `BrokenProcessPool` is caught, the pool is
   rebuilt, and the chunk is retried serially so the bad image is attributed to
   itself. Verified against workers that hard-exit mid-batch.

@@ -145,12 +145,55 @@ class ImageDownloader:
         shard = (post_id[:2] or "00").lower()
         return self.images_dir / shard / f"{post_id}_{idx}{suffix}"
 
+    def existing_file(self, post_id: str, idx: int) -> Path | None:
+        """An already-downloaded image for this (post, index), if any.
+
+        Filenames are deterministic, so a non-empty match is the same image.
+        This is what makes an interrupted run cheap to redo: a new batch reuses
+        what is on disk instead of re-fetching from the CDN — which also matters
+        because those signed URLs may have expired in the meantime.
+        """
+        shard = (post_id[:2] or "00").lower()
+        for suffix in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+            candidate = self.images_dir / shard / f"{post_id}_{idx}{suffix}"
+            try:
+                if candidate.is_file() and candidate.stat().st_size > 0:
+                    return candidate
+            except OSError:
+                continue
+        return None
+
+    def _from_disk(self, item: WorkItem, path: Path) -> DownloadResult:
+        """Rebuild a result from a file already on disk, without a network call."""
+        from app.core.ocr import image_dimensions
+
+        data = path.read_bytes()
+        width, height = image_dimensions(data)
+        content_type = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".webp": "image/webp", ".gif": "image/gif",
+        }.get(path.suffix.lower())
+        return DownloadResult(
+            item=item, ok=True, local_path=str(path), bytes_len=len(data),
+            content_type=content_type, sha256=hashlib.sha256(data).hexdigest(),
+            width=width, height=height, downloaded_at=utcnow_iso(), attempts=0,
+        )
+
     async def _fetch_one(
         self,
         client,
         item: WorkItem,
         limiter: AdaptiveLimiter,
     ) -> DownloadResult:
+        # Reuse a previous run's file before considering the URL at all — it may
+        # have expired since, and re-fetching bytes we already hold is waste.
+        existing = self.existing_file(item.post_id, item.idx)
+        if existing is not None:
+            try:
+                return self._from_disk(item, existing)
+            except OSError as exc:
+                log.warning("could not reuse %s (%s); re-downloading", existing, exc)
+
         # Do not spend a request on a URL we can prove is dead.
         if is_expired(item.source_url):
             return DownloadResult(
