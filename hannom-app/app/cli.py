@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--limit", type=int, default=None, help="max posts (default BATCH_SIZE)")
     parser.add_argument(
+        "--ocr", action="store_true",
+        help="also run OCR (CPU-heavy). Without it, images are downloaded and "
+             "given signed URLs for OCR elsewhere.",
+    )
+    parser.add_argument(
         "--confirm-expired", action="store_true",
         help="proceed even when many source URLs have already expired",
     )
@@ -131,12 +136,15 @@ async def run_batch(args) -> int:
     print(f"job {state.job_id} starting (limit={limit})", file=sys.stderr)
 
     runner = BatchRunner(settings, source, sink, signer)
-    state = await runner.run(job_dir, state, confirm_expired=args.confirm_expired)
+    state = await runner.run(
+        job_dir, state, confirm_expired=args.confirm_expired, run_ocr=args.ocr
+    )
 
     summary = {
         "job_id": state.job_id,
         "phase": state.phase.value,
         "counts": state.counts.__dict__,
+        "ocr_run": args.ocr,
         "preflight": state.preflight,
         "error": state.error,
         "awaiting_confirmation": state.awaiting_confirmation,

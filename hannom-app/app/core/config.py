@@ -84,6 +84,11 @@ class MinioConfig:
         return f"{self.out_root}/export/han_invalid.jsonl"
 
     @property
+    def ready_for_ocr_key(self) -> str:
+        """Downloaded and servable, but not scanned here."""
+        return f"{self.out_root}/export/ready_for_ocr.jsonl"
+
+    @property
     def failed_key(self) -> str:
         """Cumulative failure log across all runs (for retry sweeps)."""
         return f"{self.out_root}/errors/failed.jsonl"

@@ -18,8 +18,22 @@ HTTPS.
 **Upload (default, no MinIO needed).** The normal loop:
 
 1. Upload the crawler's `valid_post.jsonl` from the dashboard
-2. Scan — repeat until nothing is pending
-3. Download `han_valid.jsonl` and hand it to the Gemini stage
+2. Process — repeat until nothing is pending
+3. Download the result and hand it to the Gemini stage
+
+Step 2 offers two paths:
+
+| | What it does | Cost |
+|---|---|---|
+| **Prepare URLs only** | Downloads each image, issues a signed URL on this domain. Output: `ready_for_ocr.jsonl`, **no verdict**. | Network-bound, minutes |
+| **Prepare + OCR here** | Also runs PP-OCRv6 locally, splitting into `han_valid` / `han_invalid`. | CPU-bound, hours |
+
+Prepare-only is usually the right choice: the next stage runs Gemini over these
+images anyway, so scanning here is often redundant work on a 4-vCPU box.
+
+**"Skipped" is not "no Han text".** Unscanned records carry `scan_status:
+"skipped"` and `han_valid: null` — never `false`. A consumer that treats null as
+false is making its own mistake rather than inheriting a lie from this stage.
 
 That export is **cumulative**, so re-uploading it after a fresh crawl is
 expected. A local checkpoint (`data/state/processed_ids.jsonl`) keyed on
@@ -72,8 +86,9 @@ file produced either way is interchangeable to the Gemini stage:
 
 | Path | Contents |
 |---|---|
-| `results/export/han_valid.jsonl` | Has Han text → **feeds Gemini** |
-| `results/export/han_invalid.jsonl` | Scanned clean |
+| `results/export/ready_for_ocr.jsonl` | Downloaded and signed, **not scanned** → feeds Gemini |
+| `results/export/han_valid.jsonl` | Scanned, has Han text |
+| `results/export/han_invalid.jsonl` | Scanned, clean |
 | `results/errors/failed.jsonl` | Cumulative failures, for retry sweeps |
 | `results/logs/by_run/<run>/…` | Per-run `result.json`, `upserts.jsonl`, `errors.jsonl` |
 | `state/processed_ids.jsonl` | The checkpoint |
@@ -117,7 +132,8 @@ and cumulative (current state of every failure).
 ```jsonc
 {
   "post_id": "...", "group_id": "...", "post_link": "...", "author": "...",
-  "han_valid": true,            // true if ANY image has Han text
+  "scan_status": "scanned",     // "scanned" | "skipped"
+  "han_valid": true,            // true if ANY image has Han text; null when skipped
   "han_words_total": 34,
   "images_scanned": 2, "images_failed": 0,
   "images": [{
@@ -127,11 +143,11 @@ and cumulative (current state of every failure).
     "source_url": "https://scontent....fbcdn.net/...",
     "source_expires_at": "2026-08-16T03:06:59+00:00",
     "url_expires_at": "2026-09-15T...", "downloaded_at": "...",
-    "valid_pic": true, "han_words": 34, "boxes": 7,
+    "valid_pic": true, "han_words": 34, "boxes": 7,   // all null when skipped
     "texts": ["..."], "mean_confidence": 0.94, "scan_ms": 380
   }],
   "source_key": "...", "source_run_id": "...", "scan_run_id": "...",
-  "stage": "han_scan", "schema_version": "han_scan/1.0",
+  "stage": "han_scan", "schema_version": "han_scan/1.1",
   "ocr_engine": "paddleocr-3.7.0:PP-OCRv6", "scanned_at": "...",
   "label": "...", "sub_caption": "...", "posted_at": null
 }
@@ -204,6 +220,9 @@ docker compose run --rm scanner python -m app.cli --preflight-only --file /data/
 ```bash
 docker compose run --rm scanner python -m app.cli --file /data/uploads/<id>/valid_post.jsonl --limit 100
 ```
+
+Add `--ocr` to also scan locally; without it the CLI prepares URLs only, matching
+the dashboard's default.
 
 Omit `--file` to use the most recent upload; add `--minio` to read the crawler's
 by_run logs instead. `--check` reports configuration and upload status and does

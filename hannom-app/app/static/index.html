@@ -167,6 +167,20 @@
     padding: 0.6rem; border: 1px solid var(--border); border-radius: 6px;
     background: var(--plane); color: var(--ink); resize: vertical;
   }
+  /* two explicit paths, so the CPU-heavy one is never picked by accident */
+  .choice {
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.75rem 0.9rem; margin-bottom: 0.6rem;
+  }
+  .choice-body { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 0.15rem; }
+  .choice-body b { font-size: 0.88rem; }
+  .choice-body .muted { font-size: 0.78rem; line-height: 1.4; }
+  .choice code {
+    font-size: 0.75rem; background: var(--plane);
+    padding: 0.05rem 0.25rem; border-radius: 3px;
+  }
+
   .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 0.3rem; }
   .muted { color: var(--muted); }
   .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
@@ -216,6 +230,7 @@
     <div class="kpis" style="margin-bottom:1rem">
       <div class="tile"><div class="label">Has Han</div><div class="value" id="k-valid">—</div><div class="sub">feeds Gemini</div></div>
       <div class="tile"><div class="label">No Han</div><div class="value" id="k-invalid">—</div><div class="sub">filtered out</div></div>
+      <div class="tile"><div class="label">Ready for OCR</div><div class="value" id="k-ready">—</div><div class="sub">URLs issued, unscanned</div></div>
       <div class="tile"><div class="label">Failed images</div><div class="value" id="k-failed">—</div><div class="sub">see breakdown</div></div>
       <div class="tile accent"><div class="label">Throughput</div><div class="value" id="k-rate">—</div><div class="sub" id="k-eta">—</div></div>
     </div>
@@ -311,15 +326,33 @@
     </div>
 
     <div class="card">
-      <h2>2 · Scan</h2>
-      <p class="muted" style="font-size:0.82rem; margin-bottom:0.7rem">
-        Runs one batch of <b id="cfg-batch">—</b> posts. Repeat until nothing is pending,
-        or leave it — each run picks up where the last stopped.
+      <h2>2 · Process</h2>
+      <p class="muted" style="font-size:0.82rem; margin-bottom:0.9rem">
+        Runs one batch of <b id="cfg-batch">—</b> posts. Repeat until nothing is pending —
+        each run picks up where the last stopped.
       </p>
-      <div class="row">
-        <button class="primary" id="btn-scan-upload">Scan next batch</button>
-        <span class="muted" id="scan-hint"></span>
+
+      <div class="choice">
+        <div class="choice-body">
+          <b>Prepare URLs only</b>
+          <span class="muted">Downloads each image and issues a signed URL on this
+          domain. Network-bound and light on CPU. Results go to
+          <code>ready_for_ocr.jsonl</code> with no verdict — OCR happens downstream.</span>
+        </div>
+        <button class="primary" id="btn-prepare">Prepare</button>
       </div>
+
+      <div class="choice">
+        <div class="choice-body">
+          <b>Prepare + OCR here</b>
+          <span class="muted">Also runs PP-OCRv6 locally to split posts into
+          <code>han_valid</code> / <code>han_invalid</code>. <b>CPU-heavy</b> — on this
+          host it will saturate all cores for hours.</span>
+        </div>
+        <button id="btn-prepare-ocr">Prepare + OCR</button>
+      </div>
+
+      <p class="muted" id="scan-hint" style="font-size:0.78rem; margin-top:0.6rem"></p>
     </div>
 
     <div class="card">
@@ -359,6 +392,7 @@ const MAX_POINTS = 60;               // ~2 min of history at 2s polling
 const hist = { mem: [], cpu: [] };
 let activeJob = null, eventCursor = 0, lastScanned = null, lastScanTs = null;
 let lastMode = "upload";   // "upload" | "minio"
+let lastRunOcr = false;    // OCR is opt-in: it saturates the CPU
 
 const fmt = (n) => (n === null || n === undefined) ? "—" : n.toLocaleString();
 const pct = (n) => (n === null || n === undefined) ? "—" : n.toFixed(0) + "%";
@@ -500,6 +534,7 @@ async function pollPipeline() {
 
   $("k-valid").textContent   = fmt(p.han_valid);
   $("k-invalid").textContent = fmt(p.han_invalid);
+  $("k-ready").textContent   = fmt(p.ready_for_ocr);
   $("k-failed").textContent  = fmt(p.failed);
 
   renderDownloads(p.downloads || []);
@@ -507,7 +542,9 @@ async function pollPipeline() {
 
   if (p.active_job && !activeJob) activeJob = p.active_job.job_id;
   $("btn-start").disabled = !!p.busy;
-  $("btn-scan-upload").disabled = !!p.busy || !up.present || !up.pending_posts;
+  const blocked = !!p.busy || !up.present || !up.pending_posts;
+  $("btn-prepare").disabled = blocked;
+  $("btn-prepare-ocr").disabled = blocked;
 }
 
 function renderScanHint(up, busy) {
@@ -594,14 +631,18 @@ function renderUploadSummary(d) {
       records need <code>is_valid: true</code> and a non-empty <code>image_urls</code>.</p>` : ""}`;
 }
 
-$("btn-scan-upload").onclick = () => startBatch(false, "upload");
+$("btn-prepare").onclick     = () => startBatch(false, "upload", false);
+$("btn-prepare-ocr").onclick = () => startBatch(false, "upload", true);
 
 /* ---------- batch ---------- */
 const PHASES = ["preflight", "download", "ocr", "publish", "done"];
 
-function renderSteps(phase) {
-  const i = PHASES.indexOf(phase);
-  $("steps").innerHTML = PHASES.map((name, n) => {
+function renderSteps(phase, runOcr) {
+  const phases = runOcr === false
+    ? PHASES.filter((p) => p !== "ocr")   // OCR never runs in prepare-only mode
+    : PHASES;
+  const i = phases.indexOf(phase);
+  $("steps").innerHTML = phases.map((name, n) => {
     const cls = phase === name ? "active" : (i > n && i >= 0 ? "done" : "");
     return `<span class="step ${cls}">${name}</span>`;
   }).join("");
@@ -622,12 +663,14 @@ async function pollJob() {
   try { j = await api(`/api/jobs/${activeJob}`); } catch { activeJob = null; return; }
 
   const c = j.counts || {};
-  $("job-id").textContent = `${j.job_id} · ${j.phase}`;
-  renderSteps(j.phase);
+  $("job-id").textContent =
+    `${j.job_id} · ${j.phase} · ${j.run_ocr ? "with OCR" : "URLs only"}`;
+  renderSteps(j.phase, j.run_ocr);
 
   $("bars").innerHTML =
     bar("Downloaded", c.downloaded, c.total_images, c.download_failed ? `· ${c.download_failed} failed` : "") +
-    bar("Scanned", c.scanned, c.total_images, c.scan_failed ? `· ${c.scan_failed} failed` : "") +
+    (j.run_ocr === false ? "" :
+      bar("Scanned", c.scanned, c.total_images, c.scan_failed ? `· ${c.scan_failed} failed` : "")) +
     bar("Published", c.published, c.total_posts, "posts");
 
   const pf = j.preflight || {};
@@ -718,14 +761,19 @@ async function pollResults() {
       <tr>
         <td>${escapeHtml(r.post_id || "")}</td>
         <td class="num">${r.idx}</td>
-        <td>${r.ok
-          ? (r.valid_pic
-             ? `<span class="dot" style="background:var(--good)"></span>has Han`
-             : `<span class="dot" style="background:var(--axis)"></span>none`)
-          : `<span class="dot" style="background:var(--critical)"></span>${escapeHtml(r.error_class || "failed")}`}</td>
-        <td class="num">${r.han_words ?? 0}</td>
-        <td class="num">${r.boxes ?? 0}</td>
-        <td class="num">${r.scan_ms ?? 0}</td>
+        <td>${!r.ok
+          ? `<span class="dot" style="background:var(--critical)"></span>${escapeHtml(r.error_class || "failed")}`
+          : r.valid_pic === null || r.valid_pic === undefined
+            // null means nothing looked at it — never render that as "none"
+            ? `<span class="dot" style="background:var(--series-1)"></span>not scanned`
+            : r.valid_pic
+              ? `<span class="dot" style="background:var(--good)"></span>has Han`
+              : `<span class="dot" style="background:var(--axis)"></span>none`}</td>
+        <!-- em dash, not 0: an unscanned image has no count, and "0" would
+             read as "measured, found nothing" -->
+        <td class="num">${r.han_words ?? "—"}</td>
+        <td class="num">${r.boxes ?? "—"}</td>
+        <td class="num">${r.scan_ms ?? "—"}</td>
       </tr>`).join("")
     : `<tr><td colspan="6" class="muted">No results yet.</td></tr>`;
 }
@@ -754,13 +802,16 @@ function escapeHtml(s) {
 }
 
 /* ---------- actions ---------- */
-async function startBatch(confirmExpired, mode) {
+async function startBatch(confirmExpired, mode, runOcr) {
   $("btn-start").disabled = true;
   lastMode = mode || lastMode;
+  if (runOcr !== undefined) lastRunOcr = !!runOcr;
   try {
     const d = await api("/api/jobs", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm_expired: !!confirmExpired, mode: lastMode }),
+      body: JSON.stringify({
+        confirm_expired: !!confirmExpired, mode: lastMode, run_ocr: lastRunOcr,
+      }),
     });
     activeJob = d.job_id; eventCursor = 0; lastScanned = null;
     $("log").innerHTML = "";

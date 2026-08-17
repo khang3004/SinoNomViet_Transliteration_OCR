@@ -72,6 +72,7 @@ class JobCounts:
     scan_failed: int = 0
     han_valid: int = 0
     han_invalid: int = 0
+    ready_for_ocr: int = 0
     published: int = 0
 
 
@@ -98,6 +99,8 @@ class JobState:
     # Set when preflight finds expired URLs and the job waits for a human.
     awaiting_confirmation: bool = False
     limit: int = 0
+    # False = download and sign only; OCR happens downstream.
+    run_ocr: bool = True
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -120,6 +123,7 @@ class JobState:
             "cancel_requested": self.cancel_requested,
             "awaiting_confirmation": self.awaiting_confirmation,
             "limit": self.limit,
+            "run_ocr": self.run_ocr,
         }
 
     @classmethod
@@ -143,6 +147,7 @@ class JobState:
             cancel_requested=data.get("cancel_requested", False),
             awaiting_confirmation=data.get("awaiting_confirmation", False),
             limit=data.get("limit", 0),
+            run_ocr=data.get("run_ocr", True),
         )
         for key, value in (data.get("counts") or {}).items():
             if hasattr(state.counts, key):

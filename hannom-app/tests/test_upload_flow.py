@@ -197,7 +197,9 @@ class TestFileResultSink:
         sink = FileResultSink(settings.results_dir)
         sink.write_results([self._record("p1", True), self._record("p2", False)], "S1")
 
-        assert sink.counts() == {"han_valid": 1, "han_invalid": 1, "failed": 0}
+        assert sink.counts() == {
+            "han_valid": 1, "han_invalid": 1, "ready_for_ocr": 0, "failed": 0,
+        }
         assert sink.han_valid_path.exists()
         assert sink.run_path("S1", "upserts.jsonl").exists()
 
@@ -226,7 +228,8 @@ class TestFileResultSink:
 
         row = json.loads(sink.han_valid_path.read_text(encoding="utf-8").splitlines()[0])
         assert row["stage"] == "han_scan"
-        assert row["schema_version"] == "han_scan/1.0"
+        assert row["schema_version"] == "han_scan/1.1"
+        assert row["scan_status"] == "scanned"
         assert row["han_valid"] is True
         assert "url" in row["images"][0]
 

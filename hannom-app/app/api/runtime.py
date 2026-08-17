@@ -158,6 +158,7 @@ class Runtime:
         confirm_expired: bool = False,
         mode: str = "upload",
         upload_id: str | None = None,
+        run_ocr: bool = False,
     ) -> str:
         async with self._lock:
             if self.busy:
@@ -170,16 +171,20 @@ class Runtime:
             limit = limit or self.settings.batch_size
             job_dir, state = self.jobstore.create(new_run_id(), limit=limit)
             self._current_job_id = state.job_id
+            state.run_ocr = run_ocr
+            job_dir.save_state(state)
             self._current_task = asyncio.create_task(
-                self._run(runner, source, job_dir, state, confirm_expired),
+                self._run(runner, source, job_dir, state, confirm_expired, run_ocr),
                 name=f"batch-{state.job_id}",
             )
             return state.job_id
 
     async def _run(self, runner, source, job_dir: JobDir, state: JobState,
-                   confirm_expired: bool) -> None:
+                   confirm_expired: bool, run_ocr: bool = False) -> None:
         try:
-            await runner.run(job_dir, state, confirm_expired=confirm_expired)
+            await runner.run(
+                job_dir, state, confirm_expired=confirm_expired, run_ocr=run_ocr
+            )
         except Exception:  # noqa: BLE001 - already recorded on the job
             log.exception("batch %s crashed", state.job_id)
         finally:
@@ -209,7 +214,7 @@ class Runtime:
 
         # Nobody is watching a scheduled run, so it auto-confirms; the preflight
         # numbers are still recorded on the job for later inspection.
-        await self.start_batch(confirm_expired=True, mode="minio")
+        await self.start_batch(confirm_expired=True, mode="minio", run_ocr=True)
         self.scheduler.last_run_at = time.time()
 
         if self._current_task is not None:
@@ -303,6 +308,7 @@ class Runtime:
             "percent": round(processed / corpus_total * 100, 1) if corpus_total else 0.0,
             "han_valid": counts["han_valid"],
             "han_invalid": counts["han_invalid"],
+            "ready_for_ocr": counts.get("ready_for_ocr", 0),
             "failed": counts["failed"],
             "downloads": self.file_sink.downloadable(),
             "active_job": active.to_json() if active else None,

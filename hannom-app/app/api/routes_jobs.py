@@ -26,6 +26,9 @@ class CreateJobRequest(BaseModel):
     # crawler's by_run logs and requires MINIO_ENDPOINT to be configured.
     mode: Literal["upload", "minio"] = "upload"
     upload_id: str | None = None
+    # False = download and produce signed URLs only, leaving OCR to a later
+    # stage. Much cheaper: OCR is what saturates the CPU.
+    run_ocr: bool = False
 
 
 @router.post("/jobs")
@@ -39,12 +42,14 @@ async def create_job(request: Request, body: CreateJobRequest) -> dict[str, Any]
             confirm_expired=body.confirm_expired,
             mode=body.mode,
             upload_id=body.upload_id,
+            run_ocr=body.run_ocr,
         )
     except RuntimeError as exc:
         # Missing upload or unconfigured MinIO — the message is written for a
         # human, so surface it rather than a bare 500.
         raise HTTPException(400, str(exc)) from exc
-    return {"job_id": job_id, "status": "started", "mode": body.mode}
+    return {"job_id": job_id, "status": "started", "mode": body.mode,
+            "run_ocr": body.run_ocr}
 
 
 @router.get("/jobs")

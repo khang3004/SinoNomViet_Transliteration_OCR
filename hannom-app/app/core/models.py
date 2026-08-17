@@ -18,8 +18,17 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-SCHEMA_VERSION = "han_scan/1.0"
+SCHEMA_VERSION = "han_scan/1.1"
 STAGE = "han_scan"
+
+# Whether this stage actually looked at the image.
+#
+# The distinction matters downstream: "skipped" must never be read as "no Han
+# text found". When OCR is skipped, verdict fields are null rather than false —
+# a consumer that treats null as false is making an explicit mistake instead of
+# quietly inheriting ours.
+SCAN_SCANNED = "scanned"
+SCAN_SKIPPED = "skipped"
 
 # CJK Unified Ideographs, Extension A, Compatibility Ideographs, Extension B.
 # Deliberately excludes kana and Hangul — those are not Han.
@@ -144,12 +153,14 @@ class ScannedImage:
     url_expires_at: str = ""
     downloaded_at: str = ""
 
-    valid_pic: bool = False
-    han_words: int = 0
-    boxes: int = 0
+    # Verdict fields are None when OCR was skipped — the image was downloaded
+    # and is servable, but nothing has looked at its contents.
+    valid_pic: bool | None = False
+    han_words: int | None = 0
+    boxes: int | None = 0
     texts: list[str] = field(default_factory=list)
     mean_confidence: float | None = None
-    scan_ms: int = 0
+    scan_ms: int | None = 0
 
 
 @dataclass
@@ -161,8 +172,11 @@ class HanScanRecord:
     story_post_id: str | None = None
     tile_id: str | None = None
 
-    han_valid: bool = False
-    han_words_total: int = 0
+    # "scanned" -> han_valid is a real verdict.
+    # "skipped"  -> han_valid is None; OCR happens downstream.
+    scan_status: str = SCAN_SCANNED
+    han_valid: bool | None = False
+    han_words_total: int | None = 0
     images_scanned: int = 0
     images_failed: int = 0
     images: list[ScannedImage] = field(default_factory=list)

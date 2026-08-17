@@ -197,10 +197,13 @@ class TestResultSink:
             "source_key", "source_run_id", "scan_run_id", "stage",
             "schema_version", "ocr_engine", "scanned_at", "label",
             "sub_caption", "posted_at",
+            # 1.1 — tells a consumer whether han_valid is a verdict or a null.
+            "scan_status",
         }
         assert required <= set(record)
         assert record["stage"] == "han_scan"
-        assert record["schema_version"] == "han_scan/1.0"
+        assert record["schema_version"] == "han_scan/1.1"
+        assert record["scan_status"] == "scanned"
 
     def test_scanned_image_carries_what_gemini_needs(self, settings, storage):
         image = self._record("p1", True).to_json()["images"][0]
@@ -209,4 +212,6 @@ class TestResultSink:
     def test_counts_summarise_the_exports(self, settings, storage):
         sink = MinioResultSink(settings, storage=storage)
         sink.write_results([self._record("p1", True), self._record("p2", False)], "S1")
-        assert sink.counts() == {"han_valid": 1, "han_invalid": 1, "failed": 0}
+        assert sink.counts() == {
+            "han_valid": 1, "han_invalid": 1, "ready_for_ocr": 0, "failed": 0,
+        }

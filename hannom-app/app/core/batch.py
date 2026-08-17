@@ -24,6 +24,8 @@ from app.core.config import Settings
 from app.core.downloader import DownloadResult, ImageDownloader
 from app.core.jobstore import JobDir, JobState, Phase
 from app.core.models import (
+    SCAN_SCANNED,
+    SCAN_SKIPPED,
     ErrorClass,
     HanScanError,
     HanScanRecord,
@@ -92,16 +94,33 @@ class BatchRunner:
         *,
         confirm_expired: bool = False,
         limit: int | None = None,
+        run_ocr: bool = True,
     ) -> JobState:
+        """Run one batch.
+
+        ``run_ocr=False`` stops after downloading: images are fetched, stored and
+        given signed URLs, but never scanned. That is the cheap mode — OCR is
+        what saturates the CPU, and for a pipeline whose next stage runs Gemini
+        on these images anyway, scanning here can be redundant.
+        """
         limit = limit or state.limit or self.settings.batch_size
+        state.run_ocr = run_ocr
         try:
             posts = await self._phase_preflight(job_dir, state, limit, confirm_expired)
             if posts is None:
                 return state  # gated on confirmation, or nothing to do
 
             downloads = await self._phase_download(job_dir, state, posts)
-            outcomes = await self._phase_ocr(job_dir, state, downloads)
-            await self._phase_publish(job_dir, state, posts, downloads, outcomes)
+            if run_ocr:
+                outcomes = await self._phase_ocr(job_dir, state, downloads)
+            else:
+                outcomes = {}
+                job_dir.append_event(
+                    "info", "OCR skipped — producing signed image URLs only"
+                )
+            await self._phase_publish(
+                job_dir, state, posts, downloads, outcomes, run_ocr=run_ocr
+            )
 
             state.phase = Phase.CANCELLED if state.cancel_requested else Phase.DONE
         except Exception as exc:  # noqa: BLE001 - a failed batch must not kill the service
@@ -543,11 +562,13 @@ class BatchRunner:
         posts: list[PostObject],
         downloads: dict[str, DownloadResult],
         outcomes: dict[str, ScanOutcome],
+        run_ocr: bool = True,
     ) -> None:
         state.phase = Phase.PUBLISH
         job_dir.save_state(state)
 
-        engine = ocr_module.engine_label(self.settings.ocr.engine_name)
+        # Don't claim an engine produced a verdict when none ran.
+        engine = ocr_module.engine_label(self.settings.ocr.engine_name) if run_ocr else ""
         source_key = state.source_keys[0] if state.source_keys else ""
         source_run = state.source_run_ids[0] if state.source_run_ids else ""
 
@@ -584,7 +605,9 @@ class BatchRunner:
                     )
                     continue
 
-                if outcome is None or not outcome.ok:
+                # Only treat a missing outcome as a failure when OCR was meant to
+                # run. In skip mode there is nothing to be missing.
+                if run_ocr and (outcome is None or not outcome.ok):
                     failed += 1
                     errors.append(
                         HanScanError(
@@ -615,24 +638,32 @@ class BatchRunner:
                             expires_at, tz=timezone.utc
                         ).isoformat(),
                         downloaded_at=download.downloaded_at,
-                        valid_pic=outcome.valid_pic, han_words=outcome.han_words,
-                        boxes=outcome.boxes, texts=outcome.texts,
-                        mean_confidence=outcome.mean_confidence, scan_ms=outcome.scan_ms,
+                        # None, not False — nothing examined this image.
+                        valid_pic=outcome.valid_pic if outcome else None,
+                        han_words=outcome.han_words if outcome else None,
+                        boxes=outcome.boxes if outcome else None,
+                        texts=outcome.texts if outcome else [],
+                        mean_confidence=outcome.mean_confidence if outcome else None,
+                        scan_ms=outcome.scan_ms if outcome else None,
                     )
                 )
 
             if not images and failed:
                 # Every image failed — no verdict to publish, only errors.
                 continue
+            if not images:
+                continue
 
-            han_valid = any(i.valid_pic for i in images)
             records.append(
                 HanScanRecord(
                     post_id=post.post_id, group_id=post.group_id,
                     post_link=post.post_link, author=post.author,
                     story_post_id=post.story_post_id, tile_id=post.tile_id,
-                    han_valid=han_valid,
-                    han_words_total=sum(i.han_words for i in images),
+                    scan_status=SCAN_SCANNED if run_ocr else SCAN_SKIPPED,
+                    han_valid=any(i.valid_pic for i in images) if run_ocr else None,
+                    han_words_total=(
+                        sum(i.han_words or 0 for i in images) if run_ocr else None
+                    ),
                     images_scanned=len(images), images_failed=failed, images=images,
                     source_key=source_key, source_run_id=source_run,
                     scan_run_id=state.scan_run_id, ocr_engine=engine,
@@ -642,7 +673,12 @@ class BatchRunner:
             )
 
         state.counts.han_valid = sum(1 for r in records if r.han_valid)
-        state.counts.han_invalid = sum(1 for r in records if not r.han_valid)
+        state.counts.han_invalid = sum(
+            1 for r in records if r.scan_status == SCAN_SCANNED and not r.han_valid
+        )
+        state.counts.ready_for_ocr = sum(
+            1 for r in records if r.scan_status == SCAN_SKIPPED
+        )
         state.counts.published = len(records)
 
         await asyncio.to_thread(self.sink.write_results, records, state.scan_run_id)
@@ -662,12 +698,20 @@ class BatchRunner:
             "source_keys": state.source_keys,
             "source_run_ids": state.source_run_ids,
             "ocr_engine": engine,
+            "ocr_run": run_ocr,
             "cancelled": state.cancel_requested,
         }
         await asyncio.to_thread(self.sink.write_run_summary, summary, state.scan_run_id)
 
-        job_dir.append_event(
-            "info",
-            f"published {len(records)} record(s): {state.counts.han_valid} han_valid, "
-            f"{state.counts.han_invalid} han_invalid, {len(errors)} error(s)",
-        )
+        if run_ocr:
+            job_dir.append_event(
+                "info",
+                f"published {len(records)} record(s): {state.counts.han_valid} han_valid, "
+                f"{state.counts.han_invalid} han_invalid, {len(errors)} error(s)",
+            )
+        else:
+            job_dir.append_event(
+                "info",
+                f"published {len(records)} record(s) to ready_for_ocr.jsonl "
+                f"(not scanned), {len(errors)} error(s)",
+            )
