@@ -36,14 +36,25 @@ class OcrUnavailable(RuntimeError):
     """PaddleOCR could not be loaded — a deployment problem, not a bad image."""
 
 
-def get_engine(lang: str = "ch") -> tuple[Any, str]:
+def get_engine(lang: str = "ch", enable_mkldnn: bool = False) -> tuple[Any, str]:
     """Build (or return) this process's PaddleOCR engine.
 
     Returns (engine, kind) where kind selects the result parser.
+
+    ``enable_mkldnn`` defaults to False: paddlepaddle 3.3.1 cannot convert some
+    PP-OCRv6 graph attributes for its oneDNN backend and dies at inference time
+    with ``ConvertPirAttribute2RuntimeAttribute not support``. Disabling it falls
+    back to the plain CPU kernels, which are slower but correct.
     """
     global _engine, _engine_kind
     if _engine is not None:
         return _engine, _engine_kind
+
+    # Belt and braces: the constructor kwarg is the supported switch, but this
+    # process-wide flag also steers Paddle away from oneDNN kernels for builds
+    # where the kwarg is ignored. Must be set before paddle initialises.
+    if not enable_mkldnn:
+        os.environ.setdefault("FLAGS_use_mkldnn", "0")
 
     try:
         from paddleocr import PaddleOCR
@@ -51,19 +62,24 @@ def get_engine(lang: str = "ch") -> tuple[Any, str]:
         raise OcrUnavailable(f"cannot import paddleocr: {exc}") from exc
 
     pid = os.getpid()
-    log.info("[pid %d] loading PaddleOCR (lang=%s)...", pid, lang)
+    log.info(
+        "[pid %d] loading PaddleOCR (lang=%s, mkldnn=%s)...", pid, lang, enable_mkldnn
+    )
     started = time.monotonic()
 
-    # 3.x dropped show_log and use_angle_cls; 2.x needs them. Try the modern
-    # signature first and fall back rather than branching on a version string.
+    # 3.x takes enable_mkldnn and dropped show_log/use_angle_cls; 2.x is the
+    # reverse. Try signatures in order rather than branching on a version string.
     engine = None
-    for kwargs in (
+    attempts = (
+        {"lang": lang, "enable_mkldnn": enable_mkldnn},
         {"lang": lang},
         {"lang": lang, "use_angle_cls": True, "show_log": False},
         {},
-    ):
+    )
+    for kwargs in attempts:
         try:
             engine = PaddleOCR(**kwargs)
+            log.debug("PaddleOCR constructed with %s", kwargs)
             break
         except (TypeError, ValueError) as exc:
             log.debug("PaddleOCR(%s) rejected: %s", kwargs, exc)
@@ -163,9 +179,15 @@ def image_dimensions(data: bytes) -> tuple[int | None, int | None]:
         return None, None
 
 
-def scan_array(array: Any, *, lang: str = "ch", min_confidence: float = 0.3) -> dict:
+def scan_array(
+    array: Any,
+    *,
+    lang: str = "ch",
+    min_confidence: float = 0.3,
+    enable_mkldnn: bool = False,
+) -> dict:
     """Run OCR on a decoded image array and summarise the Han content."""
-    engine, kind = get_engine(lang)
+    engine, kind = get_engine(lang, enable_mkldnn)
 
     if kind == "predict":
         pairs = parse_predict_result(engine.predict(array))
@@ -196,9 +218,13 @@ def scan_bytes(
     *,
     lang: str = "ch",
     min_confidence: float = 0.3,
+    enable_mkldnn: bool = False,
 ) -> dict:
     """Bytes -> Han verdict. The in-RAM path: no temp files anywhere."""
-    return scan_array(decode_image(data), lang=lang, min_confidence=min_confidence)
+    return scan_array(
+        decode_image(data), lang=lang, min_confidence=min_confidence,
+        enable_mkldnn=enable_mkldnn,
+    )
 
 
 def scan_file(
@@ -208,6 +234,7 @@ def scan_file(
     *,
     lang: str = "ch",
     min_confidence: float = 0.3,
+    enable_mkldnn: bool = False,
 ) -> ScanOutcome:
     """Pool worker entry point.
 
@@ -238,7 +265,10 @@ def scan_file(
         )
 
     try:
-        result = scan_array(array, lang=lang, min_confidence=min_confidence)
+        result = scan_array(
+            array, lang=lang, min_confidence=min_confidence,
+            enable_mkldnn=enable_mkldnn,
+        )
     except OcrUnavailable:
         raise
     except Exception as exc:  # noqa: BLE001 - engine hiccup on one image
@@ -262,10 +292,10 @@ def scan_file(
     )
 
 
-def pool_initializer(lang: str) -> None:
+def pool_initializer(lang: str, enable_mkldnn: bool = False) -> None:
     """ProcessPoolExecutor initializer — pay the model load once per worker,
     at pool construction, instead of on the first image."""
-    get_engine(lang)
+    get_engine(lang, enable_mkldnn)
 
 
 def engine_label(default: str) -> str:

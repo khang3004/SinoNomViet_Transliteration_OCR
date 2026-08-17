@@ -200,6 +200,7 @@ def _register_core_routes(app: FastAPI, auth: AuthConfig) -> None:
                 decode_image(data),
                 lang=settings.ocr.lang,
                 min_confidence=settings.ocr.min_confidence,
+                enable_mkldnn=settings.ocr.enable_mkldnn,
             )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(500, f"scan failed: {exc}") from exc

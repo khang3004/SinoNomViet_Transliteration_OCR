@@ -42,37 +42,48 @@ RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
     && pip install --force-reinstall numpy==1.26.4
 
-# Bake the PP-OCRv6 weights in AND prove the runtime can actually execute them.
-#
-# Two jobs. Without the download, the first batch pays for it — and three OCR
-# workers would race to write the same cache directory. Without the predict()
-# call, a paddlepaddle/model format mismatch would sail through the build and
-# only surface on the first scanned image, hours later.
-#
-# Failing the build here is deliberate. This step is what caught the 3.0.0
-# mismatch described above.
-ENV PADDLE_PDX_MODEL_SOURCE=BOS
-RUN python -c "\
-import numpy as np, paddle, paddleocr; \
-print('paddle', paddle.__version__, '| paddleocr', paddleocr.__version__); \
-from paddleocr import PaddleOCR; \
-ocr = PaddleOCR(lang='ch'); \
-ocr.predict(np.zeros((64, 64, 3), dtype='uint8')); \
-print('PP-OCRv6 weights cached and runtime verified')"
-
-COPY app/ ./app/
-
 # Defaults; every one is overridable via .env (see .env.example).
+#
+# OCR_ENABLE_MKLDNN=0: paddlepaddle 3.3.1 cannot convert some PP-OCRv6 graph
+# attributes for its oneDNN CPU backend and dies at inference with
+#   NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
+#     [pir::ArrayAttribute<pir::DoubleAttribute>]  (onednn_instruction.cc)
+# The plain CPU kernels are slower but correct. Flip to 1 to re-test after a
+# Paddle upgrade — the warm-up below will fail the build if it is still broken.
 ENV DATA_DIR=/data \
     OCR_WORKERS=3 \
     OCR_LANG=ch \
+    OCR_ENABLE_MKLDNN=0 \
     OCR_MIN_CONFIDENCE=0.3 \
     MEMORY_LIMIT_MB=6144 \
     BATCH_SIZE=500 \
     SCAN_INTERVAL=300 \
     DOWNLOAD_CONCURRENCY=16 \
     DOWNLOAD_TIMEOUT=30 \
-    COOKIE_SECURE=1
+    COOKIE_SECURE=1 \
+    PADDLE_PDX_MODEL_SOURCE=BOS
+
+COPY app/ ./app/
+
+# Bake the PP-OCRv6 weights in AND prove the runtime can actually execute them.
+#
+# This deliberately goes through app.core.ocr rather than calling PaddleOCR
+# directly, so what the build verifies is exactly the code path that will run —
+# same constructor fallbacks, same oneDNN setting. A parallel copy of the logic
+# here could pass while the real one fails.
+#
+# Two jobs: cache the weights (otherwise three OCR workers race to download into
+# the same directory on the first batch) and prove inference actually executes.
+# Failing the build is the point — this step caught both the paddlepaddle 3.0.0
+# format mismatch and the oneDNN attribute bug.
+RUN python -c "\
+import numpy as np, paddle, paddleocr; \
+from app.core.ocr import get_engine, scan_array; \
+print('paddle', paddle.__version__, '| paddleocr', paddleocr.__version__); \
+import os; mk = os.environ.get('OCR_ENABLE_MKLDNN', '0') in ('1','true','yes','on'); \
+get_engine(os.environ.get('OCR_LANG', 'ch'), mk); \
+scan_array(np.zeros((64, 64, 3), dtype='uint8'), lang=os.environ.get('OCR_LANG','ch'), enable_mkldnn=mk); \
+print('PP-OCRv6 cached and inference verified (mkldnn=%s)' % mk)"
 
 VOLUME ["/data"]
 EXPOSE 8000

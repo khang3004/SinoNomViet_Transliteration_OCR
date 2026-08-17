@@ -124,7 +124,7 @@ class BatchRunner:
     ) -> list[PostObject] | None:
         state.phase = Phase.PREFLIGHT
         job_dir.save_state(state)
-        job_dir.append_event("info", "preflight: claiming work from MinIO")
+        job_dir.append_event("info", "preflight: claiming work")
 
         batch = await asyncio.to_thread(self.source.iter_pending, limit)
 
@@ -404,7 +404,7 @@ class BatchRunner:
         return ProcessPoolExecutor(
             max_workers=workers,
             initializer=ocr_module.pool_initializer,
-            initargs=(self.settings.ocr.lang,),
+            initargs=(self.settings.ocr.lang, self.settings.ocr.enable_mkldnn),
         )
 
     async def _run_chunk(
@@ -503,6 +503,7 @@ class BatchRunner:
             result.item.idx,
             lang=self.settings.ocr.lang,
             min_confidence=self.settings.ocr.min_confidence,
+            enable_mkldnn=self.settings.ocr.enable_mkldnn,
         )
 
     def _enforce_memory_guard(

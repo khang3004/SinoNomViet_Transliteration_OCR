@@ -103,6 +103,13 @@ class OcrConfig:
     # model choice the way PP-OCRv4 had. `lang` stays configurable because the
     # fallback path (paddleocr 2.x) still needs it.
     lang: str = "ch"
+    # oneDNN is Paddle's CPU acceleration backend. Off by default because
+    # paddlepaddle 3.3.1 cannot convert some PP-OCRv6 graph attributes for it:
+    #   NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
+    #   [pir::ArrayAttribute<pir::DoubleAttribute>]   (onednn_instruction.cc)
+    # Turn it back on once a Paddle release fixes that — it is a real speedup,
+    # and the benchmark will show whether it is worth chasing.
+    enable_mkldnn: bool = False
     min_confidence: float = 0.3
     workers: int = 3
     # Per-image ceiling so one pathological file cannot stall a worker forever.
@@ -202,6 +209,7 @@ def load_settings() -> Settings:
         ),
         ocr=OcrConfig(
             lang=_env("OCR_LANG", "ch"),
+            enable_mkldnn=_env_bool("OCR_ENABLE_MKLDNN", False),
             min_confidence=_env_float("OCR_MIN_CONFIDENCE", 0.3),
             workers=_env_int("OCR_WORKERS", 3),
             timeout_s=_env_float("OCR_TIMEOUT", 120.0),
