@@ -21,6 +21,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
+# paddlepaddle is NOT a pip dependency of paddleocr/paddlex — CPU and GPU builds
+# are separate wheels, so pip cannot catch a version mismatch. It has to be
+# pinned by hand, and it MUST stay roughly contemporaneous with paddleocr:
+# the inference models are serialised in a PIR format that older runtimes cannot
+# parse. Pairing paddleocr 3.7.0 with paddlepaddle 3.0.0 fails at load time with
+#   ValueError: (InvalidArgument) Type of attribute: strides is not right
+# Bump both together, never one alone.
+ARG PADDLE_VERSION=3.3.1
+
 # Install order matters. numpy first so paddle builds against the pinned version,
 # then paddlepaddle from Paddle's own index, then the rest, then force numpy back
 # — paddle's dependency resolution has a habit of dragging in a newer numpy that
@@ -29,23 +38,27 @@ COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install numpy==1.26.4 \
     && pip install --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/ \
-        "paddlepaddle==3.0.0" \
+        "paddlepaddle==${PADDLE_VERSION}" \
     && pip install -r requirements.txt \
     && pip install --force-reinstall numpy==1.26.4
 
-# Bake the PP-OCRv6 weights into the image.
+# Bake the PP-OCRv6 weights in AND prove the runtime can actually execute them.
 #
-# Without this, the first batch pays a model download — and worse, three OCR
-# worker processes would race to download into the same cache directory at once.
-# Failing the build here is deliberate: a missing model should surface now, not
-# nine hours into a 20k run.
+# Two jobs. Without the download, the first batch pays for it — and three OCR
+# workers would race to write the same cache directory. Without the predict()
+# call, a paddlepaddle/model format mismatch would sail through the build and
+# only surface on the first scanned image, hours later.
+#
+# Failing the build here is deliberate. This step is what caught the 3.0.0
+# mismatch described above.
 ENV PADDLE_PDX_MODEL_SOURCE=BOS
 RUN python -c "\
+import numpy as np, paddle, paddleocr; \
+print('paddle', paddle.__version__, '| paddleocr', paddleocr.__version__); \
 from paddleocr import PaddleOCR; \
-import numpy as np; \
 ocr = PaddleOCR(lang='ch'); \
 ocr.predict(np.zeros((64, 64, 3), dtype='uint8')); \
-print('PP-OCRv6 weights cached')"
+print('PP-OCRv6 weights cached and runtime verified')"
 
 COPY app/ ./app/
 

@@ -4,11 +4,17 @@
 # and is installed separately in the Dockerfile so this file stays usable with a
 # plain `pip install -r`.
 #
+# IMPORTANT: paddlepaddle and paddleocr must be bumped TOGETHER. Because paddle
+# is not a pip dependency of paddleocr, nothing enforces the pairing, and a stale
+# runtime cannot parse newer inference models — it fails with
+# "Type of attribute: strides is not right". See PADDLE_VERSION in the Dockerfile.
+#
 # numpy is pinned inside paddlex's window (>=1.24,<2.4). Keep it explicit —
 # paddle's install can otherwise pull a newer numpy that breaks its own runtime.
 numpy==1.26.4
 
 # OCR — PP-OCRv6 model series ships in the 3.7.x package line.
+# Paired with paddlepaddle 3.3.1 (Dockerfile ARG PADDLE_VERSION).
 paddleocr==3.7.0
 
 # Web layer
