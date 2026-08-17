@@ -1,18 +1,48 @@
-# Han Scanner — single service, no database needed.
+# Han Scanner — one service, no database.
 #
-# Usage:
-#   docker compose up --build
-#   open http://localhost:8000
+#   docker compose up --build -d
+#   docker compose logs -f scanner
+#
+# Secrets come from an untracked .env (see .env.example). Never bake them into
+# the image.
 
 services:
   scanner:
     build:
       context: .
       dockerfile: Dockerfile
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # Bound to loopback: a reverse proxy (Caddy/nginx) terminates TLS for the
+    # public domain and forwards here. Publishing 0.0.0.0 would expose the app
+    # directly, and /img/* is deliberately unauthenticated.
     ports:
-      - "8000:8000"
-    environment:
-      - PYTHONUNBUFFERED=1
-    # Mount source for live dev (restart to pick up changes)
+      - "127.0.0.1:8000:8000"
+
     volumes:
-      - ./app:/srv/app
+      # Downloaded images live here until the Gemini stage consumes them, so
+      # this must survive container replacement. Job state lives here too.
+      - ./data:/data
+
+    # MinIO is reached over Tailscale, which runs on the HOST, not in here.
+    # Bridge networking normally routes 100.x via the host — verify with:
+    #   docker compose exec scanner curl -sS http://<tailnet-ip>:9000/minio/health/live
+    # If that fails, comment out the `ports:` block above and uncomment:
+    # network_mode: host
+
+    # 8 GB box, 3 OCR workers at roughly 1 GB each plus the API process.
+    # The app's own MEMORY_LIMIT_MB guard should shrink the pool before this
+    # ceiling is reached; this is the backstop, not the primary control.
+    deploy:
+      resources:
+        limits:
+          memory: 7g
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

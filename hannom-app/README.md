@@ -1,212 +1,241 @@
-# hannom-app — Han-Nom OCR corpus builder
+# Han Scanner
 
-Builds a parallel **JSONL** corpus (Han · phonetic · Vietnamese meaning ·
-metadata) from Han-Nom documents, for training MT models. Self-contained under
-`hannom-app/`; nothing outside this directory is modified.
+A stage in the Facebook crawl pipeline. It answers one question per post —
+**does this image actually contain Han/CJK text?** — so the expensive Gemini
+stage only ever sees worthwhile posts.
 
-The design is **extensible by registry**: a new document layout or a new OCR
-engine is added by dropping one file in and making a single `register(...)`
-call — no existing handler is touched.
+```
+crawl Facebook → MinIO → [Han Scanner] → Gemini batch (boxing + OCR)
+```
 
-> Primary document type: **"Mục lục Châu bản triều Nguyễn"** (`two_column`),
-> built fully. Secondary/future: `three_block` (Ức Trai Tập) and `han_only`
-> (ported from the existing vertical-column engine, output unchanged).
+MinIO runs on a k3s cluster reached over Tailscale; this app runs on a separate
+VPS and serves the images it keeps back to Gemini over HTTPS.
+
+---
+
+## How it works
+
+Each batch runs four phases in a fixed order:
+
+```
+preflight  decode every signed-URL expiry     → gate
+download   fetch from the Facebook CDN        → minutes, high concurrency
+ocr        PP-OCRv6 over local files          → hours, parallel, resumable
+publish    verdicts + errors back to MinIO
+```
+
+**The order is forced by expiry.** fbcdn signs image URLs with a lifetime in
+hours, while OCR of a full corpus takes hours. Downloading everything first
+(network-bound, minutes) and only then scanning (CPU-bound, hours) is what keeps
+the last image as valid as the first. Interleaving them would fetch the final
+image long after its signature died.
+
+Preflight is a **gate, not a log line**: if more than 10% of URLs are already
+dead, the batch pauses for a human. A stale crawl is worth re-running, not
+scanning for six hours to produce failures.
+
+### Continuous, not one big job
+
+Scanning starts right after crawling, so the app keeps pace with the crawl
+rather than running once. A scheduler claims `BATCH_SIZE` (default 500) unscanned
+posts every `SCAN_INTERVAL`. Small batches mean failures cost minutes, progress
+is always visible, and images are fetched while their URLs are fresh.
+
+---
+
+## MinIO layout
+
+Bucket `final-exam-nlp-raw`, group prefix `facebook/<group_id>/`.
+
+**Read**
+
+| Path | Role |
+|---|---|
+| `logs/by_run/<run_id>/upserts.jsonl` | Work source. Holds **both** crawler-valid and crawler-invalid posts, so records are filtered on `is_valid` and deduped on `post_id` (it is an *upsert* log — the same post recurs across runs). |
+| `export/valid_post.jsonl` | Line count only, as the progress denominator. |
+
+**Write** — a `han_scan/` namespace mirroring the crawler's own convention:
+
+| Path | Contents |
+|---|---|
+| `han_scan/export/han_valid.jsonl` | Has Han text → **feeds Gemini** |
+| `han_scan/export/han_invalid.jsonl` | Scanned clean |
+| `han_scan/errors/failed.jsonl` | Cumulative failures, for retry sweeps |
+| `han_scan/logs/by_run/<run>/result.json` | Run summary |
+| `han_scan/logs/by_run/<run>/upserts.jsonl` | Records touched this run |
+| `han_scan/logs/by_run/<run>/errors.jsonl` | Failures from this run only |
+| `han_scan/state/processed_ids.jsonl` | Idempotency index |
+
+Failures land in two places deliberately: per-run (what broke during that run)
+and cumulative (current state of every failure).
+
+---
+
+## Output contract
+
+`han_scan/export/han_valid.jsonl`, one object per post:
+
+```jsonc
+{
+  "post_id": "...", "group_id": "...", "post_link": "...", "author": "...",
+  "han_valid": true,            // true if ANY image has Han text
+  "han_words_total": 34,
+  "images_scanned": 2, "images_failed": 0,
+  "images": [{
+    "url": "https://<domain>/img/<post_id>/0.jpg?exp=...&sig=...",  // Gemini fetches this
+    "idx": 0, "width": 1170, "height": 1461, "bytes": 284113,
+    "content_type": "image/jpeg", "sha256": "...",
+    "source_url": "https://scontent....fbcdn.net/...",
+    "source_expires_at": "2026-08-16T03:06:59+00:00",
+    "url_expires_at": "2026-09-15T...", "downloaded_at": "...",
+    "valid_pic": true, "han_words": 34, "boxes": 7,
+    "texts": ["..."], "mean_confidence": 0.94, "scan_ms": 380
+  }],
+  "source_key": "...", "source_run_id": "...", "scan_run_id": "...",
+  "stage": "han_scan", "schema_version": "han_scan/1.0",
+  "ocr_engine": "paddleocr-3.7.0:PP-OCRv6", "scanned_at": "...",
+  "label": "...", "sub_caption": "...", "posted_at": null
+}
+```
+
+Two things worth knowing:
+
+- **`han_valid`, not `is_valid`.** The input already uses `is_valid` for the
+  *crawler's* verdict (did the crawl match?). Ours is a different question, so it
+  gets a different name — overloading it would corrupt meaning downstream.
+- **Every image is scanned**, not just `images[0]`, and `han_valid` is true if any
+  of them has Han text.
+
+Errors carry an `error_class` and a `retryable` flag, so a retry sweep skips
+permanently dead links (`expired_url`, `http_404`) and only re-runs transient
+ones (`timeout`, `http_429`, `http_5xx`).
+
+---
+
+## Images are served from this VPS
+
+The Gemini stage uses **URLs from our domain**, and Gemini fetches them
+anonymously. So images stay on local disk and are served by this app.
+
+That collides with the app being behind a login on a public domain. The
+resolution: `/img/*` is the only unauthenticated route, guarded by an **HMAC
+signature** instead of a session. Only URLs this service minted will serve, and
+they expire after `IMAGE_URL_TTL_DAYS` (default 30 — a TTL shorter than the
+downstream Gemini run is a silent failure at the last step).
+
+Nothing auto-deletes images: deleting one whose source URL has expired is
+unrecoverable.
+
+---
+
+## Running it
+
+```bash
+cp .env.example .env      # then fill it in — the app refuses to start without AUTH_SECRET
+docker compose up --build -d
+docker compose logs -f scanner
+```
+
+Generate the two secrets and the password hash:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+```bash
+docker compose run --rm scanner python -c "from app.api.auth import hash_password; print(hash_password('YOUR-PASSWORD'))"
+```
+
+The app binds `127.0.0.1:8000`; put a reverse proxy in front for the public
+domain. `--workers 1` is **required** — batch state lives in the process, and a
+second uvicorn worker would fork it and corrupt progress tracking.
+
+### Headless
+
+The core pipeline has no web dependency, so it also runs without the app:
+
+```bash
+docker compose run --rm scanner python -m app.cli --check           # MinIO connectivity
+docker compose run --rm scanner python -m app.cli --preflight-only  # expiry audit, no downloads
+docker compose run --rm scanner python -m app.cli --limit 100       # one small batch
+```
 
 ---
 
 ## Architecture
 
-Two decoupled services + a shared `data/` volume (AGENTS.md §3):
-
 ```
- upload (web UI) → app (FastAPI, no GPU) → data/jobs.db ← worker (OCR on GPU)
-                        ▲  reads JSONL          uploads/      extract → JSONL
-                        └───────────────────────output/ ◄──────────┘
+app/
+  core/     the pipeline — NO web imports, ever
+            models  parser  source  sink  storage  downloader
+            ocr  batch  jobstore  scheduler  signing  imagestore  health
+  api/      the HTTP adapter — FastAPI lives only here
+  cli.py    headless runner (proves core is genuinely decoupled)
 ```
 
-- **app**: lightweight, no GPU, no API keys. Serves the UI, accepts uploads,
-  enqueues jobs, serves JSONL output.
-- **worker**: needs the GPU for OCR. Reads API keys from env (worker only).
-- **SQLite job queue** (`data/jobs.db`) decouples the two. Containers are
-  stateless; all state is in the mounted `data/` volume.
+`core` talks to two protocols, so the crawl team can swap either side without
+touching scanner logic:
 
-### Two registries (the core requirement)
+```python
+class RecordSource(Protocol):
+    def iter_pending(self, limit: int) -> PendingBatch: ...
+    def mark_done(self, post_ids: list[str], scan_run_id: str) -> None: ...
 
-| Registry | Package | Built-ins | Select via |
-| --- | --- | --- | --- |
-| OCR engines | `pipeline/ocr/` | `paddle` (default), `vision` | `OCR_BACKEND` |
-| Layout handlers | `pipeline/layouts/` | `two_column` (primary), `three_block`, `han_only` | router (priority order) |
+class ResultSink(Protocol):
+    def write_results(self, records: list[HanScanRecord], scan_run_id: str) -> None: ...
+    def write_errors(self, errors: list[HanScanError], scan_run_id: str) -> None: ...
+```
 
-Add an engine: new file in `pipeline/ocr/` + `register("name", Cls)`.
-Add a layout: new file in `pipeline/layouts/` + `register(Handler())`.
-The router tries layouts in priority order; `two_column` is checked first.
+**Unknown record shapes:** `core/parser.py` ships a `RecordParser` protocol with
+a `CustomRecordParser` stub. Implement `parse()` there for a schema the default
+does not handle; nothing else changes.
+
+### Fault tolerance
+
+- Every terminal state is fsynced as it happens — append-only logs, nothing
+  memory-only. Resume replays them and skips finished work.
+- A poison image cannot kill a run: `BrokenProcessPool` is caught, the pool is
+  rebuilt, and the chunk is retried serially so the bad image is attributed to
+  itself. Verified against workers that hard-exit mid-batch.
+- A per-image timeout stops one pathological file stalling a worker.
+- The memory guard sheds OCR workers before the OOM killer fires — on 8 GB with
+  3 workers at ~1 GB each, that is the difference between a slow batch and a dead
+  one at hour four.
+- Jobs interrupted by a container restart are detected via a stale heartbeat and
+  offered for resume rather than appearing to run forever.
 
 ---
 
-## Quick start — test locally (no GPU, no Paddle, no real PDF)
+## Tuning
 
-From `hannom-app/`:
+Host reference: 4 vCPU / 8 GB / 100 GB SSD / 200 Mbit.
+
+| Phase | Per 500-batch | Full 20k |
+|---|---|---|
+| Download | ~10–20 s | 3–13 min |
+| OCR (3 workers) | benchmark it | benchmark it |
+| Disk | ~0.5 GB | 4–19 GB of 100 GB |
+
+**RAM is the binding constraint, not CPU.** Before a full run, benchmark
+`OCR_WORKERS` at 2/3/4 with `--limit 100` and watch `docker stats`. PP-OCRv6
+claims a large CPU speedup over v5 and ships a compact unified model, but
+measure it on your images rather than trusting the number.
+
+The monitoring UI charts RAM, CPU, disk, and per-worker RSS live — those are the
+numbers that predict failure on this box.
+
+---
+
+## Tests
+
+The suite deliberately needs none of the heavy runtime stack, so it runs anywhere
+in seconds:
 
 ```bash
-# 1. PRIMARY two_column extraction on MOCK PDF text + MOCK Han OCR.
-#    Proves han↔meaning pairing by y, entry_meta parsing, watermark filtering.
-python -m scripts.dryrun_two_column
-
-# 2. Regression: ported han_only/three_block reproduce the ORIGINAL src/ engine.
-python -m scripts.dryrun_three_block
-
-# 3. Show both registries + single-call extensibility + secret-safe startup.
-python -m scripts.show_registries
-
-# 4. Unit tests (needs pytest):  pip install pytest && python -m pytest
+python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
 ```
 
-### Run the full app + worker locally (CPU OCR)
-
-```bash
-pip install -r requirements-app.txt        # app deps only
-
-# terminal A — web UI
-DATA_DIR=./data python -m uvicorn app.main:app --port 8000
-# open http://localhost:8000  and upload a page
-
-# terminal B — worker with CPU PaddleOCR (see SHARE.md for the full setup)
-OCR_BACKEND=paddle OCR_USE_GPU=0 TRANSLATE_BACKEND=skip DATA_DIR=./data python -m worker.worker
-```
-
-Upload a page → the worker processes it and a completed job gets a **view** link
-that renders its records inline, beside the source page image with block overlays.
-
-### Share it with a friend (public URL, no GPU)
-
-Want someone else to upload images and try it? See **[SHARE.md](SHARE.md)** — it
-sets up CPU PaddleOCR + a free cloudflared tunnel so you get a public
-`https://…trycloudflare.com` URL in a few minutes (live while your PC runs).
-Note: image uploads run `han_only` OCR; the full `two_column` pairing needs a
-text-layer PDF.
-
-### Run with Docker Compose
-
-```bash
-cp .env.example .env        # fill GOOGLE_API_KEY for Gemini translation
-docker compose up --build   # app on :8000 + worker
-```
-
-Uncomment the GPU block in `docker-compose.yml` on a GPU host to run PaddleOCR
-on the GTX 2060.
-
----
-
-## Configuration (env-driven, 12-factor — AGENTS.md §6)
-
-| Env | Values | Default | Notes |
-| --- | --- | --- | --- |
-| `OCR_BACKEND` | paddle / vision | `paddle` | paddle fits the 2060; `OCR_USE_GPU=0` for CPU |
-| `OCR_LANG` | paddle lang | `chinese_cht` | Traditional — best for Sino-Nom |
-| `TRANSLATE_BACKEND` | api / offline / skip | `api` | api = Gemini flash (cheap) |
-| `TRANSLATE_MODEL` | gemini model id | `gemini-2.0-flash` | used when backend=api |
-| `CORRECT_BACKEND` | skip / api / dict / offline | `skip` | api = Gemini proofread |
-| `QWEN_MODEL` | hf id | `Qwen2.5-3B-Instruct` | only if offline + bigger GPU |
-| `DSG_FFF` | str | `HVB_001` | work id |
-| `PDF_DPI` | int | `300` | Han crop render dpi |
-
-Translation defaults to the **API** because the 6 GB 2060 cannot host OCR + a
-3B LLM together; offline LLM translation stays behind a flag for bigger GPUs.
-The runner fills empty `meaning` fields via the selected translator (registry in
-`pipeline/translate/`: `api`=Gemini, `offline`=Qwen stub, `skip`=no-op). Records
-that already carry a higher-trust meaning (two_column's `pdf_text`) are never
-overwritten.
-
-### Secrets (AGENTS.md §7)
-
-- `GOOGLE_API_KEY` (Gemini) and `GOOGLE_VISION_KEY` are read from the
-  **environment**, injected into the **worker only**. Never hardcoded, never
-  logged — startup prints only a *present/absent boolean* per key.
-- Local: keys live in `.env` (gitignored). Only `.env.example` is committed.
-- The worker **fails fast** at start if a selected `*_BACKEND=api` is missing
-  its key.
-
----
-
-## JSONL schema (AGENTS.md §5)
-
-One line = one paired Han/Vietnamese unit. Fields are additive; new ones default
-to null/empty. For `two_column`, `meaning` comes from the PDF text layer
-(`source_of.meaning="pdf_text"`, highest trust) and `phonetic` stays empty.
-See `pipeline/schema.py`.
-
----
-
-## PRIMARY layout: `two_column` (Châu bản) — hybrid extraction
-
-The Vietnamese (right) side is a **real PDF text layer** (selectable,
-watermark-free); the Han (left) side is **image-based**. So (AGENTS.md §4):
-
-1. Vietnamese → extracted from the PDF text layer (`pdf_text.py`), no OCR.
-2. Han → OCR of the left-column crop only.
-3. Column split x derived from the span distribution (not hardcoded).
-4. Right spans grouped into entries by leading entry numbers + y-bands.
-5. Han ↔ Vietnamese paired per entry by **y-overlap**.
-6. Per-entry metadata parsed (`Ngày:`/`Tờ/Tập:`/`Loại:`/`Xuất xứ:`/`Đề tài:`);
-   `TRÍCH YẾU` and `Công đồng …:` headings dropped from the parallel body.
-7. Han OCR post-filter drops low-confidence non-CJK tokens (watermark bleed).
-
-### Coordinate spaces (real PDF)
-
-The Vietnamese text layer comes back from pdfplumber in **PDF points** (72 dpi),
-but the Han OCR runs on a page **raster rendered at `PDF_DPI`** (e.g. 300). So
-`PageContext` scales the text spans by `PDF_DPI/72` into the raster's pixel space
-and crops/OCRs the Han left column at the same dpi — both sides share one
-coordinate system, so y-overlap pairing is exact. Rendering uses `pdf2image`
-(poppler / `pdftoppm`).
-
-> **Test-data note:** the repo has no real Châu bản PDF — only sample page
-> images (no text layer). The two_column dry-run uses MOCK text spans + MOCK Han
-> OCR (`tests/fixtures/mock_two_column.py`); the real PDF code path (scale +
-> render + crop + OCR) is exercised by `tests/test_two_column_pdf.py` with the
-> poppler render / text-layer / OCR calls monkeypatched. Validate against a
-> genuine text-layer PDF (needs poppler + the OCR backend) when one is supplied —
-> see the `TODO(real-pdf)` markers.
-
----
-
-## Deployment readiness (AGENTS.md §8, §9)
-
-No Kubernetes YAML is generated here. The app is deploy-ready because all config
-and secrets are env-driven and all state lives in the mounted `data/` volume —
-so a future K8s move maps directly to a **Deployment + Secret + PVC** with zero
-code change.
-
-For batch growth (scheduled re-runs, backfills), a future **Airflow** DAG can
-enqueue jobs into the same `pipeline/jobstore` API the worker already consumes —
-Airflow would orchestrate, the worker still executes. No Airflow code here.
-
----
-
-## Layout
-
-```
-hannom-app/
-├── app/                 FastAPI UI + upload/JSONL endpoints (no GPU, no keys)
-│   ├── main.py
-│   └── static/index.html
-├── worker/worker.py     job loop: claim → run pipeline → write JSONL (GPU)
-├── pipeline/
-│   ├── config.py        env-driven config + secret-safe validation
-│   ├── schema.py        JSONL Record / EntryMeta / SourceOf
-│   ├── pdf_text.py      PDF text-layer spans + render + has_text_layer
-│   ├── page_context.py  unit of work passed to handlers
-│   ├── runner.py        file → records glue (+ correction/translation passes)
-│   ├── jobstore/        SQLite job queue (scheduler-friendly API)
-│   ├── ocr/             OCR registry: base, paddle, vision
-│   ├── translate/       translation registry: api (Gemini), offline, skip
-│   ├── correct/         Han correction registry: api, dict, offline, skip
-│   └── layouts/         layout registry/router: two_column, three_block,
-│                        han_only, _spatial (vendored existing engine)
-├── scripts/             dryrun_two_column, dryrun_three_block, show_registries
-├── tests/               pytest + fixtures (mock_two_column)
-├── docker-compose.yml   local dev (app + worker, shared ./data, GPU block comm.)
-├── Dockerfile.app / Dockerfile.worker
-├── requirements-app.txt / requirements-worker.txt
-└── .env.example         (.env is gitignored)
-```
+What it does **not** cover, by design, is anything requiring real I/O — MinIO,
+PaddleOCR, live HTTP. Verify those on the VPS with `app.cli --check`,
+`--preflight-only`, and a `--limit 100` run.

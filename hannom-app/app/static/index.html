@@ -1,184 +1,678 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Han Scanner — Facebook Image Checker</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: #f1f5f9; color: #1e293b; padding: 1.5rem; }
-    .container { max-width: 900px; margin: 0 auto; }
-    h1 { font-size: 1.4rem; margin-bottom: 0.3rem; }
-    .subtitle { color: #64748b; font-size: 0.85rem; margin-bottom: 1.5rem; }
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Han Scanner — pipeline monitor</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb; --plane: #f9f9f7;
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6; --series-2: #eb6834;
+    --seq-200: #9ec5f4; --seq-450: #2a78d6; --seq-600: #184f95;
+    --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+    --good-text: #006300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface: #1a1a19; --plane: #0d0d0d;
+      --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5; --series-2: #d95926;
+      --seq-200: #184f95; --seq-450: #3987e5; --seq-600: #86b6ef;
+      --good-text: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface: #1a1a19; --plane: #0d0d0d;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926;
+    --seq-200: #184f95; --seq-450: #3987e5; --seq-600: #86b6ef;
+    --good-text: #0ca30c;
+  }
 
-    .card { background: #fff; border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; border: 1px solid #e2e8f0; }
-    label { display: block; font-weight: 600; font-size: 0.85rem; margin-bottom: 0.3rem; }
-    textarea { width: 100%; height: 220px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.75rem; font-family: "Cascadia Code", "Fira Code", monospace; font-size: 0.82rem; resize: vertical; }
-    textarea:focus { outline: 2px solid #3b82f6; border-color: transparent; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--plane); color: var(--ink);
+    font-size: 14px; line-height: 1.45; padding: 1rem;
+  }
+  .wrap { max-width: 1280px; margin: 0 auto; }
 
-    .actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
-    button { border: none; border-radius: 6px; padding: 0.55rem 1.2rem; font-size: 0.9rem; cursor: pointer; font-weight: 600; }
-    button:hover { filter: brightness(0.93); }
-    .btn-scan { background: #dc2626; color: #fff; }
-    .btn-scan:disabled { background: #94a3b8; cursor: wait; }
-    .btn-clear { background: #e2e8f0; color: #475569; }
-    .btn-sample { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+  header {
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    margin-bottom: 1.25rem;
+  }
+  header h1 { font-size: 1.1rem; font-weight: 700; }
+  .spacer { flex: 1; }
 
-    .spinner { display: none; margin-left: 0.5rem; }
-    .spinner.show { display: inline-block; }
-    .spinner::after { content: ""; display: inline-block; width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; }
-    @keyframes spin { to { transform: rotate(360deg); } }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem 1.15rem; margin-bottom: 1rem;
+  }
+  .card > h2 {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 0.9rem;
+  }
 
-    /* Result area */
-    .result-area { margin-top: 1rem; }
-    .result-card { padding: 1rem 1.25rem; border-radius: 8px; margin-bottom: 0.75rem; }
-    .result-card.valid { background: #f0fdf4; border: 1px solid #86efac; }
-    .result-card.invalid { background: #fef2f2; border: 1px solid #fca5a5; }
-    .result-card.error { background: #fffbeb; border: 1px solid #fcd34d; }
+  button {
+    font-family: inherit; font-size: 0.83rem; font-weight: 600;
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.4rem 0.8rem; cursor: pointer;
+    background: var(--surface); color: var(--ink);
+  }
+  button:hover:not(:disabled) { filter: brightness(0.95); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.primary { background: var(--series-1); color: #fff; border-color: transparent; }
+  button.danger  { background: var(--critical); color: #fff; border-color: transparent; }
 
-    .result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
-    .badge { padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; }
-    .badge.yes { background: #16a34a; color: #fff; }
-    .badge.no { background: #dc2626; color: #fff; }
+  /* ---- KPI row ---- */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.85rem 0.95rem;
+  }
+  .tile .label {
+    font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 0.3rem;
+  }
+  .tile .value { font-size: 1.65rem; font-weight: 700; line-height: 1.1; }
+  .tile .sub { font-size: 0.75rem; color: var(--ink-2); margin-top: 0.15rem; }
+  .tile.accent .value { color: var(--series-1); }
 
-    .stat { display: inline-block; margin-right: 1.2rem; font-size: 0.85rem; }
-    .stat strong { font-size: 1.1rem; }
+  /* ---- meter (ratio against a limit) ---- */
+  .meter { height: 10px; border-radius: 5px; background: var(--grid); overflow: hidden; }
+  .meter > i { display: block; height: 100%; border-radius: 5px; background: var(--seq-450); transition: width .4s ease; }
+  .meter.good  > i { background: var(--good); }
+  .meter.warn  > i { background: var(--warning); }
+  .meter.crit  > i { background: var(--critical); }
 
-    .texts-list { margin-top: 0.5rem; font-size: 0.82rem; color: #475569; max-height: 120px; overflow-y: auto; padding: 0.5rem; background: #f8fafc; border-radius: 4px; }
-    .texts-list p { margin-bottom: 0.2rem; }
+  .hero { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.5rem; }
+  .hero .big { font-size: 2.6rem; font-weight: 700; line-height: 1; }
+  .hero .of  { font-size: 0.9rem; color: var(--ink-2); }
 
-    .preview-img { max-width: 200px; max-height: 200px; border-radius: 6px; margin-top: 0.5rem; border: 1px solid #e2e8f0; }
-    .meta { font-size: 0.78rem; color: #94a3b8; margin-top: 0.4rem; }
-    .meta a { color: #3b82f6; }
-  </style>
+  /* ---- health ---- */
+  .health { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 0.75rem; }
+  .spark { width: 100%; height: 40px; display: block; margin-top: 0.4rem; cursor: crosshair; }
+  .spark-read { font-size: 0.72rem; color: var(--muted); min-height: 1em; font-variant-numeric: tabular-nums; }
+
+  /* ---- phase stepper ---- */
+  .steps { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
+  .step {
+    font-size: 0.73rem; font-weight: 600; padding: 0.22rem 0.6rem;
+    border-radius: 99px; border: 1px solid var(--border); color: var(--muted);
+  }
+  .step.active { background: var(--series-1); border-color: transparent; color: #fff; }
+  .step.done   { border-color: var(--good); color: var(--good-text); }
+
+  .bars { display: grid; gap: 0.7rem; }
+  .bar-row .top {
+    display: flex; justify-content: space-between; font-size: 0.78rem;
+    margin-bottom: 0.25rem; color: var(--ink-2);
+  }
+  .bar-row .top b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  /* ---- error breakdown: magnitude -> one sequential hue, sorted ---- */
+  /* name column fits the longest class + its tag (e.g. "decode_error terminal") */
+  .ebar { display: grid; grid-template-columns: 178px 1fr 52px; gap: 0.55rem; align-items: center; margin-bottom: 0.4rem; }
+  .ebar .name { font-size: 0.78rem; color: var(--ink-2); font-family: ui-monospace, monospace; white-space: nowrap; }
+  @media (max-width: 560px) { .ebar { grid-template-columns: 1fr 52px; } .ebar .track { grid-column: 1 / -1; } }
+  .ebar .track { height: 15px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+  .ebar .fill { height: 100%; background: var(--seq-450); border-radius: 0 4px 4px 0; }
+  .ebar .n { font-size: 0.8rem; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tag {
+    font-size: 0.63rem; font-weight: 700; text-transform: uppercase;
+    padding: 0.05rem 0.35rem; border-radius: 3px; border: 1px solid currentColor; margin-left: 0.35rem;
+  }
+  .tag.retry { color: var(--warning); }
+  .tag.term  { color: var(--critical); }
+
+  /* ---- banner ---- */
+  .banner {
+    display: none; padding: 0.8rem 1rem; border-radius: 8px; margin-bottom: 1rem;
+    border: 1px solid var(--warning); font-size: 0.85rem;
+  }
+  .banner.show { display: block; }
+  .banner.crit { border-color: var(--critical); }
+  .banner b { display: block; margin-bottom: 0.25rem; }
+  .banner .row { margin-top: 0.6rem; display: flex; gap: 0.5rem; }
+
+  /* ---- log ---- */
+  .log {
+    background: var(--plane); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.6rem 0.7rem; max-height: 260px; overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem;
+  }
+  .log div { padding: 0.08rem 0; white-space: pre-wrap; word-break: break-word; }
+  .log .warn  { color: var(--warning); }
+  .log .error { color: var(--critical); }
+  .log .ts { color: var(--muted); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--grid); }
+  th { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .tabs { display: flex; gap: 0.3rem; margin-bottom: 1rem; }
+  .tabs button.on { background: var(--series-1); color: #fff; border-color: transparent; }
+  .panel { display: none; } .panel.on { display: block; }
+
+  textarea {
+    width: 100%; height: 150px; font-family: ui-monospace, monospace; font-size: 0.78rem;
+    padding: 0.6rem; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--plane); color: var(--ink); resize: vertical;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 0.3rem; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+</style>
 </head>
 <body>
-  <div class="container">
-    <h1>Han Scanner</h1>
-    <p class="subtitle">Paste Facebook post JSON below. The scanner will check if the image has Han/Chinese characters.</p>
+<div class="wrap">
 
+  <header>
+    <h1>Han Scanner</h1>
+    <span class="muted" id="conn">connecting…</span>
+    <div class="spacer"></div>
+    <span class="muted" id="sched-state"></span>
+    <button id="btn-sched">Pause</button>
+    <button id="btn-logout">Sign out</button>
+  </header>
+
+  <div class="banner" id="banner" role="alert">
+    <b id="banner-title"></b>
+    <span id="banner-body"></span>
+    <div class="row" id="banner-actions"></div>
+  </div>
+
+  <div class="tabs">
+    <button class="on" data-tab="monitor">Monitor</button>
+    <button data-tab="demo">Demo scan</button>
+  </div>
+
+  <!-- ================= MONITOR ================= -->
+  <div class="panel on" id="tab-monitor">
+
+    <!-- corpus progress: a single ratio against a limit -> meter, not a chart -->
     <div class="card">
-      <label for="json-input">Post JSON (single object or array)</label>
-      <textarea id="json-input" placeholder='{"id": "...", "images": ["https://..."], "label": "...", "author": "..."}'></textarea>
-      <div class="actions">
-        <button class="btn-scan" id="btn-scan" onclick="doScan()">
-          Scan <span class="spinner" id="spinner"></span>
-        </button>
-        <button class="btn-clear" onclick="clearAll()">Clear</button>
-        <button class="btn-sample" onclick="loadSample()">Load Sample</button>
+      <h2>Corpus progress</h2>
+      <div class="hero">
+        <span class="big" id="p-scanned">—</span>
+        <span class="of">of <span id="p-total">—</span> posts scanned</span>
+      </div>
+      <div class="meter"><i id="p-meter" style="width:0%"></i></div>
+      <div class="row" style="margin-top:0.5rem; font-size:0.78rem;">
+        <span class="muted">crawl runs: <b id="p-runs">—</b></span>
+        <span class="muted">remaining: <b id="p-remaining">—</b></span>
       </div>
     </div>
 
-    <div class="result-area" id="result-area"></div>
+    <div class="kpis" style="margin-bottom:1rem">
+      <div class="tile"><div class="label">Has Han</div><div class="value" id="k-valid">—</div><div class="sub">feeds Gemini</div></div>
+      <div class="tile"><div class="label">No Han</div><div class="value" id="k-invalid">—</div><div class="sub">filtered out</div></div>
+      <div class="tile"><div class="label">Failed images</div><div class="value" id="k-failed">—</div><div class="sub">see breakdown</div></div>
+      <div class="tile accent"><div class="label">Throughput</div><div class="value" id="k-rate">—</div><div class="sub" id="k-eta">—</div></div>
+    </div>
+
+    <!-- VPS health: 8 GB / 4 vCPU box, RAM is the binding constraint -->
+    <div class="card">
+      <h2>VPS health</h2>
+      <div class="health">
+        <div class="tile">
+          <div class="label">Memory</div>
+          <div class="value" id="h-mem">—</div>
+          <div class="sub" id="h-mem-sub">—</div>
+          <div class="meter" style="margin-top:.45rem"><i id="h-mem-meter" style="width:0%"></i></div>
+          <svg class="spark" id="spark-mem" viewBox="0 0 240 40" preserveAspectRatio="none" aria-label="Memory usage over time"></svg>
+          <div class="spark-read" id="read-mem"></div>
+        </div>
+        <div class="tile">
+          <div class="label">CPU</div>
+          <div class="value" id="h-cpu">—</div>
+          <div class="sub" id="h-cpu-sub">—</div>
+          <div class="meter" style="margin-top:.45rem"><i id="h-cpu-meter" style="width:0%"></i></div>
+          <svg class="spark" id="spark-cpu" viewBox="0 0 240 40" preserveAspectRatio="none" aria-label="CPU usage over time"></svg>
+          <div class="spark-read" id="read-cpu"></div>
+        </div>
+        <div class="tile">
+          <div class="label">Disk</div>
+          <div class="value" id="h-disk">—</div>
+          <div class="sub" id="h-disk-sub">—</div>
+          <div class="meter" style="margin-top:.45rem"><i id="h-disk-meter" style="width:0%"></i></div>
+          <div class="sub" id="h-images" style="margin-top:.5rem">—</div>
+        </div>
+        <div class="tile">
+          <div class="label">OCR workers</div>
+          <div class="value" id="h-workers">—</div>
+          <div class="sub" id="h-worker-rss">—</div>
+          <table style="margin-top:.4rem"><tbody id="h-worker-rows"></tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- active batch -->
+    <div class="card">
+      <h2>Batch</h2>
+      <div class="row" style="margin-bottom:0.9rem">
+        <button class="primary" id="btn-start">Start batch</button>
+        <button id="btn-cancel" disabled>Cancel</button>
+        <button id="btn-retry" disabled>Retry failed</button>
+        <span class="muted" id="job-id"></span>
+      </div>
+
+      <div class="steps" id="steps"></div>
+      <div class="bars" id="bars"></div>
+      <div class="sub muted" id="preflight-line" style="margin-top:0.8rem; font-size:0.78rem"></div>
+    </div>
+
+    <div class="card">
+      <h2>Failures by class</h2>
+      <div id="errors"><p class="muted" style="font-size:0.82rem">No failures recorded.</p></div>
+    </div>
+
+    <div class="card">
+      <h2>Activity</h2>
+      <div class="log" id="log"><div class="muted">Waiting for a batch…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Recent results</h2>
+      <table>
+        <thead><tr><th>Post</th><th>Img</th><th>Verdict</th><th class="num">Han</th><th class="num">Boxes</th><th class="num">ms</th></tr></thead>
+        <tbody id="results"><tr><td colspan="6" class="muted">No results yet.</td></tr></tbody>
+      </table>
+    </div>
   </div>
 
-  <script>
-    const SAMPLE = {
-      "id": "948677faaccae6dc182088aaadf56a98",
-      "label": "【\n年歲漸長 心要活得自由】\n年輕時總以為...",
-      "images": ["https://scontent.fsgn2-3.fna.fbcdn.net/v/t39.30808-6/765853078_3565650060268868_1058326410674324754_n.jpg?stp=dst-jpg_tt6&cstp=mx1170x1461&ctp=s640x640&_nc_cat=107&ccb=1-7&_nc_sid=aa7b47&_nc_eui2=AeG_W3OLcCHdNZWOtDtpWMjHlJabuzb1CEqUlpu7NvUISolf6vZDfgh9-SI9Twqw86vDGtnc5z_qLs0WizZBoJrW&_nc_ohc=qyCt_624K3oQ7kNvwFomYni&_nc_oc=Adr0agkm3r2GKnv4ENSpIz_mRSUAENSiIHz8_HdcaL5mBctiPMnz8A8KFSrVY3O81ffKWVWQlUgbLjIszCXC1YWq&_nc_zt=23&_nc_ht=scontent.fsgn2-3.fna&_nc_gid=KgnTrR694hmtXhTI_M5ZDQ&_nc_ss=7b2a8&oh=00_AQHojgAPf-PBszKFOBAlCwrbr5MzVIGBPz17JHnutVyg6w&oe=6A812953"],
-      "post_link": "https://www.facebook.com/groups/1792625541124212/posts/2786427191744037/?comment_id=2787086311678125",
-      "author": "董惠珍"
-    };
+  <!-- ================= DEMO ================= -->
+  <div class="panel" id="tab-demo">
+    <div class="card">
+      <h2>Single-image scan</h2>
+      <p class="muted" style="font-size:0.82rem; margin-bottom:0.7rem">
+        Paste a post object (or any JSON with <code>image_urls</code>) to spot-check the OCR engine.
+      </p>
+      <textarea id="demo-in" placeholder='{"post_id":"…","image_urls":["https://…"]}'></textarea>
+      <div class="row" style="margin-top:0.6rem">
+        <button class="primary" id="btn-demo">Scan</button>
+        <span class="muted" id="demo-status"></span>
+      </div>
+      <div id="demo-out" style="margin-top:0.9rem"></div>
+    </div>
+  </div>
+</div>
 
-    function loadSample() {
-      document.getElementById("json-input").value = JSON.stringify(SAMPLE, null, 2);
-    }
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const MAX_POINTS = 60;               // ~2 min of history at 2s polling
+const hist = { mem: [], cpu: [] };
+let activeJob = null, eventCursor = 0, lastScanned = null, lastScanTs = null;
 
-    function clearAll() {
-      document.getElementById("json-input").value = "";
-      document.getElementById("result-area").innerHTML = "";
-    }
+const fmt = (n) => (n === null || n === undefined) ? "—" : n.toLocaleString();
+const pct = (n) => (n === null || n === undefined) ? "—" : n.toFixed(0) + "%";
 
-    async function doScan() {
-      const btn = document.getElementById("btn-scan");
-      const spinner = document.getElementById("spinner");
-      const raw = document.getElementById("json-input").value.trim();
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (res.status === 401) { window.location.reload(); throw new Error("unauthenticated"); }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
 
-      if (!raw) { alert("Paste some JSON first!"); return; }
+/* ---------- sparkline: 2px line, last point marked, hover readout ---------- */
+function drawSpark(svgId, readId, points, unit) {
+  const svg = $(svgId); const W = 240, H = 40, pad = 3;
+  if (!points.length) { svg.innerHTML = ""; return; }
+  const max = Math.max(100, ...points), min = 0;
+  const x = (i) => points.length === 1 ? W : (i / (points.length - 1)) * W;
+  const y = (v) => H - pad - ((v - min) / (max - min || 1)) * (H - pad * 2);
+  const d = points.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const area = `${d} L${W},${H} L0,${H} Z`;
+  const lastX = x(points.length - 1), lastY = y(points[points.length - 1]);
 
-      let data;
-      try {
-        data = JSON.parse(raw);
-      } catch (e) {
-        alert("Bad JSON: " + e.message);
-        return;
-      }
+  svg.innerHTML =
+    `<path d="${area}" fill="var(--series-1)" opacity="0.10"/>` +
+    `<path d="${d}" fill="none" stroke="var(--series-1)" stroke-width="2"
+       vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>` +
+    `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="3"
+       fill="var(--series-1)" stroke="var(--surface)" stroke-width="2"/>` +
+    `<line id="${svgId}-cross" x1="0" y1="0" x2="0" y2="${H}" stroke="var(--axis)"
+       stroke-width="1" vector-effect="non-scaling-stroke" opacity="0"/>`;
 
-      btn.disabled = true;
-      spinner.classList.add("show");
-      document.getElementById("result-area").innerHTML = "<p>Scanning...</p>";
+  svg.onmousemove = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const i = Math.round(((ev.clientX - r.left) / r.width) * (points.length - 1));
+    const v = points[Math.max(0, Math.min(points.length - 1, i))];
+    const cross = document.getElementById(`${svgId}-cross`);
+    if (cross) { cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", "1"); }
+    const agoS = (points.length - 1 - i) * 2;
+    $(readId).textContent = `${v.toFixed(1)}${unit} · ${agoS}s ago`;
+  };
+  svg.onmouseleave = () => {
+    const cross = document.getElementById(`${svgId}-cross`);
+    if (cross) cross.setAttribute("opacity", "0");
+    $(readId).textContent = "";
+  };
+}
 
-      try {
-        let results;
-        if (Array.isArray(data)) {
-          const resp = await fetch("/scan/batch", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(data),
-          });
-          if (!resp.ok) throw new Error(await resp.text());
-          results = await resp.json();
-        } else {
-          const resp = await fetch("/scan", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(data),
-          });
-          if (!resp.ok) throw new Error(await resp.text());
-          results = [await resp.json()];
-        }
-        renderResults(results);
-      } catch (e) {
-        document.getElementById("result-area").innerHTML =
-          `<div class="result-card error"><strong>Error:</strong> ${e.message}</div>`;
-      } finally {
-        btn.disabled = false;
-        spinner.classList.remove("show");
-      }
-    }
+function meterClass(p) { return p >= 90 ? "crit" : p >= 75 ? "warn" : "good"; }
 
-    function renderResults(results) {
-      const area = document.getElementById("result-area");
-      area.innerHTML = "";
+/* ---------- health ---------- */
+async function pollHealth() {
+  let h;
+  try { h = await api("/api/health/system"); } catch { return; }
 
-      for (const r of results) {
-        const cls = r.valid_pic ? "valid" : "invalid";
-        const badgeCls = r.valid_pic ? "yes" : "no";
-        const badgeText = r.valid_pic ? "HAS HAN" : "NO HAN";
+  if (h.memory && h.memory.available) {
+    const m = h.memory;
+    $("h-mem").textContent = pct(m.percent);
+    $("h-mem-sub").textContent = `${(m.used_mb/1024).toFixed(1)} / ${(m.total_mb/1024).toFixed(1)} GB`;
+    const el = $("h-mem-meter"); el.style.width = m.percent + "%";
+    el.parentElement.className = "meter " + meterClass(m.percent);
+    hist.mem.push(m.percent); if (hist.mem.length > MAX_POINTS) hist.mem.shift();
+    drawSpark("spark-mem", "read-mem", hist.mem, "%");
+  }
+  if (h.cpu && h.cpu.available) {
+    const c = h.cpu;
+    $("h-cpu").textContent = pct(c.percent);
+    $("h-cpu-sub").textContent = `${c.count} vCPU`;
+    const el = $("h-cpu-meter"); el.style.width = Math.min(100, c.percent) + "%";
+    el.parentElement.className = "meter " + meterClass(c.percent);
+    hist.cpu.push(c.percent); if (hist.cpu.length > MAX_POINTS) hist.cpu.shift();
+    drawSpark("spark-cpu", "read-cpu", hist.cpu, "%");
+  }
+  if (h.disk && h.disk.available) {
+    const d = h.disk;
+    $("h-disk").textContent = pct(d.percent);
+    $("h-disk-sub").textContent = `${d.free_gb} GB free of ${d.total_gb} GB`;
+    const el = $("h-disk-meter"); el.style.width = d.percent + "%";
+    el.parentElement.className = "meter " + meterClass(d.percent);
+  }
+  if (h.images) $("h-images").textContent = `${fmt(h.images.count)} images stored · ${h.images.mb} MB`;
 
-        let textsHtml = "";
-        if (r.texts && r.texts.length > 0) {
-          textsHtml = `<div class="texts-list">${r.texts.map(t => `<p>${esc(t)}</p>`).join("")}</div>`;
-        }
+  const p = h.processes || {};
+  $("h-workers").textContent = p.worker_count ?? 0;
+  const limit = (h.config && h.config.memory_limit_mb) || 0;
+  $("h-worker-rss").textContent = p.available
+    ? `${p.worker_rss_mb || 0} MB` + (limit ? ` of ${limit} MB cap` : "")
+    : "psutil unavailable";
+  $("h-worker-rows").innerHTML = (p.workers || [])
+    .map((w) => `<tr><td class="muted">pid ${w.pid}</td><td class="num">${w.rss_mb} MB</td></tr>`)
+    .join("");
 
-        let metaHtml = "";
-        if (r.author) metaHtml += `Author: <strong>${esc(r.author)}</strong> `;
-        if (r.post_link) metaHtml += `| <a href="${esc(r.post_link)}" target="_blank">View post</a>`;
+  if (h.scheduler) {
+    const s = h.scheduler;
+    $("sched-state").textContent = s.paused ? "scheduler paused" : `scheduler every ${s.interval_s}s`;
+    $("btn-sched").textContent = s.paused ? "Resume" : "Pause";
+    if (s.last_error) showBanner("Scheduler error", s.last_error, true);
+  }
+}
 
-        area.innerHTML += `
-          <div class="result-card ${cls}">
-            <div class="result-header">
-              <span>
-                <span class="stat"><strong>${r.han_words}</strong> Han chars</span>
-                <span class="stat"><strong>${r.boxes}</strong> text boxes</span>
-              </span>
-              <span class="badge ${badgeCls}">${badgeText}</span>
-            </div>
-            ${textsHtml}
-            <img class="preview-img" src="${esc(r.image_url)}" onerror="this.style.display='none'" />
-            <div class="meta">${metaHtml}</div>
-            <div class="meta">ID: ${esc(r.id)}</div>
-          </div>
-        `;
-      }
-    }
+/* ---------- pipeline ---------- */
+async function pollPipeline() {
+  let p;
+  try { p = await api("/api/pipeline"); } catch { return; }
 
-    function esc(s) {
-      const d = document.createElement("div");
-      d.textContent = s;
-      return d.innerHTML;
-    }
-  </script>
+  $("conn").innerHTML = p.connected
+    ? `<span class="dot" style="background:var(--good)"></span>MinIO connected`
+    : `<span class="dot" style="background:var(--critical)"></span>MinIO unreachable`;
+  if (!p.connected && p.error) showBanner("MinIO unreachable", p.error, true);
+
+  $("p-scanned").textContent   = fmt(p.processed_total);
+  $("p-total").textContent     = fmt(p.corpus_total);
+  $("p-remaining").textContent = fmt(p.remaining);
+  $("p-runs").textContent      = fmt(p.crawl_runs_total);
+  $("p-meter").style.width     = (p.percent || 0) + "%";
+
+  $("k-valid").textContent   = fmt(p.han_valid);
+  $("k-invalid").textContent = fmt(p.han_invalid);
+  $("k-failed").textContent  = fmt(p.failed);
+
+  if (p.active_job && !activeJob) activeJob = p.active_job.job_id;
+  $("btn-start").disabled = !!p.busy;
+}
+
+/* ---------- batch ---------- */
+const PHASES = ["preflight", "download", "ocr", "publish", "done"];
+
+function renderSteps(phase) {
+  const i = PHASES.indexOf(phase);
+  $("steps").innerHTML = PHASES.map((name, n) => {
+    const cls = phase === name ? "active" : (i > n && i >= 0 ? "done" : "");
+    return `<span class="step ${cls}">${name}</span>`;
+  }).join("");
+}
+
+function bar(label, done, total, note) {
+  const p = total ? Math.min(100, (done / total) * 100) : 0;
+  return `<div class="bar-row">
+      <div class="top"><span>${label}${note ? ` <span class="muted">${note}</span>` : ""}</span>
+        <span><b>${fmt(done)}</b> / ${fmt(total)}</span></div>
+      <div class="meter"><i style="width:${p}%"></i></div>
+    </div>`;
+}
+
+async function pollJob() {
+  if (!activeJob) return;
+  let j;
+  try { j = await api(`/api/jobs/${activeJob}`); } catch { activeJob = null; return; }
+
+  const c = j.counts || {};
+  $("job-id").textContent = `${j.job_id} · ${j.phase}`;
+  renderSteps(j.phase);
+
+  $("bars").innerHTML =
+    bar("Downloaded", c.downloaded, c.total_images, c.download_failed ? `· ${c.download_failed} failed` : "") +
+    bar("Scanned", c.scanned, c.total_images, c.scan_failed ? `· ${c.scan_failed} failed` : "") +
+    bar("Published", c.published, c.total_posts, "posts");
+
+  const pf = j.preflight || {};
+  $("preflight-line").textContent = pf.total
+    ? `Preflight: ${pf.total} images — ${pf.expired} expired, ${pf.expiring_soon} expiring soon, ${pf.healthy} healthy, ${pf.unknown_expiry} unknown expiry.`
+    : "";
+
+  // throughput + ETA from the scanned counter between polls
+  const now = Date.now();
+  if (lastScanned !== null && c.scanned > lastScanned) {
+    const rate = (c.scanned - lastScanned) / ((now - lastScanTs) / 1000);
+    $("k-rate").textContent = rate.toFixed(2) + "/s";
+    const left = (c.total_images || 0) - (c.scanned || 0);
+    $("k-eta").textContent = rate > 0 ? `~${Math.ceil(left / rate / 60)} min left in batch` : "—";
+  }
+  if (lastScanned === null || c.scanned !== lastScanned) { lastScanned = c.scanned; lastScanTs = now; }
+
+  const active = j.is_active;
+  $("btn-cancel").disabled = !active;
+  $("btn-retry").disabled  = active;
+
+  if (j.awaiting_confirmation) {
+    showBanner(
+      "Paused — most source URLs have already expired",
+      `${pf.expired} of ${pf.total} images are past their signed-URL expiry. ` +
+      `Re-crawling is usually the right move; scanning anyway will mostly produce failures.`,
+      false,
+      [{ label: "Scan anyway", cls: "danger", fn: () => startBatch(true) }]
+    );
+  }
+
+  await pollEvents();
+  await pollErrors();
+  await pollResults();
+
+  if (!active) { activeJob = null; lastScanned = null; }
+}
+
+async function pollEvents() {
+  if (!activeJob) return;
+  let d;
+  try { d = await api(`/api/jobs/${activeJob}/events?cursor=${eventCursor}`); } catch { return; }
+  if (!d.events.length) return;
+  const log = $("log");
+  if (eventCursor === 0) log.innerHTML = "";
+  for (const e of d.events) {
+    const div = document.createElement("div");
+    div.className = e.level;
+    const t = (e.ts || "").slice(11, 19);
+    div.innerHTML = `<span class="ts">${t}</span>  ${escapeHtml(e.message)}`;
+    log.appendChild(div);
+  }
+  eventCursor = d.cursor;
+  log.scrollTop = log.scrollHeight;
+}
+
+async function pollErrors() {
+  if (!activeJob) return;
+  let d;
+  try { d = await api(`/api/jobs/${activeJob}/errors`); } catch { return; }
+  const entries = Object.entries(d.by_class || {}).sort((a, b) => b[1].count - a[1].count);
+  if (!entries.length) {
+    $("errors").innerHTML = `<p class="muted" style="font-size:0.82rem">No failures recorded.</p>`;
+    return;
+  }
+  const RETRYABLE = new Set(["http_429", "http_5xx", "timeout", "dns_error", "ocr_error"]);
+  const max = entries[0][1].count;
+  $("errors").innerHTML = entries.map(([name, info]) => {
+    const w = (info.count / max) * 100;
+    const retry = RETRYABLE.has(name);
+    const tag = `<span class="tag ${retry ? "retry" : "term"}">${retry ? "retryable" : "terminal"}</span>`;
+    const sample = info.sample && info.sample.detail ? escapeHtml(String(info.sample.detail).slice(0, 90)) : "";
+    return `<div class="ebar" title="${sample}">
+        <span class="name">${name}${tag}</span>
+        <span class="track"><span class="fill" style="width:${w}%"></span></span>
+        <span class="n">${fmt(info.count)}</span>
+      </div>`;
+  }).join("") + `<p class="muted" style="font-size:0.72rem;margin-top:.5rem">
+      ${fmt(d.total)} failed images. Retryable classes can be re-run with “Retry failed”.</p>`;
+}
+
+async function pollResults() {
+  if (!activeJob) return;
+  let d;
+  try { d = await api(`/api/jobs/${activeJob}/results?limit=15`); } catch { return; }
+  const rows = d.results.slice(-15).reverse();
+  $("results").innerHTML = rows.length ? rows.map((r) => `
+      <tr>
+        <td>${escapeHtml(r.post_id || "")}</td>
+        <td class="num">${r.idx}</td>
+        <td>${r.ok
+          ? (r.valid_pic
+             ? `<span class="dot" style="background:var(--good)"></span>has Han`
+             : `<span class="dot" style="background:var(--axis)"></span>none`)
+          : `<span class="dot" style="background:var(--critical)"></span>${escapeHtml(r.error_class || "failed")}`}</td>
+        <td class="num">${r.han_words ?? 0}</td>
+        <td class="num">${r.boxes ?? 0}</td>
+        <td class="num">${r.scan_ms ?? 0}</td>
+      </tr>`).join("")
+    : `<tr><td colspan="6" class="muted">No results yet.</td></tr>`;
+}
+
+/* ---------- banner ---------- */
+function showBanner(title, body, critical, actions) {
+  const b = $("banner");
+  $("banner-title").textContent = title;
+  $("banner-body").textContent = body;
+  b.className = "banner show" + (critical ? " crit" : "");
+  const row = $("banner-actions"); row.innerHTML = "";
+  for (const a of actions || []) {
+    const btn = document.createElement("button");
+    btn.textContent = a.label; btn.className = a.cls || "";
+    btn.onclick = () => { hideBanner(); a.fn(); };
+    row.appendChild(btn);
+  }
+  const dismiss = document.createElement("button");
+  dismiss.textContent = "Dismiss"; dismiss.onclick = hideBanner;
+  row.appendChild(dismiss);
+}
+function hideBanner() { $("banner").className = "banner"; }
+
+function escapeHtml(s) {
+  const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML;
+}
+
+/* ---------- actions ---------- */
+async function startBatch(confirmExpired) {
+  $("btn-start").disabled = true;
+  try {
+    const d = await api("/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_expired: !!confirmExpired }),
+    });
+    activeJob = d.job_id; eventCursor = 0; lastScanned = null;
+    $("log").innerHTML = "";
+  } catch (e) {
+    showBanner("Could not start batch", e.message, true);
+    $("btn-start").disabled = false;
+  }
+}
+
+$("btn-start").onclick  = () => startBatch(false);
+$("btn-cancel").onclick = async () => {
+  if (!activeJob) return;
+  try { await api(`/api/jobs/${activeJob}/cancel`, { method: "POST" }); } catch (e) { showBanner("Cancel failed", e.message, true); }
+};
+$("btn-retry").onclick = async () => {
+  const target = activeJob || (await api("/api/jobs?limit=1")).jobs[0]?.job_id;
+  if (!target) return;
+  try {
+    const d = await api(`/api/jobs/${target}/retry-failed`, { method: "POST" });
+    if (!d.job_id) { showBanner("Nothing to retry", d.message || "No retryable failures.", false); return; }
+    activeJob = d.job_id; eventCursor = 0; $("log").innerHTML = "";
+  } catch (e) { showBanner("Retry failed", e.message, true); }
+};
+$("btn-sched").onclick = async () => {
+  const paused = $("btn-sched").textContent === "Resume";
+  await api(`/api/scheduler/${paused ? "resume" : "pause"}`, { method: "POST" });
+  pollHealth();
+};
+$("btn-logout").onclick = async () => {
+  await fetch("/api/auth/logout", { method: "POST" });
+  window.location.reload();
+};
+
+document.querySelectorAll(".tabs button").forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll(".tabs button").forEach((x) => x.classList.remove("on"));
+    document.querySelectorAll(".panel").forEach((p) => p.classList.remove("on"));
+    b.classList.add("on");
+    $("tab-" + b.dataset.tab).classList.add("on");
+  };
+});
+
+$("btn-demo").onclick = async () => {
+  const raw = $("demo-in").value.trim();
+  if (!raw) return;
+  $("demo-status").textContent = "scanning…";
+  $("demo-out").innerHTML = "";
+  try {
+    const body = JSON.parse(raw);
+    const d = await api("/api/scan", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const good = d.valid_pic;
+    $("demo-out").innerHTML = `
+      <div class="tile" style="border-color:${good ? "var(--good)" : "var(--axis)"}">
+        <div class="label">${good ? "Has Han text" : "No Han text"}</div>
+        <div class="value">${d.han_words} <span class="sub">Han chars in ${d.boxes} boxes</span></div>
+        <div class="log" style="margin-top:.6rem">${(d.texts || []).map(escapeHtml).join("<br>") || "<span class='muted'>no text</span>"}</div>
+      </div>`;
+    $("demo-status").textContent = "";
+  } catch (e) {
+    $("demo-status").textContent = "";
+    $("demo-out").innerHTML = `<p style="color:var(--critical);font-size:0.85rem">${escapeHtml(e.message)}</p>`;
+  }
+};
+
+/* ---------- loops ---------- */
+pollHealth(); pollPipeline(); pollJob();
+setInterval(pollHealth, 2000);
+setInterval(pollPipeline, 5000);
+setInterval(pollJob, 2000);
+</script>
 </body>
 </html>
