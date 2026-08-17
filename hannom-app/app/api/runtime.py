@@ -1,8 +1,17 @@
 """Wires the core pipeline to the web layer and owns the single running batch.
 
-Everything stateful lives here so the route modules stay thin. Only one batch
-runs at a time by design: OCR already saturates the 4 vCPUs, and concurrent
-batches would fight over both CPU and the processed-ids index.
+Two input paths are supported and either can drive a batch:
+
+``upload``  the default — an uploaded ``valid_post.jsonl`` plus a local
+            checkpoint. Needs no network path into the k3s cluster.
+``minio``   only when ``MINIO_ENDPOINT`` and ``MINIO_GROUP_PREFIX`` are both set.
+
+Results always go to local files (downloadable from the dashboard); when MinIO is
+configured they are mirrored there too. Nothing MinIO-related is constructed
+unless it is configured, so an unset endpoint is inert rather than fatal.
+
+Only one batch runs at a time: OCR already saturates the CPUs, and concurrent
+batches would fight over the shared checkpoint.
 """
 
 from __future__ import annotations
@@ -13,14 +22,16 @@ import time
 from typing import Any
 
 from app.core.batch import BatchRunner
+from app.core.checkpoint import ProcessedCheckpoint
 from app.core.config import Settings
-from app.core.jobstore import JobDir, JobState, JobStore, Phase, new_run_id
+from app.core.jobstore import JobDir, JobState, JobStore, new_run_id
 from app.core.models import ErrorClass
 from app.core.scheduler import BatchScheduler
 from app.core.signing import ImageUrlSigner
-from app.core.sink import MinioResultSink
-from app.core.source import MinioRecordSource
+from app.core.sink import FileResultSink, MinioResultSink, TeeResultSink
+from app.core.source import FileRecordSource, MinioRecordSource
 from app.core.storage import MinioStorage
+from app.core.uploads import UploadStore
 
 log = logging.getLogger(__name__)
 
@@ -29,21 +40,33 @@ class Runtime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.jobstore = JobStore(settings.jobs_dir)
+        self.uploads = UploadStore(settings.uploads_dir)
+        self.checkpoint = ProcessedCheckpoint(settings.checkpoint_path)
 
-        storage = MinioStorage(settings.minio)
-        self.source = MinioRecordSource(settings, storage=storage)
-        self.sink = MinioResultSink(settings, storage=storage)
+        self.file_sink = FileResultSink(settings.results_dir)
         self.signer = ImageUrlSigner(
             base_url=settings.images.public_base_url,
             secret=settings.images.signing_secret,
             ttl_days=settings.images.ttl_days,
         )
-        self.runner = BatchRunner(settings, self.source, self.sink, self.signer)
+
+        # MinIO objects are only built when configured — an unset endpoint must
+        # be inert, not a crash on the first attribute access.
+        self.minio_source: MinioRecordSource | None = None
+        self.minio_sink: MinioResultSink | None = None
+        if settings.minio_enabled:
+            storage = MinioStorage(settings.minio)
+            self.minio_source = MinioRecordSource(settings, storage=storage)
+            self.minio_sink = MinioResultSink(settings, storage=storage)
+            log.info("MinIO configured: %s", settings.minio.endpoint)
+        else:
+            log.info("MinIO not configured — upload/download mode only")
 
         self.scheduler = BatchScheduler(
             interval_s=settings.scan_interval_s,
             run_batch=self._scheduled_tick,
-            enabled=settings.scheduler_enabled,
+            # Only useful when MinIO can be polled; uploads are user-driven.
+            enabled=settings.scheduler_enabled and settings.minio_enabled,
         )
 
         self._current_task: asyncio.Task | None = None
@@ -51,18 +74,61 @@ class Runtime:
         self._lock = asyncio.Lock()
         self._pipeline_cache: dict[str, Any] = {}
         self._pipeline_cached_at = 0.0
+        self.active_upload_id: str | None = None
+
+    # ------------------------------------------------------------------
+    # source / sink selection
+    # ------------------------------------------------------------------
+
+    @property
+    def minio_available(self) -> bool:
+        return self.minio_source is not None
+
+    def build_sink(self):
+        if self.minio_sink is not None:
+            return TeeResultSink(self.file_sink, self.minio_sink)
+        return self.file_sink
+
+    def build_source(self, mode: str, upload_id: str | None = None):
+        """Pick an input. Raises with a usable message rather than a 500."""
+        if mode == "minio":
+            if self.minio_source is None:
+                raise RuntimeError(
+                    "MinIO is not configured. Set MINIO_ENDPOINT and "
+                    "MINIO_GROUP_PREFIX, or use the upload flow."
+                )
+            return self.minio_source
+
+        upload = (
+            self.uploads.get(upload_id) if upload_id else self.uploads.latest()
+        )
+        if upload is None:
+            raise RuntimeError(
+                "No valid_post.jsonl uploaded yet. Upload one from the dashboard."
+            )
+        self.active_upload_id = upload.upload_id
+        return FileRecordSource(upload.path, self.checkpoint, self.settings)
 
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
 
     async def startup(self) -> None:
-        # A container restart leaves jobs stuck mid-phase with nothing driving
-        # them; mark those so the UI can offer Resume instead of showing a job
-        # that appears to be running forever.
+        for directory in (
+            self.settings.data_dir, self.settings.images_dir, self.settings.jobs_dir,
+            self.settings.state_dir, self.settings.uploads_dir, self.settings.results_dir,
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
+
         reaped = self.jobstore.reap_interrupted()
         if reaped:
             log.warning("marked %d interrupted job(s) after restart: %s", len(reaped), reaped)
+
+        latest = self.uploads.latest()
+        if latest is not None:
+            self.active_upload_id = latest.upload_id
+
+        # Starting the scheduler is harmless when disabled; it just idles.
         self.scheduler.start()
 
     async def shutdown(self) -> None:
@@ -87,31 +153,44 @@ class Runtime:
     # ------------------------------------------------------------------
 
     async def start_batch(
-        self, limit: int | None = None, confirm_expired: bool = False
+        self,
+        limit: int | None = None,
+        confirm_expired: bool = False,
+        mode: str = "upload",
+        upload_id: str | None = None,
     ) -> str:
         async with self._lock:
             if self.busy:
                 raise RuntimeError("a batch is already running")
+
+            source = self.build_source(mode, upload_id)
+            sink = self.build_sink()
+            runner = BatchRunner(self.settings, source, sink, self.signer)
+
             limit = limit or self.settings.batch_size
             job_dir, state = self.jobstore.create(new_run_id(), limit=limit)
             self._current_job_id = state.job_id
             self._current_task = asyncio.create_task(
-                self._run(job_dir, state, confirm_expired), name=f"batch-{state.job_id}"
+                self._run(runner, source, job_dir, state, confirm_expired),
+                name=f"batch-{state.job_id}",
             )
             return state.job_id
 
-    async def _run(self, job_dir: JobDir, state: JobState, confirm_expired: bool) -> None:
+    async def _run(self, runner, source, job_dir: JobDir, state: JobState,
+                   confirm_expired: bool) -> None:
         try:
-            await self.runner.run(job_dir, state, confirm_expired=confirm_expired)
+            await runner.run(job_dir, state, confirm_expired=confirm_expired)
         except Exception:  # noqa: BLE001 - already recorded on the job
             log.exception("batch %s crashed", state.job_id)
         finally:
-            self.source.invalidate_cache()
+            if hasattr(source, "invalidate_cache"):
+                source.invalidate_cache()
+            self.checkpoint.invalidate()
             self._pipeline_cached_at = 0.0
 
     def request_cancel(self, job_id: str) -> None:
-        """Cancellation is cooperative: the runner checks the flag between
-        items so partial work is still persisted and publishable."""
+        """Cooperative: the runner checks between items, so partial work is
+        still persisted and publishable."""
         job_dir = self.jobstore.get(job_id)
         if job_dir is None:
             return
@@ -121,20 +200,16 @@ class Runtime:
             job_dir.save_state(state)
 
     async def _scheduled_tick(self) -> bool:
-        """One scheduler iteration. Returns True when a batch actually ran."""
-        if self.busy:
-            return False
-        if not self.settings.minio.endpoint:
-            log.debug("scheduler idle: MINIO_ENDPOINT not configured")
+        if self.busy or self.minio_source is None:
             return False
 
-        pending = await asyncio.to_thread(self.source.iter_pending, 1)
+        pending = await asyncio.to_thread(self.minio_source.iter_pending, 1)
         if not pending.posts:
             return False
 
-        # Scheduled runs auto-confirm: a human is not watching, and the preflight
+        # Nobody is watching a scheduled run, so it auto-confirms; the preflight
         # numbers are still recorded on the job for later inspection.
-        await self.start_batch(confirm_expired=True)
+        await self.start_batch(confirm_expired=True, mode="minio")
         self.scheduler.last_run_at = time.time()
 
         if self._current_task is not None:
@@ -142,12 +217,11 @@ class Runtime:
         return True
 
     async def retry_failed(self, job_id: str) -> tuple[str | None, int]:
-        """Start a batch limited to the retryable failures of a prior job."""
         job_dir = self.jobstore.get(job_id)
         if job_dir is None:
             return None, 0
 
-        retryable_posts: set[str] = set()
+        retryable: set[str] = set()
         for row in job_dir.read_downloads() + job_dir.read_results():
             if row.get("ok"):
                 continue
@@ -156,69 +230,81 @@ class Runtime:
                 continue
             try:
                 if ErrorClass(raw).retryable:
-                    retryable_posts.add(str(row.get("post_id")))
+                    retryable.add(str(row.get("post_id")))
             except ValueError:
                 continue
 
-        if not retryable_posts:
+        if not retryable:
             return None, 0
 
         # Un-mark them so the normal claim path picks them up again.
-        await asyncio.to_thread(self._unmark_posts, retryable_posts)
+        await asyncio.to_thread(self._unmark_posts, retryable)
         new_job_id = await self.start_batch(
-            limit=len(retryable_posts), confirm_expired=True
+            limit=len(retryable), confirm_expired=True,
+            mode="minio" if self.minio_available and self.active_upload_id is None else "upload",
         )
-        return new_job_id, len(retryable_posts)
+        return new_job_id, len(retryable)
 
     def _unmark_posts(self, post_ids: set[str]) -> None:
-        """Drop post_ids from the processed index so they can be reclaimed."""
-        cfg = self.settings.minio
-        storage = self.source.storage
-        rows = [
-            row
-            for row in storage.iter_jsonl(cfg.processed_ids_key)
-            if str(row.get("post_id")) not in post_ids
-        ]
-        storage.put_jsonl(cfg.processed_ids_key, rows)
-        self.source.invalidate_cache()
+        self.checkpoint.remove(post_ids)
+        if self.minio_source is not None:
+            cfg = self.settings.minio
+            storage = self.minio_source.storage
+            try:
+                rows = [
+                    row for row in storage.iter_jsonl(cfg.processed_ids_key)
+                    if str(row.get("post_id")) not in post_ids
+                ]
+                storage.put_jsonl(cfg.processed_ids_key, rows)
+                self.minio_source.invalidate_cache()
+            except Exception as exc:  # noqa: BLE001 - local checkpoint is authoritative
+                log.warning("could not un-mark posts in MinIO: %s", exc)
 
     # ------------------------------------------------------------------
     # status
     # ------------------------------------------------------------------
 
+    def upload_stats(self, upload_id: str | None = None) -> dict[str, Any]:
+        upload = self.uploads.get(upload_id) if upload_id else self.uploads.latest()
+        if upload is None:
+            return {"present": False}
+        source = FileRecordSource(upload.path, self.checkpoint, self.settings)
+        return {"present": True, **upload.to_json(), **source.stats()}
+
     async def pipeline_status(self) -> dict[str, Any]:
-        """Corpus-level progress. Cached briefly — it costs several MinIO reads
-        and the UI polls every couple of seconds."""
-        if time.time() - self._pipeline_cached_at < 15 and self._pipeline_cache:
+        """Corpus-level progress. Cached briefly — the UI polls every couple of
+        seconds and this touches disk (and possibly MinIO)."""
+        if time.time() - self._pipeline_cached_at < 10 and self._pipeline_cache:
             return self._pipeline_cache
 
-        try:
-            counts = await asyncio.to_thread(self.sink.counts)
-            processed = await asyncio.to_thread(self.source.processed_ids)
-            corpus_total = await asyncio.to_thread(self.source.corpus_total)
-            run_ids = await asyncio.to_thread(self.source.list_run_ids)
-            connected = True
-            error = ""
-        except Exception as exc:  # noqa: BLE001 - MinIO down should not 500 the UI
-            log.warning("pipeline status unavailable: %s", exc)
-            counts = {"han_valid": 0, "han_invalid": 0, "failed": 0}
-            processed, corpus_total, run_ids = set(), 0, []
-            connected = False
-            error = f"{type(exc).__name__}: {exc}"
+        counts = await asyncio.to_thread(self.file_sink.counts)
+        processed = await asyncio.to_thread(self.checkpoint.count)
+        upload = await asyncio.to_thread(self.upload_stats)
+
+        corpus_total = upload.get("scannable_posts", 0) if upload.get("present") else 0
+        remaining = upload.get("pending_posts", 0) if upload.get("present") else 0
+
+        minio_state: dict[str, Any] = {"configured": self.minio_available}
+        if self.minio_available:
+            try:
+                runs = await asyncio.to_thread(self.minio_source.list_run_ids)
+                minio_state.update({"connected": True, "crawl_runs_total": len(runs)})
+            except Exception as exc:  # noqa: BLE001 - MinIO down must not 500 the UI
+                minio_state.update({"connected": False, "error": f"{type(exc).__name__}: {exc}"})
 
         active = self.jobstore.active()
         payload = {
-            "connected": connected,
-            "error": error,
+            "mode": "minio" if self.minio_available else "upload",
+            "minio": minio_state,
+            "upload": upload,
             "corpus_total": corpus_total,
-            "processed_total": len(processed),
-            "remaining": max(0, corpus_total - len(processed)),
-            "percent": round(len(processed) / corpus_total * 100, 1) if corpus_total else 0.0,
+            "processed_total": processed,
+            "remaining": remaining,
+            "percent": round(processed / corpus_total * 100, 1) if corpus_total else 0.0,
             "han_valid": counts["han_valid"],
             "han_invalid": counts["han_invalid"],
             "failed": counts["failed"],
-            "crawl_runs": run_ids,
-            "crawl_runs_total": len(run_ids),
+            "downloads": self.file_sink.downloadable(),
             "active_job": active.to_json() if active else None,
             "busy": self.busy,
         }

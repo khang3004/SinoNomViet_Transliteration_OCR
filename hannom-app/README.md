@@ -8,8 +8,30 @@ stage only ever sees worthwhile posts.
 crawl Facebook → MinIO → [Han Scanner] → Gemini batch (boxing + OCR)
 ```
 
-MinIO runs on a k3s cluster reached over Tailscale; this app runs on a separate
-VPS and serves the images it keeps back to Gemini over HTTPS.
+This app runs on its own VPS and serves the images it keeps back to Gemini over
+HTTPS.
+
+---
+
+## Two ways to feed it
+
+**Upload (default, no MinIO needed).** The normal loop:
+
+1. Upload the crawler's `valid_post.jsonl` from the dashboard
+2. Scan — repeat until nothing is pending
+3. Download `han_valid.jsonl` and hand it to the Gemini stage
+
+That export is **cumulative**, so re-uploading it after a fresh crawl is
+expected. A local checkpoint (`data/state/processed_ids.jsonl`) keyed on
+`post_id` means the second upload only scans posts that are actually new.
+
+**MinIO (optional).** If `MINIO_ENDPOINT` and `MINIO_GROUP_PREFIX` are both set,
+the scanner can also read the crawler's `logs/by_run/*/upserts.jsonl` directly
+and mirror results back. A scheduler then keeps pace with the crawl automatically.
+
+Everything MinIO stays dormant unless configured — the app starts and runs
+normally without it, and simply hides those parts of the UI. Results are always
+written locally regardless; MinIO is a mirror, never the only copy.
 
 ---
 
@@ -43,7 +65,24 @@ is always visible, and images are fetched while their URLs are fresh.
 
 ---
 
-## MinIO layout
+## Where things land
+
+**Local (always).** Under `DATA_DIR`, mirroring the MinIO layout exactly, so a
+file produced either way is interchangeable to the Gemini stage:
+
+| Path | Contents |
+|---|---|
+| `results/export/han_valid.jsonl` | Has Han text → **feeds Gemini** |
+| `results/export/han_invalid.jsonl` | Scanned clean |
+| `results/errors/failed.jsonl` | Cumulative failures, for retry sweeps |
+| `results/logs/by_run/<run>/…` | Per-run `result.json`, `upserts.jsonl`, `errors.jsonl` |
+| `state/processed_ids.jsonl` | The checkpoint |
+| `uploads/<id>/valid_post.jsonl` | Uploaded exports |
+| `images/` | Downloaded images, served to Gemini |
+
+All three export files are downloadable from the dashboard's **Data** tab.
+
+## MinIO layout (only when configured)
 
 Bucket `final-exam-nlp-raw`, group prefix `facebook/<group_id>/`.
 
@@ -155,10 +194,20 @@ second uvicorn worker would fork it and corrupt progress tracking.
 The core pipeline has no web dependency, so it also runs without the app:
 
 ```bash
-docker compose run --rm scanner python -m app.cli --check           # MinIO connectivity
-docker compose run --rm scanner python -m app.cli --preflight-only  # expiry audit, no downloads
-docker compose run --rm scanner python -m app.cli --limit 100       # one small batch
+docker compose run --rm scanner python -m app.cli --check
 ```
+
+```bash
+docker compose run --rm scanner python -m app.cli --preflight-only --file /data/uploads/<id>/valid_post.jsonl
+```
+
+```bash
+docker compose run --rm scanner python -m app.cli --file /data/uploads/<id>/valid_post.jsonl --limit 100
+```
+
+Omit `--file` to use the most recent upload; add `--minio` to read the crawler's
+by_run logs instead. `--check` reports configuration and upload status and does
+**not** fail when MinIO is absent — that's the normal mode.
 
 ---
 
@@ -185,6 +234,11 @@ class ResultSink(Protocol):
     def write_results(self, records: list[HanScanRecord], scan_run_id: str) -> None: ...
     def write_errors(self, errors: list[HanScanError], scan_run_id: str) -> None: ...
 ```
+
+Shipped implementations: `FileRecordSource` / `MinioRecordSource`, and
+`FileResultSink` / `MinioResultSink` / `TeeResultSink` (local plus mirror). The
+upload flow exists because those protocols did — it was an implementation, not a
+redesign.
 
 **Unknown record shapes:** `core/parser.py` ships a `RecordParser` protocol with
 a `CustomRecordParser` stub. Implement `parse()` there for a schema the default

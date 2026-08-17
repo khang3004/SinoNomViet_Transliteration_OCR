@@ -192,6 +192,7 @@
 
   <div class="tabs">
     <button class="on" data-tab="monitor">Monitor</button>
+    <button data-tab="data">Data</button>
     <button data-tab="demo">Demo scan</button>
   </div>
 
@@ -207,7 +208,7 @@
       </div>
       <div class="meter"><i id="p-meter" style="width:0%"></i></div>
       <div class="row" style="margin-top:0.5rem; font-size:0.78rem;">
-        <span class="muted">crawl runs: <b id="p-runs">—</b></span>
+        <span class="muted">source: <b id="p-source">—</b></span>
         <span class="muted">remaining: <b id="p-remaining">—</b></span>
       </div>
     </div>
@@ -289,6 +290,51 @@
     </div>
   </div>
 
+  <!-- ================= DATA ================= -->
+  <div class="panel" id="tab-data">
+    <div class="card">
+      <h2>1 · Upload valid_post.jsonl</h2>
+      <p class="muted" style="font-size:0.82rem; margin-bottom:0.7rem">
+        The crawler's export is cumulative, so re-uploading it after a fresh crawl is
+        normal — a local checkpoint means only genuinely new posts get scanned.
+      </p>
+      <div class="row">
+        <input type="file" id="file-in" accept=".jsonl,.json,.ndjson"
+               style="font-size:0.85rem; flex:1; min-width:200px" />
+        <button class="primary" id="btn-upload">Upload</button>
+        <span class="muted" id="upload-status"></span>
+      </div>
+      <div class="meter" id="upload-progress-wrap" style="margin-top:0.7rem; display:none">
+        <i id="upload-progress" style="width:0%"></i>
+      </div>
+      <div id="upload-summary" style="margin-top:0.9rem"></div>
+    </div>
+
+    <div class="card">
+      <h2>2 · Scan</h2>
+      <p class="muted" style="font-size:0.82rem; margin-bottom:0.7rem">
+        Runs one batch of <b id="cfg-batch">—</b> posts. Repeat until nothing is pending,
+        or leave it — each run picks up where the last stopped.
+      </p>
+      <div class="row">
+        <button class="primary" id="btn-scan-upload">Scan next batch</button>
+        <span class="muted" id="scan-hint"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>3 · Download results</h2>
+      <p class="muted" style="font-size:0.82rem; margin-bottom:0.7rem">
+        <code>han_valid.jsonl</code> is the file the Gemini stage consumes — each record
+        carries signed image URLs on this domain.
+      </p>
+      <table>
+        <thead><tr><th>File</th><th class="num">Records</th><th class="num">Size</th><th></th></tr></thead>
+        <tbody id="downloads"><tr><td colspan="4" class="muted">Nothing produced yet.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- ================= DEMO ================= -->
   <div class="panel" id="tab-demo">
     <div class="card">
@@ -312,6 +358,7 @@ const $ = (id) => document.getElementById(id);
 const MAX_POINTS = 60;               // ~2 min of history at 2s polling
 const hist = { mem: [], cpu: [] };
 let activeJob = null, eventCursor = 0, lastScanned = null, lastScanTs = null;
+let lastMode = "upload";   // "upload" | "minio"
 
 const fmt = (n) => (n === null || n === undefined) ? "—" : n.toLocaleString();
 const pct = (n) => (n === null || n === undefined) ? "—" : n.toFixed(0) + "%";
@@ -406,11 +453,22 @@ async function pollHealth() {
     .map((w) => `<tr><td class="muted">pid ${w.pid}</td><td class="num">${w.rss_mb} MB</td></tr>`)
     .join("");
 
+  if (h.config) $("cfg-batch").textContent = fmt(h.config.batch_size);
+
   if (h.scheduler) {
     const s = h.scheduler;
-    $("sched-state").textContent = s.paused ? "scheduler paused" : `scheduler every ${s.interval_s}s`;
-    $("btn-sched").textContent = s.paused ? "Resume" : "Pause";
-    if (s.last_error) showBanner("Scheduler error", s.last_error, true);
+    const minioOn = h.config && h.config.minio_enabled;
+    // The scheduler only polls MinIO, so in upload mode it is idle by design —
+    // showing "paused" there would read as a fault.
+    if (!minioOn) {
+      $("sched-state").textContent = "manual (upload mode)";
+      $("btn-sched").style.display = "none";
+    } else {
+      $("btn-sched").style.display = "";
+      $("sched-state").textContent = s.paused ? "scheduler paused" : `scheduler every ${s.interval_s}s`;
+      $("btn-sched").textContent = s.paused ? "Resume" : "Pause";
+      if (s.last_error) showBanner("Scheduler error", s.last_error, true);
+    }
   }
 }
 
@@ -419,24 +477,124 @@ async function pollPipeline() {
   let p;
   try { p = await api("/api/pipeline"); } catch { return; }
 
-  $("conn").innerHTML = p.connected
-    ? `<span class="dot" style="background:var(--good)"></span>MinIO connected`
-    : `<span class="dot" style="background:var(--critical)"></span>MinIO unreachable`;
-  if (!p.connected && p.error) showBanner("MinIO unreachable", p.error, true);
+  // MinIO is optional: when it isn't configured that's the normal upload flow,
+  // not an error state, so don't dress it up as one.
+  const m = p.minio || {};
+  if (!m.configured) {
+    $("conn").innerHTML = `<span class="dot" style="background:var(--series-1)"></span>upload mode`;
+  } else if (m.connected) {
+    $("conn").innerHTML = `<span class="dot" style="background:var(--good)"></span>MinIO connected`;
+  } else {
+    $("conn").innerHTML = `<span class="dot" style="background:var(--critical)"></span>MinIO unreachable`;
+    if (m.error) showBanner("MinIO unreachable", m.error, true);
+  }
 
+  const up = p.upload || {};
   $("p-scanned").textContent   = fmt(p.processed_total);
   $("p-total").textContent     = fmt(p.corpus_total);
   $("p-remaining").textContent = fmt(p.remaining);
-  $("p-runs").textContent      = fmt(p.crawl_runs_total);
+  $("p-source").textContent    = up.present
+    ? `upload ${up.upload_id}`
+    : (m.configured ? "MinIO" : "none yet");
   $("p-meter").style.width     = (p.percent || 0) + "%";
 
   $("k-valid").textContent   = fmt(p.han_valid);
   $("k-invalid").textContent = fmt(p.han_invalid);
   $("k-failed").textContent  = fmt(p.failed);
 
+  renderDownloads(p.downloads || []);
+  renderScanHint(up, p.busy);
+
   if (p.active_job && !activeJob) activeJob = p.active_job.job_id;
   $("btn-start").disabled = !!p.busy;
+  $("btn-scan-upload").disabled = !!p.busy || !up.present || !up.pending_posts;
 }
+
+function renderScanHint(up, busy) {
+  const el = $("scan-hint");
+  if (busy) { el.textContent = "a batch is already running"; return; }
+  if (!up.present) { el.textContent = "upload a file first"; return; }
+  el.textContent = up.pending_posts
+    ? `${fmt(up.pending_posts)} posts pending (${fmt(up.pending_images)} images)`
+    : "nothing pending — all posts already scanned";
+}
+
+function renderDownloads(files) {
+  const any = files.some((f) => f.available);
+  $("downloads").innerHTML = any ? files.map((f) => `
+      <tr>
+        <td><code>${f.name}</code></td>
+        <td class="num">${f.available ? fmt(f.lines) : "—"}</td>
+        <td class="num">${f.available ? (f.bytes / 1048576).toFixed(2) + " MB" : "—"}</td>
+        <td style="text-align:right">${f.available
+          ? `<a href="/api/results/${f.name}" download><button>Download</button></a>`
+          : `<span class="muted">not yet</span>`}</td>
+      </tr>`).join("")
+    : `<tr><td colspan="4" class="muted">Nothing produced yet.</td></tr>`;
+}
+
+/* ---------- upload ---------- */
+$("btn-upload").onclick = () => {
+  const input = $("file-in");
+  const file = input.files && input.files[0];
+  if (!file) { $("upload-status").textContent = "choose a file first"; return; }
+
+  const body = new FormData();
+  body.append("file", file);
+
+  // XHR rather than fetch: a cumulative export is tens of MB and upload
+  // progress is worth showing.
+  const xhr = new XMLHttpRequest();
+  const wrap = $("upload-progress-wrap");
+  wrap.style.display = "block";
+  $("btn-upload").disabled = true;
+  $("upload-status").textContent = "uploading…";
+
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) $("upload-progress").style.width = (e.loaded / e.total * 100) + "%";
+  };
+  xhr.onload = () => {
+    $("btn-upload").disabled = false;
+    wrap.style.display = "none";
+    $("upload-progress").style.width = "0%";
+    if (xhr.status === 401) { window.location.reload(); return; }
+    let d;
+    try { d = JSON.parse(xhr.responseText); } catch { d = {}; }
+    if (xhr.status >= 400) {
+      $("upload-status").textContent = "";
+      showBanner("Upload failed", d.detail || `HTTP ${xhr.status}`, true);
+      return;
+    }
+    $("upload-status").textContent = "";
+    renderUploadSummary(d);
+    pollPipeline();
+  };
+  xhr.onerror = () => {
+    $("btn-upload").disabled = false;
+    wrap.style.display = "none";
+    $("upload-status").textContent = "";
+    showBanner("Upload failed", "network error", true);
+  };
+  xhr.open("POST", "/api/uploads");
+  xhr.send(body);
+};
+
+function renderUploadSummary(d) {
+  if (!d.present) { $("upload-summary").innerHTML = ""; return; }
+  const nothing = !d.scannable_posts;
+  $("upload-summary").innerHTML = `
+    <div class="kpis">
+      <div class="tile"><div class="label">Scannable posts</div><div class="value">${fmt(d.scannable_posts)}</div></div>
+      <div class="tile"><div class="label">Already scanned</div><div class="value">${fmt(d.already_processed)}</div><div class="sub">skipped by checkpoint</div></div>
+      <div class="tile accent"><div class="label">Pending</div><div class="value">${fmt(d.pending_posts)}</div><div class="sub">${fmt(d.pending_images)} images</div></div>
+      <div class="tile"><div class="label">Malformed lines</div><div class="value">${fmt(d.malformed_lines)}</div><div class="sub">skipped</div></div>
+    </div>
+    ${nothing ? `<p style="color:var(--warning);font-size:0.82rem;margin-top:0.7rem">
+      No scannable posts found. Check this is the crawler's <code>valid_post.jsonl</code> —
+      records need <code>is_valid: true</code> and a non-empty <code>image_urls</code>.</p>` : ""}`;
+}
+
+$("btn-scan-upload").onclick = () => startBatch(false, "upload");
 
 /* ---------- batch ---------- */
 const PHASES = ["preflight", "download", "ocr", "publish", "done"];
@@ -596,15 +754,18 @@ function escapeHtml(s) {
 }
 
 /* ---------- actions ---------- */
-async function startBatch(confirmExpired) {
+async function startBatch(confirmExpired, mode) {
   $("btn-start").disabled = true;
+  lastMode = mode || lastMode;
   try {
     const d = await api("/api/jobs", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm_expired: !!confirmExpired }),
+      body: JSON.stringify({ confirm_expired: !!confirmExpired, mode: lastMode }),
     });
     activeJob = d.job_id; eventCursor = 0; lastScanned = null;
     $("log").innerHTML = "";
+    // Jump to the monitor so progress is visible immediately.
+    document.querySelector('.tabs button[data-tab="monitor"]').click();
   } catch (e) {
     showBanner("Could not start batch", e.message, true);
     $("btn-start").disabled = false;

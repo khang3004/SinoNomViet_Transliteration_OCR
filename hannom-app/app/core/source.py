@@ -1,18 +1,27 @@
 """Where work comes from.
 
-``RecordSource`` is the input boundary of this stage. The MinIO implementation
-reads the crawler's ``logs/by_run/<run_id>/upserts.jsonl`` — chosen over the
-cumulative ``export/valid_post.jsonl`` because each run directory is a
-self-contained work unit needing no diffing, and the timestamped run ids give the
-UI a natural "run 7 of 9" progress axis.
+``RecordSource`` is the input boundary of this stage. Two implementations ship:
+
+``FileRecordSource``
+    Reads an uploaded ``valid_post.jsonl``. This is the default — it needs no
+    network path to the k3s cluster, so it works regardless of how MinIO is
+    exposed. Because that export is *cumulative*, a local checkpoint keeps
+    re-uploads from rescanning the whole corpus.
+
+``MinioRecordSource``
+    Reads the crawler's ``logs/by_run/<run_id>/upserts.jsonl`` directly, for when
+    MinIO is reachable. Chosen over the cumulative export on that path because
+    each run directory is a self-contained work unit needing no diffing.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 
+from app.core.checkpoint import ProcessedCheckpoint
 from app.core.config import MinioConfig, Settings
 from app.core.models import PostObject
 from app.core.parser import (
@@ -32,11 +41,11 @@ class PendingBatch:
     """A claimed unit of work plus the context the UI needs to show progress."""
 
     posts: list[PostObject]
-    source_keys: list[str]
-    source_run_ids: list[str]
+    source_keys: list[str] = field(default_factory=list)
+    source_run_ids: list[str] = field(default_factory=list)
     malformed_lines: int = 0
     # Progress context
-    corpus_total: int = 0        # lines in export/valid_post.jsonl
+    corpus_total: int = 0        # scannable posts in the whole export
     processed_total: int = 0     # posts we have already scanned
     runs_total: int = 0
     runs_done: int = 0
@@ -56,6 +65,103 @@ class RecordSource(Protocol):
 
     def processed_ids(self) -> set[str]:
         ...
+
+
+class FileRecordSource:
+    """Reads an uploaded ``valid_post.jsonl`` from local disk.
+
+    The export is cumulative, so the checkpoint is doing real work here: without
+    it, re-uploading after a fresh crawl would rescan every post ever seen.
+    """
+
+    def __init__(
+        self,
+        jsonl_path: Path,
+        checkpoint: ProcessedCheckpoint,
+        settings: Settings,
+        parser: RecordParser | None = None,
+    ) -> None:
+        self.path = Path(jsonl_path)
+        self.checkpoint = checkpoint
+        self.settings = settings
+        self.parser = parser or DefaultRecordParser()
+        self._scannable: list[PostObject] | None = None
+        self._malformed = 0
+
+    def _load(self) -> list[PostObject]:
+        """Parse, filter and dedupe the whole file once, then cache it.
+
+        A 20k-post export is a few tens of MB — cheap to hold, and far cheaper
+        than re-parsing on every batch.
+        """
+        if self._scannable is not None:
+            return self._scannable
+
+        if not self.path.exists():
+            log.warning("upload not found: %s", self.path)
+            self._scannable = []
+            return self._scannable
+
+        with open(self.path, "r", encoding="utf-8", errors="replace") as handle:
+            posts, malformed = parse_jsonl(handle, self.parser)
+
+        self._malformed = malformed
+        scannable = [
+            p for p in posts
+            if is_scannable(p, only_crawler_valid=self.settings.only_crawler_valid)
+        ]
+        self._scannable = dedupe_posts(scannable)
+        log.info(
+            "loaded %s: %d records, %d scannable, %d malformed",
+            self.path.name, len(posts), len(self._scannable), malformed,
+        )
+        return self._scannable
+
+    def stats(self) -> dict:
+        """Summary shown after upload, before any scanning starts."""
+        posts = self._load()
+        processed = self.checkpoint.load()
+        pending = [p for p in posts if p.post_id not in processed]
+        return {
+            "scannable_posts": len(posts),
+            "already_processed": len(posts) - len(pending),
+            "pending_posts": len(pending),
+            "pending_images": sum(len(p.image_urls) for p in pending),
+            "malformed_lines": self._malformed,
+        }
+
+    def iter_pending(self, limit: int) -> PendingBatch:
+        posts = self._load()
+        processed = self.checkpoint.load()
+        pending = [p for p in posts if p.post_id not in processed]
+
+        return PendingBatch(
+            posts=pending[:limit],
+            source_keys=[self.path.name],
+            source_run_ids=[self.path.parent.name],
+            malformed_lines=self._malformed,
+            corpus_total=len(posts),
+            processed_total=len(posts) - len(pending),
+            runs_total=1,
+            runs_done=0,
+            current_run_id=self.path.parent.name,
+        )
+
+    def mark_done(self, post_ids: list[str], scan_run_id: str) -> None:
+        self.checkpoint.add(post_ids, scan_run_id)
+
+    def processed_ids(self) -> set[str]:
+        return self.checkpoint.load()
+
+    def invalidate_cache(self) -> None:
+        self._scannable = None
+        self.checkpoint.invalidate()
+
+    def corpus_total(self) -> int:
+        return len(self._load())
+
+    def list_run_ids(self) -> list[str]:
+        return [self.path.parent.name]
 
 
 class MinioRecordSource:

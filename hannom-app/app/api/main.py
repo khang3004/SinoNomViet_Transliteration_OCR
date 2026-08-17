@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.api import routes_images, routes_jobs
+from app.api import routes_images, routes_jobs, routes_uploads
 from app.api.auth import (
     COOKIE_NAME,
     AuthConfig,
@@ -55,10 +55,20 @@ async def lifespan(app: FastAPI):
         settings.ocr.workers, settings.batch_size,
         settings.scan_interval_s, settings.ocr.engine_name,
     )
-    if not settings.minio.endpoint:
-        log.warning("MINIO_ENDPOINT is not set — batches will find no work")
+    if settings.minio_enabled:
+        log.info("input: upload or MinIO (%s)", settings.minio.endpoint)
+    else:
+        # Not a warning: upload/download is the supported default flow.
+        log.info("input: upload only (MinIO not configured)")
     if not settings.images.public_base_url:
         log.warning("PUBLIC_BASE_URL is not set — minted image URLs will be relative")
+    if not settings.images.signing_secret:
+        # This one fails late — during publish, after downloads and OCR — so it
+        # is worth shouting about at startup.
+        log.warning(
+            "IMAGE_SIGNING_SECRET is not set — batches will FAIL at the publish "
+            "phase, after downloading and scanning. Set it before running."
+        )
 
     await app.state.runtime.startup()
     try:
@@ -93,6 +103,7 @@ def create_app() -> FastAPI:
 
     app.include_router(routes_images.router)
     app.include_router(routes_jobs.router)
+    app.include_router(routes_uploads.router)
 
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

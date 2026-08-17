@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -22,6 +22,10 @@ class CreateJobRequest(BaseModel):
     limit: int | None = Field(None, ge=1, le=20000)
     # Preflight pauses when too many URLs are already dead; this overrides it.
     confirm_expired: bool = False
+    # "upload" (default) reads the uploaded valid_post.jsonl; "minio" polls the
+    # crawler's by_run logs and requires MINIO_ENDPOINT to be configured.
+    mode: Literal["upload", "minio"] = "upload"
+    upload_id: str | None = None
 
 
 @router.post("/jobs")
@@ -29,10 +33,18 @@ async def create_job(request: Request, body: CreateJobRequest) -> dict[str, Any]
     runtime = request.app.state.runtime
     if runtime.busy:
         raise HTTPException(409, "a batch is already running")
-    job_id = await runtime.start_batch(
-        limit=body.limit, confirm_expired=body.confirm_expired
-    )
-    return {"job_id": job_id, "status": "started"}
+    try:
+        job_id = await runtime.start_batch(
+            limit=body.limit,
+            confirm_expired=body.confirm_expired,
+            mode=body.mode,
+            upload_id=body.upload_id,
+        )
+    except RuntimeError as exc:
+        # Missing upload or unconfigured MinIO — the message is written for a
+        # human, so surface it rather than a bare 500.
+        raise HTTPException(400, str(exc)) from exc
+    return {"job_id": job_id, "status": "started", "mode": body.mode}
 
 
 @router.get("/jobs")
@@ -178,6 +190,7 @@ async def system_health(request: Request):
         "memory_limit_mb": settings.ocr.memory_limit_mb,
         "download_concurrency": settings.download.concurrency,
         "engine": settings.ocr.engine_name,
+        "minio_enabled": settings.minio_enabled,
     }
     return data
 

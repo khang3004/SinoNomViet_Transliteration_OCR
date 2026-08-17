@@ -140,13 +140,23 @@ class Settings:
     batch_size: int = 500
     scan_interval_s: int = 300
     scheduler_enabled: bool = True
-    # Crawler-invalid posts are skipped by default; by_run holds both.
+    # Crawler-invalid posts are skipped by default; the exports hold both.
     only_crawler_valid: bool = True
 
     minio: MinioConfig = field(default_factory=MinioConfig)
     ocr: OcrConfig = field(default_factory=OcrConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
     images: ImageServeConfig = field(default_factory=ImageServeConfig)
+
+    @property
+    def minio_enabled(self) -> bool:
+        """MinIO is entirely optional.
+
+        The default flow is uploading ``valid_post.jsonl`` and downloading
+        results, which needs no network path into the k3s cluster. Everything
+        MinIO-related stays dormant unless an endpoint is configured.
+        """
+        return bool(self.minio.endpoint and self.minio.group_prefix)
 
     @property
     def images_dir(self) -> Path:
@@ -159,6 +169,18 @@ class Settings:
     @property
     def state_dir(self) -> Path:
         return self.data_dir / "state"
+
+    @property
+    def uploads_dir(self) -> Path:
+        return self.data_dir / "uploads"
+
+    @property
+    def results_dir(self) -> Path:
+        return self.data_dir / "results"
+
+    @property
+    def checkpoint_path(self) -> Path:
+        return self.state_dir / "processed_ids.jsonl"
 
 
 def load_settings() -> Settings:
