@@ -1,8 +1,8 @@
 """Host telemetry for the monitoring UI.
 
-The VPS is 4 vCPU / 8 GB, and RAM is the binding constraint on a multi-hour OCR
-run — so these numbers are not decoration, they are how you see an OOM coming.
-Lives in core so the CLI can print them too.
+Disk is the number that matters here: downloaded images accumulate and nothing
+removes them automatically — they have to outlive the Gemini run that consumes
+them. Lives in core so the CLI can print these too.
 """
 
 from __future__ import annotations
@@ -68,11 +68,7 @@ def disk(path: Path) -> dict[str, Any]:
 
 
 def process_tree() -> dict[str, Any]:
-    """This process plus its OCR workers, with per-worker RSS.
-
-    Per-worker RSS is the number that predicts failure: 3 workers at ~1 GB each
-    on an 8 GB box is fine, 3 at 2 GB is not.
-    """
+    """This process and any children, with per-process RSS."""
     ps = _psutil()
     if ps is None:
         return {"available": False, "workers": []}

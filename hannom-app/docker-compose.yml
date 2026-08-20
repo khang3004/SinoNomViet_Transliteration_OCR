@@ -1,4 +1,4 @@
-# Han Scanner — one service, no database.
+# Image prep — one service, no database.
 #
 #   docker compose up --build -d
 #   docker compose logs -f scanner
@@ -33,13 +33,11 @@ services:
     # If that fails, comment out the `ports:` block above and uncomment:
     # network_mode: host
 
-    # 8 GB box, 3 OCR workers at roughly 1 GB each plus the API process.
-    # The app's own MEMORY_LIMIT_MB guard should shrink the pool before this
-    # ceiling is reached; this is the backstop, not the primary control.
+    # Generous headroom: without OCR this process is IO-bound and light.
     deploy:
       resources:
         limits:
-          memory: 7g
+          memory: 2g
 
     logging:
       driver: json-file

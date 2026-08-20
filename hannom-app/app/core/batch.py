@@ -1,37 +1,31 @@
-"""Batch orchestration: preflight -> download -> ocr -> publish.
+"""Batch orchestration: preflight -> download -> publish.
 
-Phase order is forced by URL expiry. fbcdn signatures last hours; OCR of a full
-corpus takes hours. Downloading everything first (minutes, network-bound) and
-only then scanning (hours, CPU-bound) is what keeps the last image as valid as
-the first.
+Preflight gates on URL expiry before spending any bandwidth: fbcdn signatures
+last hours, so a stale crawl is worth re-running rather than downloading dead
+links. Everything after that is network-bound and finishes in minutes.
 
-Fault tolerance is the other design axis: a poison image, an OOM, or a container
-restart must each cost one item or one batch, never the corpus.
+Fault tolerance is the other design axis: a restart or a cancel must cost one
+chunk, never the corpus. Results are published and checkpointed as they finish
+rather than only at the end.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from concurrent.futures import ProcessPoolExecutor
-from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
-from app.core import ocr as ocr_module
 from app.core.config import Settings
 from app.core.downloader import DownloadResult, ImageDownloader
 from app.core.jobstore import JobDir, JobState, Phase
 from app.core.models import (
-    SCAN_SCANNED,
-    SCAN_SKIPPED,
     ErrorClass,
-    HanScanError,
-    HanScanRecord,
     PostObject,
-    ScannedImage,
-    ScanOutcome,
+    PreparedImage,
+    PreparedPost,
+    PrepError,
     WorkItem,
     utcnow_iso,
 )
@@ -46,21 +40,6 @@ log = logging.getLogger(__name__)
 # crawl should be ~0%; anything meaningful means the crawler and scanner have
 # drifted and re-crawling beats scanning dead links for hours.
 EXPIRY_GATE_RATIO = 0.10
-
-
-def process_rss_mb(pids: list[int]) -> float:
-    """Total RSS of the given processes, in MB. 0.0 if psutil is unavailable."""
-    try:
-        import psutil
-    except ModuleNotFoundError:
-        return 0.0
-    total = 0.0
-    for pid in pids:
-        try:
-            total += psutil.Process(pid).memory_info().rss / (1024 * 1024)
-        except Exception:  # noqa: BLE001 - worker already gone
-            continue
-    return total
 
 
 class BatchRunner:
@@ -94,52 +73,22 @@ class BatchRunner:
         *,
         confirm_expired: bool = False,
         limit: int | None = None,
-        run_ocr: bool = True,
     ) -> JobState:
-        """Run one batch.
-
-        ``run_ocr=False`` stops after downloading: images are fetched, stored and
-        given signed URLs, but never scanned. That is the cheap mode — OCR is
-        what saturates the CPU, and for a pipeline whose next stage runs Gemini
-        on these images anyway, scanning here can be redundant.
-        """
+        """Run one batch: claim work, download images, publish signed URLs."""
         limit = limit or state.limit or self.settings.batch_size
-        state.run_ocr = run_ocr
         try:
             posts = await self._phase_preflight(job_dir, state, limit, confirm_expired)
             if posts is None:
                 return state  # gated on confirmation, or nothing to do
 
-            downloads = await self._phase_download(job_dir, state, posts)
             published: set[str] = set()
-
-            if run_ocr:
-                async def flush(outcomes_so_far: dict[str, ScanOutcome]) -> None:
-                    """Make finished posts durable mid-run.
-
-                    Without this, stopping a multi-hour scan discards every image
-                    already processed — the posts were never checkpointed, so the
-                    next run repeats all of it.
-                    """
-                    await self._phase_publish(
-                        job_dir, state, posts, downloads, outcomes_so_far,
-                        run_ocr=True, published=published,
-                    )
-                    state.phase = Phase.OCR
-                    job_dir.save_state(state)
-
-                outcomes = await self._phase_ocr(
-                    job_dir, state, downloads, on_chunk=flush
-                )
-            else:
-                outcomes = {}
-                job_dir.append_event(
-                    "info", "OCR skipped — producing signed image URLs only"
-                )
-
-            await self._phase_publish(
-                job_dir, state, posts, downloads, outcomes,
-                run_ocr=run_ocr, published=published,
+            await self._phase_download(
+                job_dir, state, posts,
+                # Publish finished posts as their images land, so stopping the
+                # run keeps everything already completed.
+                on_progress=lambda downloads: self._phase_publish(
+                    job_dir, state, posts, downloads, published=published
+                ),
             )
 
             state.phase = Phase.CANCELLED if state.cancel_requested else Phase.DONE
@@ -233,7 +182,11 @@ class BatchRunner:
     # ------------------------------------------------------------------
 
     async def _phase_download(
-        self, job_dir: JobDir, state: JobState, posts: list[PostObject]
+        self,
+        job_dir: JobDir,
+        state: JobState,
+        posts: list[PostObject],
+        on_progress: Callable[[dict[str, DownloadResult]], Awaitable[None]] | None = None,
     ) -> dict[str, DownloadResult]:
         state.phase = Phase.DOWNLOAD
         job_dir.save_state(state)
@@ -295,12 +248,15 @@ class BatchRunner:
                     f"downloaded {state.counts.downloaded}, "
                     f"failed {state.counts.download_failed}",
                 )
+                # Flush finished posts so a stop keeps them.
+                if on_progress is not None:
+                    await on_progress(results)
 
         await self.downloader.download_all(
             pending, on_result=on_result, should_cancel=lambda: state.cancel_requested
         )
 
-        # Fold in prior-run outcomes so the OCR phase sees the full picture.
+        # Fold in prior-run outcomes so publishing sees the full picture.
         for key, row in already.items():
             if key in results:
                 continue
@@ -312,6 +268,8 @@ class BatchRunner:
             f"download phase done: {state.counts.downloaded} ok, "
             f"{state.counts.download_failed} failed",
         )
+        if on_progress is not None:
+            await on_progress(results)
         return results
 
     @staticmethod
@@ -338,274 +296,22 @@ class BatchRunner:
         )
 
     # ------------------------------------------------------------------
-    # Phase 2 - OCR
-    # ------------------------------------------------------------------
-
-    async def _phase_ocr(
-        self,
-        job_dir: JobDir,
-        state: JobState,
-        downloads: dict[str, DownloadResult],
-        on_chunk: Callable[[dict[str, ScanOutcome]], Any] | None = None,
-    ) -> dict[str, ScanOutcome]:
-        state.phase = Phase.OCR
-        job_dir.save_state(state)
-
-        already = job_dir.completed_scan_keys()
-        todo = [
-            result
-            for key, result in downloads.items()
-            if result.ok and result.local_path and key not in already
-        ]
-
-        outcomes: dict[str, ScanOutcome] = {
-            key: ScanOutcome(
-                idx=row.get("idx", 0), post_id=row.get("post_id", ""),
-                ok=bool(row.get("ok")), valid_pic=bool(row.get("valid_pic")),
-                han_words=row.get("han_words", 0), boxes=row.get("boxes", 0),
-                texts=row.get("texts", []), mean_confidence=row.get("mean_confidence"),
-                scan_ms=row.get("scan_ms", 0),
-            )
-            for key, row in already.items()
-        }
-
-        if already:
-            job_dir.append_event("info", f"resuming: {len(already)} image(s) already scanned")
-        if not todo:
-            job_dir.append_event("info", "no images to scan")
-            return outcomes
-
-        workers = max(1, self.settings.ocr.workers)
-        state.ocr_workers = workers
-        job_dir.save_state(state)
-        job_dir.append_event("info", f"scanning {len(todo)} image(s) with {workers} worker(s)")
-
-        loop = asyncio.get_running_loop()
-        pool = self._new_pool(workers)
-        chunk_size = max(1, workers * 4)
-
-        try:
-            for start in range(0, len(todo), chunk_size):
-                if state.cancel_requested:
-                    job_dir.append_event("warn", "cancel requested — stopping OCR")
-                    break
-
-                chunk = todo[start : start + chunk_size]
-                try:
-                    chunk_outcomes = await self._run_chunk(loop, pool, chunk)
-                except BrokenProcessPool:
-                    # A worker died mid-chunk, which kills every pending future.
-                    # Rebuild and retry the chunk serially so the poison image is
-                    # isolated to itself instead of taking the batch down.
-                    job_dir.append_event(
-                        "warn", "OCR worker died — rebuilding pool and isolating the chunk"
-                    )
-                    pool.shutdown(wait=False, cancel_futures=True)
-                    pool = self._new_pool(workers)
-                    chunk_outcomes, pool = await self._run_chunk_serially(
-                        loop, pool, chunk, job_dir, workers
-                    )
-
-                for key, outcome in chunk_outcomes.items():
-                    outcomes[key] = outcome
-                    job_dir.append_result(
-                        {
-                            "post_id": outcome.post_id, "idx": outcome.idx,
-                            "ok": outcome.ok, "valid_pic": outcome.valid_pic,
-                            "han_words": outcome.han_words, "boxes": outcome.boxes,
-                            "texts": outcome.texts,
-                            "mean_confidence": outcome.mean_confidence,
-                            "scan_ms": outcome.scan_ms,
-                            "error_class": outcome.error_class.value if outcome.error_class else None,
-                            "error_detail": outcome.error_detail,
-                        }
-                    )
-                    if outcome.ok:
-                        state.counts.scanned += 1
-                    else:
-                        state.counts.scan_failed += 1
-
-                # Publish what is now complete before starting the next chunk.
-                if on_chunk is not None:
-                    await on_chunk(outcomes)
-
-                workers = self._enforce_memory_guard(job_dir, pool, workers)
-                job_dir.heartbeat(state)
-                job_dir.append_event(
-                    "info",
-                    f"scanned {state.counts.scanned}/{len(todo)}, "
-                    f"failed {state.counts.scan_failed}",
-                )
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
-
-        return outcomes
-
-    def _new_pool(self, workers: int) -> ProcessPoolExecutor:
-        """Pool whose workers each load their own model at construction.
-
-        A per-process engine is the point: PaddleOCR is not safe to share across
-        threads, and paying the load cost in the initializer keeps it off the
-        first image's latency.
-        """
-        return ProcessPoolExecutor(
-            max_workers=workers,
-            initializer=ocr_module.pool_initializer,
-            initargs=(self.settings.ocr.lang, self.settings.ocr.enable_mkldnn),
-        )
-
-    async def _run_chunk(
-        self, loop, pool: ProcessPoolExecutor, chunk: list[DownloadResult]
-    ) -> dict[str, ScanOutcome]:
-        tasks = {
-            f"{r.item.post_id}:{r.item.idx}": loop.run_in_executor(
-                pool, self._scan_call, r
-            )
-            for r in chunk
-        }
-        out: dict[str, ScanOutcome] = {}
-        try:
-            for key, future in tasks.items():
-                post_id, idx = key.split(":")
-                try:
-                    out[key] = await asyncio.wait_for(future, self.settings.ocr.timeout_s)
-                except asyncio.TimeoutError:
-                    # One pathological image must not stall a worker forever.
-                    out[key] = ScanOutcome(
-                        idx=int(idx), post_id=post_id, ok=False,
-                        error_class=ErrorClass.OCR_ERROR, error_detail="OCR timed out",
-                    )
-                except ocr_module.OcrUnavailable:
-                    # The engine itself is broken (bad image build, missing model).
-                    # Let this kill the batch: marking 20k images "ocr_error" and
-                    # flagging their posts done would quietly destroy the corpus.
-                    raise
-                except BrokenProcessPool:
-                    raise  # handled by the caller, which rebuilds and isolates
-                except Exception as exc:  # noqa: BLE001 - one image, never the batch
-                    out[key] = ScanOutcome(
-                        idx=int(idx), post_id=post_id, ok=False,
-                        error_class=ErrorClass.OCR_ERROR,
-                        error_detail=f"{type(exc).__name__}: {exc}",
-                    )
-        finally:
-            # A broken pool fails every pending future at once. Leaving them
-            # un-awaited makes asyncio dump a traceback per future at GC time,
-            # which would bury real errors in a multi-hour run's log.
-            await self._drain(tasks, out)
-        return out
-
-    @staticmethod
-    async def _drain(tasks: dict[str, Any], collected: dict[str, ScanOutcome]) -> None:
-        for key, future in tasks.items():
-            if key in collected or not hasattr(future, "done"):
-                continue
-            if not future.done():
-                future.cancel()
-            try:
-                await future
-            except BaseException:  # noqa: BLE001 - retrieval only, already recorded
-                pass
-
-    async def _run_chunk_serially(
-        self,
-        loop,
-        pool: ProcessPoolExecutor,
-        chunk: list[DownloadResult],
-        job_dir: JobDir,
-        workers: int,
-    ) -> tuple[dict[str, ScanOutcome], ProcessPoolExecutor]:
-        """One at a time, so a crashing image is attributed to itself.
-
-        Returns the (possibly rebuilt) pool: a poison image kills the pool it
-        runs in, and without rebuilding, every later image in the chunk would be
-        blamed for a failure that already happened.
-        """
-        out: dict[str, ScanOutcome] = {}
-        for result in chunk:
-            key = f"{result.item.post_id}:{result.item.idx}"
-            try:
-                future = loop.run_in_executor(pool, self._scan_call, result)
-                out[key] = await asyncio.wait_for(future, self.settings.ocr.timeout_s)
-            except ocr_module.OcrUnavailable:
-                raise  # engine-level failure, not an image-level one
-            except Exception as exc:  # noqa: BLE001 - attribute it and move on
-                job_dir.append_event(
-                    "error", f"image {key} failed in isolation: {type(exc).__name__}"
-                )
-                out[key] = ScanOutcome(
-                    idx=result.item.idx, post_id=result.item.post_id, ok=False,
-                    error_class=ErrorClass.OCR_ERROR,
-                    error_detail=f"{type(exc).__name__}: {exc}",
-                )
-                if isinstance(exc, BrokenProcessPool):
-                    pool.shutdown(wait=False, cancel_futures=True)
-                    pool = self._new_pool(workers)
-        return out, pool
-
-    def _scan_call(self, result: DownloadResult) -> ScanOutcome:
-        return ocr_module.scan_file(
-            result.local_path,
-            result.item.post_id,
-            result.item.idx,
-            lang=self.settings.ocr.lang,
-            min_confidence=self.settings.ocr.min_confidence,
-            enable_mkldnn=self.settings.ocr.enable_mkldnn,
-        )
-
-    def _enforce_memory_guard(
-        self, job_dir: JobDir, pool: ProcessPoolExecutor, workers: int
-    ) -> int:
-        """Shrink the pool before the OOM killer does it for us.
-
-        On an 8 GB box with ~1 GB per PaddleOCR worker, this is the difference
-        between a slow batch and a batch that dies at hour four.
-        """
-        limit = self.settings.ocr.memory_limit_mb
-        if limit <= 0 or workers <= 1:
-            return workers
-
-        pids = [p.pid for p in getattr(pool, "_processes", {}).values()]
-        if not pids:
-            return workers
-
-        used = process_rss_mb(pids)
-        if used > limit:
-            job_dir.append_event(
-                "warn",
-                f"OCR workers using {used:.0f} MB (limit {limit} MB) — "
-                f"reducing to {workers - 1} worker(s) on the next pool rebuild",
-            )
-            return workers - 1
-        return workers
-
-    # ------------------------------------------------------------------
     # Phase 3 - publish
     # ------------------------------------------------------------------
 
     @staticmethod
     def _post_is_resolved(
-        post: PostObject,
-        downloads: dict[str, DownloadResult],
-        outcomes: dict[str, ScanOutcome],
-        run_ocr: bool,
+        post: PostObject, downloads: dict[str, DownloadResult]
     ) -> bool:
-        """Every image has reached a terminal state.
+        """Every image has reached a terminal state (downloaded or failed).
 
-        Only fully-resolved posts are published. A half-scanned post is left
-        unpublished and unmarked so a later run reclaims it whole — publishing
-        it early would record a han_valid computed from some of its images.
+        Only fully-resolved posts are published, so a record never describes a
+        post whose remaining images are still in flight.
         """
-        for idx in range(len(post.image_urls)):
-            key = f"{post.post_id}:{idx}"
-            download = downloads.get(key)
-            if download is None:
-                return False
-            if not download.ok:
-                continue  # a failed download is resolved
-            if run_ocr and key not in outcomes:
-                return False
-        return True
+        return all(
+            f"{post.post_id}:{idx}" in downloads
+            for idx in range(len(post.image_urls))
+        )
 
     async def _phase_publish(
         self,
@@ -613,49 +319,41 @@ class BatchRunner:
         state: JobState,
         posts: list[PostObject],
         downloads: dict[str, DownloadResult],
-        outcomes: dict[str, ScanOutcome],
-        run_ocr: bool = True,
         published: set[str] | None = None,
     ) -> None:
         """Publish resolved posts and checkpoint them.
 
-        Called repeatedly during OCR, not just at the end: a kill mid-run should
-        cost one chunk, not every image scanned so far. ``published`` tracks what
-        earlier calls already emitted.
+        Called repeatedly during the download phase, not just at the end, so a
+        stop costs the in-flight items rather than the whole batch.
+        ``published`` tracks what earlier calls already emitted.
         """
         published = published if published is not None else set()
-        state.phase = Phase.PUBLISH
-        job_dir.save_state(state)
 
-        # Don't claim an engine produced a verdict when none ran.
-        engine = ocr_module.engine_label(self.settings.ocr.engine_name) if run_ocr else ""
         source_key = state.source_keys[0] if state.source_keys else ""
         source_run = state.source_run_ids[0] if state.source_run_ids else ""
 
-        records: list[HanScanRecord] = []
-        errors: list[HanScanError] = []
-
         pending = [
             p for p in posts
-            if p.post_id not in published
-            and self._post_is_resolved(p, downloads, outcomes, run_ocr)
+            if p.post_id not in published and self._post_is_resolved(p, downloads)
         ]
         if not pending:
             return
 
+        state.phase = Phase.PUBLISH
+        records: list[PreparedPost] = []
+        errors: list[PrepError] = []
+
         for post in pending:
-            images: list[ScannedImage] = []
+            images: list[PreparedImage] = []
             failed = 0
 
             for idx, url in enumerate(post.image_urls):
-                key = f"{post.post_id}:{idx}"
-                download = downloads.get(key)
-                outcome = outcomes.get(key)
+                download = downloads.get(f"{post.post_id}:{idx}")
 
                 if download is None or not download.ok:
                     failed += 1
                     errors.append(
-                        HanScanError(
+                        PrepError(
                             post_id=post.post_id, group_id=post.group_id,
                             source_url=url, idx=idx,
                             source_expires_at=(
@@ -668,27 +366,7 @@ class BatchRunner:
                             error_detail=download.error_detail if download else "not attempted",
                             http_status=download.http_status if download else None,
                             attempts=download.attempts if download else 0,
-                            scan_run_id=state.scan_run_id,
-                        )
-                    )
-                    continue
-
-                # Only treat a missing outcome as a failure when OCR was meant to
-                # run. In skip mode there is nothing to be missing.
-                if run_ocr and (outcome is None or not outcome.ok):
-                    failed += 1
-                    errors.append(
-                        HanScanError(
-                            post_id=post.post_id, group_id=post.group_id,
-                            source_url=url, idx=idx,
-                            source_expires_at=download.item.source_expires_at,
-                            error_class=(
-                                outcome.error_class if outcome and outcome.error_class
-                                else ErrorClass.OCR_ERROR
-                            ),
-                            error_detail=outcome.error_detail if outcome else "not scanned",
-                            attempts=download.attempts,
-                            scan_run_id=state.scan_run_id,
+                            run_id=state.scan_run_id,
                         )
                     )
                     continue
@@ -696,7 +374,7 @@ class BatchRunner:
                 suffix = Path(download.local_path).suffix or ".jpg"
                 signed_url, expires_at = self.signer.build(post.post_id, idx, suffix)
                 images.append(
-                    ScannedImage(
+                    PreparedImage(
                         url=signed_url, idx=idx,
                         width=download.width, height=download.height,
                         bytes=download.bytes_len, content_type=download.content_type,
@@ -706,82 +384,54 @@ class BatchRunner:
                             expires_at, tz=timezone.utc
                         ).isoformat(),
                         downloaded_at=download.downloaded_at,
-                        # None, not False — nothing examined this image.
-                        valid_pic=outcome.valid_pic if outcome else None,
-                        han_words=outcome.han_words if outcome else None,
-                        boxes=outcome.boxes if outcome else None,
-                        texts=outcome.texts if outcome else [],
-                        mean_confidence=outcome.mean_confidence if outcome else None,
-                        scan_ms=outcome.scan_ms if outcome else None,
                     )
                 )
 
-            if not images and failed:
-                # Every image failed — no verdict to publish, only errors.
-                continue
             if not images:
+                # Every image failed — errors only, nothing to hand downstream.
                 continue
 
             records.append(
-                HanScanRecord(
+                PreparedPost(
                     post_id=post.post_id, group_id=post.group_id,
                     post_link=post.post_link, author=post.author,
                     story_post_id=post.story_post_id, tile_id=post.tile_id,
-                    scan_status=SCAN_SCANNED if run_ocr else SCAN_SKIPPED,
-                    han_valid=any(i.valid_pic for i in images) if run_ocr else None,
-                    han_words_total=(
-                        sum(i.han_words or 0 for i in images) if run_ocr else None
-                    ),
-                    images_scanned=len(images), images_failed=failed, images=images,
+                    images_prepared=len(images), images_failed=failed, images=images,
                     source_key=source_key, source_run_id=source_run,
-                    scan_run_id=state.scan_run_id, ocr_engine=engine,
-                    scanned_at=utcnow_iso(), label=post.label,
-                    sub_caption=post.sub_caption, posted_at=post.posted_at,
+                    run_id=state.scan_run_id, prepared_at=utcnow_iso(),
+                    label=post.label, sub_caption=post.sub_caption,
+                    posted_at=post.posted_at,
                 )
             )
 
-        # += not =, since this runs once per chunk.
-        state.counts.han_valid += sum(1 for r in records if r.han_valid)
-        state.counts.han_invalid += sum(
-            1 for r in records if r.scan_status == SCAN_SCANNED and not r.han_valid
-        )
-        state.counts.ready_for_ocr += sum(
-            1 for r in records if r.scan_status == SCAN_SKIPPED
-        )
+        # += not =, since this runs once per flush.
+        state.counts.prepared += len(records)
         state.counts.published += len(records)
         published.update(r.post_id for r in records)
 
         await asyncio.to_thread(self.sink.write_results, records, state.scan_run_id)
         await asyncio.to_thread(self.sink.write_errors, errors, state.scan_run_id)
 
-        # Only mark posts done once their verdicts are durably in MinIO —
-        # marking earlier would silently drop posts if publishing failed.
+        # Only mark posts done once their records are durably written — marking
+        # earlier would silently drop posts if publishing failed.
         await asyncio.to_thread(
             self.source.mark_done, [r.post_id for r in records], state.scan_run_id
         )
 
         summary = {
             "job_id": state.job_id,
-            "scan_run_id": state.scan_run_id,
+            "run_id": state.scan_run_id,
             "counts": state.counts.__dict__,
             "preflight": state.preflight,
             "source_keys": state.source_keys,
             "source_run_ids": state.source_run_ids,
-            "ocr_engine": engine,
-            "ocr_run": run_ocr,
             "cancelled": state.cancel_requested,
         }
         await asyncio.to_thread(self.sink.write_run_summary, summary, state.scan_run_id)
 
-        if run_ocr:
-            job_dir.append_event(
-                "info",
-                f"published {len(records)} record(s): {state.counts.han_valid} han_valid, "
-                f"{state.counts.han_invalid} han_invalid, {len(errors)} error(s)",
-            )
-        else:
-            job_dir.append_event(
-                "info",
-                f"published {len(records)} record(s) to ready_for_ocr.jsonl "
-                f"(not scanned), {len(errors)} error(s)",
-            )
+        job_dir.append_event(
+            "info",
+            f"published {len(records)} post(s), {len(errors)} image error(s)",
+        )
+        state.phase = Phase.DOWNLOAD
+        job_dir.save_state(state)

@@ -6,7 +6,6 @@ Layout, one directory per batch::
       job.json         phase, counts, heartbeat, error
       manifest.jsonl   work list - written once, never mutated
       downloads.jsonl  append-only, one line per download outcome
-      results.jsonl    append-only, one line per OCR outcome
       events.jsonl     append-only, the UI's live log
 
 Everything terminal is append-only. At 20k items, rewriting a manifest on every
@@ -37,7 +36,6 @@ class Phase(str, Enum):
     PENDING = "pending"
     PREFLIGHT = "preflight"
     DOWNLOAD = "download"
-    OCR = "ocr"
     PUBLISH = "publish"
     DONE = "done"
     FAILED = "failed"
@@ -68,11 +66,7 @@ class JobCounts:
     total_images: int = 0
     downloaded: int = 0
     download_failed: int = 0
-    scanned: int = 0
-    scan_failed: int = 0
-    han_valid: int = 0
-    han_invalid: int = 0
-    ready_for_ocr: int = 0
+    prepared: int = 0
     published: int = 0
 
 
@@ -93,14 +87,11 @@ class JobState:
     processed_total: int = 0
     runs_total: int = 0
     runs_done: int = 0
-    ocr_workers: int = 0
     error: str = ""
     cancel_requested: bool = False
     # Set when preflight finds expired URLs and the job waits for a human.
     awaiting_confirmation: bool = False
     limit: int = 0
-    # False = download and sign only; OCR happens downstream.
-    run_ocr: bool = True
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -118,12 +109,10 @@ class JobState:
             "processed_total": self.processed_total,
             "runs_total": self.runs_total,
             "runs_done": self.runs_done,
-            "ocr_workers": self.ocr_workers,
             "error": self.error,
             "cancel_requested": self.cancel_requested,
             "awaiting_confirmation": self.awaiting_confirmation,
             "limit": self.limit,
-            "run_ocr": self.run_ocr,
         }
 
     @classmethod
@@ -142,12 +131,10 @@ class JobState:
             processed_total=data.get("processed_total", 0),
             runs_total=data.get("runs_total", 0),
             runs_done=data.get("runs_done", 0),
-            ocr_workers=data.get("ocr_workers", 0),
             error=data.get("error", ""),
             cancel_requested=data.get("cancel_requested", False),
             awaiting_confirmation=data.get("awaiting_confirmation", False),
             limit=data.get("limit", 0),
-            run_ocr=data.get("run_ocr", True),
         )
         for key, value in (data.get("counts") or {}).items():
             if hasattr(state.counts, key):
@@ -337,7 +324,7 @@ class JobStore:
         """Mark jobs whose process died as INTERRUPTED so the UI can offer Resume.
 
         Called at startup. Without this, a container restart leaves a job stuck
-        showing 'ocr' forever with nothing driving it.
+        showing 'download' forever with nothing driving it.
         """
         reaped: list[str] = []
         for job_id in self.list_ids():

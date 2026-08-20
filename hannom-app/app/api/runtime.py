@@ -10,8 +10,8 @@ Results always go to local files (downloadable from the dashboard); when MinIO i
 configured they are mirrored there too. Nothing MinIO-related is constructed
 unless it is configured, so an unset endpoint is inert rather than fatal.
 
-Only one batch runs at a time: OCR already saturates the CPUs, and concurrent
-batches would fight over the shared checkpoint.
+Only one batch runs at a time: concurrent batches would fight over the shared
+checkpoint and the CDN rate limit.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from typing import Any
 from app.core.batch import BatchRunner
 from app.core.checkpoint import ProcessedCheckpoint
 from app.core.config import Settings
+from app.core.gallery import Gallery
 from app.core.jobstore import JobDir, JobState, JobStore, new_run_id
 from app.core.models import ErrorClass
 from app.core.scheduler import BatchScheduler
@@ -49,6 +50,9 @@ class Runtime:
             secret=settings.images.signing_secret,
             ttl_days=settings.images.ttl_days,
         )
+        # Reads the same export the dashboard offers for download, and re-signs
+        # image URLs so thumbnails keep working past the stored expiry.
+        self.gallery = Gallery(self.file_sink.ready_for_ocr_path, self.signer)
 
         # MinIO objects are only built when configured — an unset endpoint must
         # be inert, not a crash on the first attribute access.
@@ -158,7 +162,6 @@ class Runtime:
         confirm_expired: bool = False,
         mode: str = "upload",
         upload_id: str | None = None,
-        run_ocr: bool = False,
     ) -> str:
         async with self._lock:
             if self.busy:
@@ -171,26 +174,23 @@ class Runtime:
             limit = limit or self.settings.batch_size
             job_dir, state = self.jobstore.create(new_run_id(), limit=limit)
             self._current_job_id = state.job_id
-            state.run_ocr = run_ocr
-            job_dir.save_state(state)
             self._current_task = asyncio.create_task(
-                self._run(runner, source, job_dir, state, confirm_expired, run_ocr),
+                self._run(runner, source, job_dir, state, confirm_expired),
                 name=f"batch-{state.job_id}",
             )
             return state.job_id
 
     async def _run(self, runner, source, job_dir: JobDir, state: JobState,
-                   confirm_expired: bool, run_ocr: bool = False) -> None:
+                   confirm_expired: bool) -> None:
         try:
-            await runner.run(
-                job_dir, state, confirm_expired=confirm_expired, run_ocr=run_ocr
-            )
+            await runner.run(job_dir, state, confirm_expired=confirm_expired)
         except Exception:  # noqa: BLE001 - already recorded on the job
             log.exception("batch %s crashed", state.job_id)
         finally:
             if hasattr(source, "invalidate_cache"):
                 source.invalidate_cache()
             self.checkpoint.invalidate()
+            self.gallery.invalidate()
             self._pipeline_cached_at = 0.0
 
     def request_cancel(self, job_id: str) -> None:
@@ -214,7 +214,7 @@ class Runtime:
 
         # Nobody is watching a scheduled run, so it auto-confirms; the preflight
         # numbers are still recorded on the job for later inspection.
-        await self.start_batch(confirm_expired=True, mode="minio", run_ocr=True)
+        await self.start_batch(confirm_expired=True, mode="minio")
         self.scheduler.last_run_at = time.time()
 
         if self._current_task is not None:
@@ -306,9 +306,7 @@ class Runtime:
             "processed_total": processed,
             "remaining": remaining,
             "percent": round(processed / corpus_total * 100, 1) if corpus_total else 0.0,
-            "han_valid": counts["han_valid"],
-            "han_invalid": counts["han_invalid"],
-            "ready_for_ocr": counts.get("ready_for_ocr", 0),
+            "prepared": counts.get("ready_for_ocr", 0),
             "failed": counts["failed"],
             "downloads": self.file_sink.downloadable(),
             "active_job": active.to_json() if active else None,

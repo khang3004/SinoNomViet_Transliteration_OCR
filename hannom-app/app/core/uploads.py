@@ -59,8 +59,8 @@ class UploadStore:
     def save(self, stream: BinaryIO, original_name: str = "") -> Upload:
         """Stream to disk in chunks.
 
-        Never ``read()`` the whole body: a cumulative export is tens of MB and
-        this box has 8 GB shared with three OCR workers.
+        Never ``read()`` the whole body: a cumulative export runs to tens of MB
+        and holding it in memory buys nothing.
         """
         upload_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         target_dir = self.root / upload_id

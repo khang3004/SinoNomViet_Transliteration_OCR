@@ -1,56 +1,38 @@
-"""Data contracts for the han_scan stage.
+"""Data contracts for the image-preparation stage.
 
 Input comes from the crawler (``PostObject``); output is consumed by the Gemini
-batch stage (``HanScanRecord``). Both are serialised as JSONL in MinIO, so the
-field names here ARE the wire format — renaming one is a breaking change for the
-next stage.
+batch stage (``PreparedPost``). Both are serialised as JSONL, so the field names
+here ARE the wire format — renaming one breaks the next stage.
 
-Naming note: the crawler's ``is_valid`` means "the crawl succeeded and matched".
-Ours is a different question entirely (does the image contain Han text), so it is
-``han_valid``. Overloading ``is_valid`` would silently corrupt meaning downstream.
+This stage downloads images and makes them fetchable from our domain. It makes
+no claim about their contents: schema 2.0 dropped the Han-detection verdict
+fields rather than leaving them permanently null, because a null field that can
+never be filled invites a consumer to read it as "false".
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-SCHEMA_VERSION = "han_scan/1.1"
+SCHEMA_VERSION = "han_scan/2.0"
 STAGE = "han_scan"
-
-# Whether this stage actually looked at the image.
-#
-# The distinction matters downstream: "skipped" must never be read as "no Han
-# text found". When OCR is skipped, verdict fields are null rather than false —
-# a consumer that treats null as false is making an explicit mistake instead of
-# quietly inheriting ours.
-SCAN_SCANNED = "scanned"
-SCAN_SKIPPED = "skipped"
-
-# CJK Unified Ideographs, Extension A, Compatibility Ideographs, Extension B.
-# Deliberately excludes kana and Hangul — those are not Han.
-CJK_PATTERN = re.compile(
-    r"[一-鿿㐀-䶿豈-﫿\U00020000-\U0002a6df]"
-)
-
 
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def count_han_chars(text: str) -> int:
-    """Number of Han characters in a string."""
-    return len(CJK_PATTERN.findall(text))
-
-
 class ErrorClass(str, Enum):
-    """Why an image could not be scanned.
+    """Why an image could not be prepared.
 
     ``retryable`` distinguishes transient failures from permanently dead links,
     so a retry sweep does not hammer URLs that will never come back.
+
+    DECODE_ERROR and OCR_ERROR are no longer produced (that stage was removed)
+    but stay defined: ``failed.jsonl`` is cumulative, and the retry sweep parses
+    error classes out of rows written before the change.
     """
 
     EXPIRED_URL = "expired_url"
@@ -123,8 +105,8 @@ class PostObject:
 
 @dataclass
 class WorkItem:
-    """One image to fetch and scan — the unit the batch pipeline moves through
-    its phases. Flattened from PostObject because a post with 3 images is 3
+    """One image to fetch — the unit the batch pipeline moves through its
+    phases. Flattened from PostObject because a post with 3 images is 3
     independent units of work that can fail independently."""
 
     post_id: str
@@ -140,7 +122,13 @@ class WorkItem:
 
 
 @dataclass
-class ScannedImage:
+class PreparedImage:
+    """One downloaded image, addressable from our domain.
+
+    Carries no verdict about its contents — this stage does not look inside
+    images, it makes them fetchable.
+    """
+
     url: str  # our domain, HMAC-signed — Gemini fetches this
     idx: int
     width: int | None = None
@@ -153,18 +141,9 @@ class ScannedImage:
     url_expires_at: str = ""
     downloaded_at: str = ""
 
-    # Verdict fields are None when OCR was skipped — the image was downloaded
-    # and is servable, but nothing has looked at its contents.
-    valid_pic: bool | None = False
-    han_words: int | None = 0
-    boxes: int | None = 0
-    texts: list[str] = field(default_factory=list)
-    mean_confidence: float | None = None
-    scan_ms: int | None = 0
-
 
 @dataclass
-class HanScanRecord:
+class PreparedPost:
     post_id: str
     group_id: str
     post_link: str = ""
@@ -172,22 +151,16 @@ class HanScanRecord:
     story_post_id: str | None = None
     tile_id: str | None = None
 
-    # "scanned" -> han_valid is a real verdict.
-    # "skipped"  -> han_valid is None; OCR happens downstream.
-    scan_status: str = SCAN_SCANNED
-    han_valid: bool | None = False
-    han_words_total: int | None = 0
-    images_scanned: int = 0
+    images_prepared: int = 0
     images_failed: int = 0
-    images: list[ScannedImage] = field(default_factory=list)
+    images: list[PreparedImage] = field(default_factory=list)
 
     source_key: str = ""
     source_run_id: str = ""
-    scan_run_id: str = ""
+    run_id: str = ""
     stage: str = STAGE
     schema_version: str = SCHEMA_VERSION
-    ocr_engine: str = ""
-    scanned_at: str = field(default_factory=utcnow_iso)
+    prepared_at: str = field(default_factory=utcnow_iso)
 
     label: str = ""
     sub_caption: str = ""
@@ -198,7 +171,7 @@ class HanScanRecord:
 
 
 @dataclass
-class HanScanError:
+class PrepError:
     post_id: str
     group_id: str
     source_url: str
@@ -210,7 +183,7 @@ class HanScanError:
     idx: int = 0
     first_seen_at: str = field(default_factory=utcnow_iso)
     last_attempt_at: str = field(default_factory=utcnow_iso)
-    scan_run_id: str = ""
+    run_id: str = ""
 
     @property
     def retryable(self) -> bool:
@@ -222,21 +195,3 @@ class HanScanError:
         # Derived, but written explicitly so consumers need no enum knowledge.
         data["retryable"] = self.retryable
         return data
-
-
-@dataclass
-class ScanOutcome:
-    """Result of OCR on a single image. Crosses a process boundary (the OCR
-    pool), so it stays plain data with no open handles."""
-
-    idx: int
-    post_id: str
-    ok: bool
-    valid_pic: bool = False
-    han_words: int = 0
-    boxes: int = 0
-    texts: list[str] = field(default_factory=list)
-    mean_confidence: float | None = None
-    scan_ms: int = 0
-    error_class: ErrorClass | None = None
-    error_detail: str = ""

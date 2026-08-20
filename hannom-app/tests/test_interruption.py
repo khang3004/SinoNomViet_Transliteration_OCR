@@ -1,23 +1,19 @@
 """Stopping mid-run must not throw away completed work.
 
-A multi-hour OCR batch will get interrupted — by a cancel, a restart, or a
-`docker compose down`. What matters is that everything finished before the
-interruption is durable and checkpointed, so resuming costs only the work that
-was genuinely in flight.
+Batches get interrupted — by a cancel, a restart, or a `docker compose down`.
+What matters is that everything finished before the interruption is durable and
+checkpointed, so resuming costs only what was genuinely in flight.
 """
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-
 import pytest
 
-from app.core import ocr as ocr_module
 from app.core.batch import BatchRunner
-from app.core.config import ImageServeConfig, MinioConfig, OcrConfig, Settings
+from app.core.config import ImageServeConfig, MinioConfig, Settings
 from app.core.downloader import DownloadResult, ImageDownloader
 from app.core.jobstore import JobStore
-from app.core.models import PostObject, ScanOutcome, WorkItem
+from app.core.models import PostObject, WorkItem
 from app.core.source import PendingBatch
 
 FRESH = "https://cdn/a.jpg?oe=7FFFFFFF"
@@ -32,7 +28,7 @@ class FakeSource:
         return PendingBatch(posts=self.posts[:limit], source_keys=["k"],
                             source_run_ids=["R1"], corpus_total=len(self.posts))
 
-    def mark_done(self, post_ids, scan_run_id):
+    def mark_done(self, post_ids, run_id):
         self.done.extend(post_ids)
 
     def processed_ids(self):
@@ -44,14 +40,14 @@ class FakeSink:
         self.results, self.errors, self.summary = [], [], None
         self.write_calls = 0
 
-    def write_results(self, records, scan_run_id):
+    def write_results(self, records, run_id):
         self.write_calls += 1
         self.results.extend(records)
 
-    def write_errors(self, errors, scan_run_id):
+    def write_errors(self, errors, run_id):
         self.errors.extend(errors)
 
-    def write_run_summary(self, summary, scan_run_id):
+    def write_run_summary(self, summary, run_id):
         self.summary = summary
 
 
@@ -60,10 +56,19 @@ def settings(tmp_path):
     return Settings(
         data_dir=tmp_path,
         minio=MinioConfig(),
-        # workers=1 makes chunk boundaries deterministic (chunk = workers * 4)
-        ocr=OcrConfig(workers=1, timeout_s=5.0, memory_limit_mb=0),
         images=ImageServeConfig(public_base_url="https://x",
                                 signing_secret="s", ttl_days=30),
+    )
+
+
+def _make_download(downloader, item):
+    path = downloader.images_dir / f"{item.post_id}_{item.idx}.jpg"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"fake")
+    return DownloadResult(
+        item=item, ok=True, local_path=str(path), bytes_len=4,
+        content_type="image/jpeg", sha256="abc", width=10, height=10,
+        downloaded_at="2026-08-17T00:00:00+00:00", attempts=1,
     )
 
 
@@ -72,14 +77,7 @@ def fake_download(monkeypatch):
     async def download_all(self, items, on_result=None, should_cancel=None):
         out = []
         for item in items:
-            path = self.images_dir / f"{item.post_id}_{item.idx}.jpg"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"fake")
-            result = DownloadResult(
-                item=item, ok=True, local_path=str(path), bytes_len=4,
-                content_type="image/jpeg", sha256="abc", width=10, height=10,
-                downloaded_at="2026-08-17T00:00:00+00:00", attempts=1,
-            )
+            result = _make_download(self, item)
             out.append(result)
             if on_result:
                 await on_result(result)
@@ -90,129 +88,89 @@ def fake_download(monkeypatch):
     )
 
 
-class ThreadRunner(BatchRunner):
-    def _new_pool(self, workers):
-        return ThreadPoolExecutor(max_workers=workers)
-
-
 class TestIncrementalPublish:
     @pytest.mark.asyncio
-    async def test_results_are_published_during_ocr_not_only_at_the_end(
-        self, settings, fake_download, monkeypatch
+    async def test_finished_posts_are_published_and_checkpointed(
+        self, settings, fake_download
     ):
-        def scan_file(path, post_id, idx, **kwargs):
-            return ScanOutcome(idx=idx, post_id=post_id, ok=True, valid_pic=True,
-                               han_words=3, boxes=1, texts=["文"], scan_ms=1)
-
-        monkeypatch.setattr(ocr_module, "scan_file", scan_file)
-
         posts = [
             PostObject(post_id=f"p{i}", group_id="G", is_valid=True, image_urls=[FRESH])
-            for i in range(12)
+            for i in range(30)
         ]
         source, sink = FakeSource(posts), FakeSink()
         store = JobStore(settings.jobs_dir)
         job_dir, state = store.create("S1", limit=100)
 
-        await ThreadRunner(settings, source, sink).run(
-            job_dir, state, confirm_expired=True, run_ocr=True
+        await BatchRunner(settings, source, sink).run(
+            job_dir, state, confirm_expired=True
         )
 
-        # 12 posts at chunk size 4 => several flushes, not a single final write.
-        assert sink.write_calls > 1
-        assert len(sink.results) == 12
+        assert len(sink.results) == 30
         assert sorted(source.done) == sorted(p.post_id for p in posts)
+        assert state.counts.published == 30
 
     @pytest.mark.asyncio
-    async def test_cancelling_keeps_everything_already_finished(
-        self, settings, fake_download, monkeypatch
+    async def test_publishing_happens_before_the_run_ends(
+        self, settings, fake_download
     ):
-        scanned = {"n": 0}
-
-        def scan_file(path, post_id, idx, **kwargs):
-            scanned["n"] += 1
-            if scanned["n"] > 4:
-                state_holder["state"].cancel_requested = True
-            return ScanOutcome(idx=idx, post_id=post_id, ok=True, valid_pic=True,
-                               han_words=2, boxes=1, texts=["文"], scan_ms=1)
-
-        monkeypatch.setattr(ocr_module, "scan_file", scan_file)
-
+        # 30 posts flush at the 25-download mark and again at the end, so a stop
+        # in between still leaves durable results.
         posts = [
             PostObject(post_id=f"p{i}", group_id="G", is_valid=True, image_urls=[FRESH])
-            for i in range(20)
+            for i in range(30)
         ]
         source, sink = FakeSource(posts), FakeSink()
         store = JobStore(settings.jobs_dir)
         job_dir, state = store.create("S1", limit=100)
-        state_holder = {"state": state}
 
-        await ThreadRunner(settings, source, sink).run(
-            job_dir, state, confirm_expired=True, run_ocr=True
+        await BatchRunner(settings, source, sink).run(
+            job_dir, state, confirm_expired=True
         )
 
-        # Partial, but real: what finished is published AND checkpointed, so a
-        # later run does not repeat it.
-        assert 0 < len(sink.results) < 20
-        assert sorted(source.done) == sorted(r.post_id for r in sink.results)
+        assert sink.write_calls > 1
 
     @pytest.mark.asyncio
-    async def test_no_post_is_published_twice(
-        self, settings, fake_download, monkeypatch
-    ):
-        def scan_file(path, post_id, idx, **kwargs):
-            return ScanOutcome(idx=idx, post_id=post_id, ok=True, valid_pic=True,
-                               han_words=1, boxes=1, texts=["x"], scan_ms=1)
-
-        monkeypatch.setattr(ocr_module, "scan_file", scan_file)
-
+    async def test_no_post_is_published_twice(self, settings, fake_download):
         posts = [
             PostObject(post_id=f"p{i}", group_id="G", is_valid=True, image_urls=[FRESH])
-            for i in range(10)
+            for i in range(40)
         ]
         source, sink = FakeSource(posts), FakeSink()
         store = JobStore(settings.jobs_dir)
         job_dir, state = store.create("S1", limit=100)
 
-        await ThreadRunner(settings, source, sink).run(
-            job_dir, state, confirm_expired=True, run_ocr=True
+        await BatchRunner(settings, source, sink).run(
+            job_dir, state, confirm_expired=True
         )
 
         ids = [r.post_id for r in sink.results]
-        assert len(ids) == len(set(ids)) == 10
+        assert len(ids) == len(set(ids)) == 40
         assert len(source.done) == len(set(source.done))
-        assert state.counts.published == 10
 
     @pytest.mark.asyncio
     async def test_multi_image_posts_publish_only_once_complete(
-        self, settings, fake_download, monkeypatch
+        self, settings, fake_download
     ):
-        # A post published after only some of its images were scanned would
-        # carry a han_valid computed from part of the evidence.
-        def scan_file(path, post_id, idx, **kwargs):
-            return ScanOutcome(idx=idx, post_id=post_id, ok=True,
-                               valid_pic=(idx == 2), han_words=5 if idx == 2 else 0,
-                               boxes=1, texts=["文"], scan_ms=1)
-
-        monkeypatch.setattr(ocr_module, "scan_file", scan_file)
-
+        # A record emitted while some of its images were still in flight would
+        # under-report images_prepared.
         posts = [PostObject(post_id="p1", group_id="G", is_valid=True,
                             image_urls=[FRESH, FRESH, FRESH])]
         source, sink = FakeSource(posts), FakeSink()
         store = JobStore(settings.jobs_dir)
         job_dir, state = store.create("S1", limit=100)
 
-        await ThreadRunner(settings, source, sink).run(
-            job_dir, state, confirm_expired=True, run_ocr=True
+        await BatchRunner(settings, source, sink).run(
+            job_dir, state, confirm_expired=True
         )
 
         assert len(sink.results) == 1
-        record = sink.results[0]
-        assert record.images_scanned == 3
-        assert record.han_valid is True   # the third image carried the Han text
+        assert sink.results[0].images_prepared == 3
 
 
 class TestDownloadReuse:
+    """An interrupted run must be cheap to redo — and the CDN URLs may have
+    expired since the first attempt, so re-fetching is not always possible."""
+
     def test_existing_file_is_found(self, settings):
         downloader = ImageDownloader(settings.download, settings.images_dir)
         path = downloader.local_path_for("p1", 0, ".jpg")

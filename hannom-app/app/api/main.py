@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.api import routes_images, routes_jobs, routes_uploads
+from app.api import routes_gallery, routes_images, routes_jobs, routes_uploads
 from app.api.auth import (
     COOKIE_NAME,
     AuthConfig,
@@ -31,7 +31,6 @@ from app.api.auth import (
 )
 from app.api.runtime import Runtime
 from app.core.config import describe_secrets, load_settings
-from app.core.ocr import decode_image, scan_array
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
@@ -51,9 +50,9 @@ async def lifespan(app: FastAPI):
     # Log only whether each secret exists, never its value.
     log.info("secrets present: %s", {k: v for k, v in present.items()})
     log.info(
-        "config: workers=%d batch=%d interval=%ss engine=%s",
-        settings.ocr.workers, settings.batch_size,
-        settings.scan_interval_s, settings.ocr.engine_name,
+        "config: batch=%d interval=%ss concurrency=%d",
+        settings.batch_size, settings.scan_interval_s,
+        settings.download.concurrency,
     )
     if settings.minio_enabled:
         log.info("input: upload or MinIO (%s)", settings.minio.endpoint)
@@ -63,11 +62,11 @@ async def lifespan(app: FastAPI):
     if not settings.images.public_base_url:
         log.warning("PUBLIC_BASE_URL is not set — minted image URLs will be relative")
     if not settings.images.signing_secret:
-        # This one fails late — during publish, after downloads and OCR — so it
-        # is worth shouting about at startup.
+        # This one fails late — during publish, after downloading — so it is
+        # worth shouting about at startup.
         log.warning(
             "IMAGE_SIGNING_SECRET is not set — batches will FAIL at the publish "
-            "phase, after downloading and scanning. Set it before running."
+            "phase, after downloading. Set it before running."
         )
 
     await app.state.runtime.startup()
@@ -83,7 +82,7 @@ def create_app() -> FastAPI:
     # Refuse to start unprotected: this app is internet-facing on a domain.
     auth.validate()
 
-    app = FastAPI(title="Han Scanner", version="2.0.0", lifespan=lifespan)
+    app = FastAPI(title="Image Prep", version="3.0.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.auth = auth
     app.state.throttle = LoginThrottle()
@@ -104,6 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_images.router)
     app.include_router(routes_jobs.router)
     app.include_router(routes_uploads.router)
+    app.include_router(routes_gallery.router)
 
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -115,14 +115,6 @@ def create_app() -> FastAPI:
 class LoginRequest(BaseModel):
     username: str
     password: str
-
-
-class ScanRequest(BaseModel):
-    """Single-image demo scan — the original paste-JSON workflow."""
-
-    images: list[str] = []
-    image_urls: list[str] = []
-    post_id: str = "demo"
 
 
 def _register_core_routes(app: FastAPI, auth: AuthConfig) -> None:
@@ -172,47 +164,16 @@ def _register_core_routes(app: FastAPI, auth: AuthConfig) -> None:
     async def index(user: dict = Depends(current_user)):
         index_file = STATIC_DIR / "index.html"
         if not index_file.exists():
-            return HTMLResponse("<h1>Han Scanner</h1><p>UI not found.</p>", 500)
+            return HTMLResponse("<h1>Image Prep</h1><p>UI not found.</p>", 500)
         return HTMLResponse(index_file.read_text(encoding="utf-8"))
 
-    @app.post("/api/scan")
-    async def scan_one(body: ScanRequest, user: dict = Depends(current_user)):
-        """Demo endpoint: scan a single image URL right now.
-
-        Kept from the original app for spot-checking. The batch pipeline does not
-        use this path — it scans from local files after the download phase.
-        """
-        import httpx
-
-        urls = body.image_urls or body.images
-        if not urls:
-            raise HTTPException(400, "no image url provided")
-
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            resp = await client.get(urls[0])
-            if resp.status_code != 200:
-                raise HTTPException(502, f"fetch failed: HTTP {resp.status_code}")
-            data = resp.content
-
-        settings = app.state.settings
-        try:
-            result = scan_array(
-                decode_image(data),
-                lang=settings.ocr.lang,
-                min_confidence=settings.ocr.min_confidence,
-                enable_mkldnn=settings.ocr.enable_mkldnn,
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(500, f"scan failed: {exc}") from exc
-
-        return {"post_id": body.post_id, "image_url": urls[0], **result}
 
 
 def _login_page() -> str:
     login_file = STATIC_DIR / "login.html"
     if login_file.exists():
         return login_file.read_text(encoding="utf-8")
-    return "<h1>Han Scanner</h1><p>Login required.</p>"
+    return "<h1>Image Prep</h1><p>Login required.</p>"
 
 
 try:

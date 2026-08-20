@@ -7,6 +7,7 @@ containment rules are testable without a web framework.
 
 from __future__ import annotations
 
+import io
 import logging
 import re
 from pathlib import Path
@@ -90,3 +91,20 @@ def resolve_image_path(
 
 def content_type_for(path: Path) -> str:
     return CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
+
+def image_dimensions(data: bytes) -> tuple[int | None, int | None]:
+    """(width, height) from image bytes, without a full decode.
+
+    Plain Pillow metadata, used by the downloader to populate every output
+    record.
+    Best-effort: a truncated image still downloads and serves fine, it just has
+    no dimensions.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as img:
+            return img.width, img.height
+    except Exception:  # noqa: BLE001 - metadata is best-effort
+        return None, None

@@ -2,7 +2,7 @@
 
 The downstream flow is::
 
-    JSONL (our URLs) -> Gemini Batch -> Gemini fetches the image -> OCR
+    JSONL (our URLs) -> Gemini Batch -> Gemini fetches and reads the image
 
 Gemini fetches anonymously, so these URLs cannot sit behind the session cookie.
 They are guarded by an HMAC signature instead: ``/img/*`` needs no login, but

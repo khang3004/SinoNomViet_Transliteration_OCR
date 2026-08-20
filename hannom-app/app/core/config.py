@@ -44,7 +44,7 @@ def _env_bool(key: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class MinioConfig:
-    """Where post records are read from and verdicts written back to.
+    """Where post records are read from and prepared records written back to.
 
     ``endpoint`` must be reachable from THIS host. A cluster-internal address
     like ``minio.storage.svc.cluster.local:9000`` will not resolve from outside
@@ -76,16 +76,9 @@ class MinioConfig:
         return f"{self.group_prefix.rstrip('/')}/{self.output_prefix.strip('/')}"
 
     @property
-    def han_valid_key(self) -> str:
-        return f"{self.out_root}/export/han_valid.jsonl"
-
-    @property
-    def han_invalid_key(self) -> str:
-        return f"{self.out_root}/export/han_invalid.jsonl"
-
-    @property
     def ready_for_ocr_key(self) -> str:
-        """Downloaded and servable, but not scanned here."""
+        """The single export: images downloaded and addressable, for the Gemini
+        stage to OCR. Named for what it is FOR, not what happened to it."""
         return f"{self.out_root}/export/ready_for_ocr.jsonl"
 
     @property
@@ -103,28 +96,6 @@ class MinioConfig:
 
 
 @dataclass(frozen=True)
-class OcrConfig:
-    # PP-OCRv6 is a single unified multilingual model, so there is no per-language
-    # model choice the way PP-OCRv4 had. `lang` stays configurable because the
-    # fallback path (paddleocr 2.x) still needs it.
-    lang: str = "ch"
-    # oneDNN is Paddle's CPU acceleration backend. Off by default because
-    # paddlepaddle 3.3.1 cannot convert some PP-OCRv6 graph attributes for it:
-    #   NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
-    #   [pir::ArrayAttribute<pir::DoubleAttribute>]   (onednn_instruction.cc)
-    # Turn it back on once a Paddle release fixes that — it is a real speedup,
-    # and the benchmark will show whether it is worth chasing.
-    enable_mkldnn: bool = False
-    min_confidence: float = 0.3
-    workers: int = 3
-    # Per-image ceiling so one pathological file cannot stall a worker forever.
-    timeout_s: float = 120.0
-    # Pool drains to fewer workers rather than getting OOM-killed on an 8 GB box.
-    memory_limit_mb: int = 6144
-    engine_name: str = "paddleocr-3.7.0:PP-OCRv6"
-
-
-@dataclass(frozen=True)
 class DownloadConfig:
     concurrency: int = 16
     timeout_s: float = 30.0
@@ -133,7 +104,7 @@ class DownloadConfig:
     max_bytes: int = 25 * 1024 * 1024
     # Adaptive throttle: sustained 429s halve concurrency down to this floor.
     min_concurrency: int = 2
-    user_agent: str = "hannom-han-scanner/1.0"
+    user_agent: str = "hannom-image-prep/1.0"
 
 
 @dataclass(frozen=True)
@@ -156,7 +127,6 @@ class Settings:
     only_crawler_valid: bool = True
 
     minio: MinioConfig = field(default_factory=MinioConfig)
-    ocr: OcrConfig = field(default_factory=OcrConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
     images: ImageServeConfig = field(default_factory=ImageServeConfig)
 
@@ -211,15 +181,6 @@ def load_settings() -> Settings:
             bucket=_env("MINIO_BUCKET", "final-exam-nlp-raw"),
             group_prefix=_env("MINIO_GROUP_PREFIX"),
             output_prefix=_env("MINIO_OUTPUT_PREFIX", "han_scan"),
-        ),
-        ocr=OcrConfig(
-            lang=_env("OCR_LANG", "ch"),
-            enable_mkldnn=_env_bool("OCR_ENABLE_MKLDNN", False),
-            min_confidence=_env_float("OCR_MIN_CONFIDENCE", 0.3),
-            workers=_env_int("OCR_WORKERS", 3),
-            timeout_s=_env_float("OCR_TIMEOUT", 120.0),
-            memory_limit_mb=_env_int("MEMORY_LIMIT_MB", 6144),
-            engine_name=_env("OCR_ENGINE_NAME", "paddleocr-3.7.0:PP-OCRv6"),
         ),
         download=DownloadConfig(
             concurrency=_env_int("DOWNLOAD_CONCURRENCY", 16),

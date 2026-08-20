@@ -1,10 +1,8 @@
 """Fetching images from the Facebook CDN.
 
-This phase runs to completion *before* OCR starts. That ordering is forced by
-expiry: fbcdn signs URLs with a lifetime measured in hours, while OCR of a full
-corpus takes hours. Interleaving them would mean the last image is fetched long
-after its signature died. Downloading first, fast and at high concurrency, is
-what keeps the pipeline correct.
+Speed matters because fbcdn signs URLs with a lifetime measured in hours: the
+longer a batch takes, the more of its links are dead by the time it reaches them.
+Hence high concurrency, and reuse of anything already on disk.
 """
 
 from __future__ import annotations
@@ -165,7 +163,7 @@ class ImageDownloader:
 
     def _from_disk(self, item: WorkItem, path: Path) -> DownloadResult:
         """Rebuild a result from a file already on disk, without a network call."""
-        from app.core.ocr import image_dimensions
+        from app.core.imagestore import image_dimensions
 
         data = path.read_bytes()
         width, height = image_dimensions(data)
@@ -247,7 +245,7 @@ class ImageDownloader:
         )
 
     def _persist(self, item: WorkItem, data: bytes, headers, attempt: int) -> DownloadResult:
-        from app.core.ocr import image_dimensions
+        from app.core.imagestore import image_dimensions
 
         content_type = (headers.get("content-type") or "").split(";")[0].strip()
         suffix = {

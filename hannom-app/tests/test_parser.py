@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.core.models import PostObject, count_han_chars
+from app.core.models import PostObject
 from app.core.parser import (
     DefaultRecordParser,
     CustomRecordParser,
@@ -167,23 +167,3 @@ class TestPreflight:
 
     def test_empty_input_is_safe(self):
         assert preflight_expiry([])["total"] == 0
-
-
-class TestHanCounting:
-    @pytest.mark.parametrize(
-        "text,expected",
-        [
-            ("平定營公堂官", 6),
-            ("年歲漸長 心要活得自由", 10),
-            ("混合 mixed 文字", 4),
-            ("Hello world", 0),
-            ("", 0),
-        ],
-    )
-    def test_counts_han(self, text, expected):
-        assert count_han_chars(text) == expected
-
-    @pytest.mark.parametrize("text", ["ひらがな カタカナ", "한글 테스트"])
-    def test_kana_and_hangul_are_not_han(self, text):
-        # These share the CJK block neighbourhood but are not Han characters.
-        assert count_han_chars(text) == 0

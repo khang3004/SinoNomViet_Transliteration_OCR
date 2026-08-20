@@ -26,9 +26,6 @@ class CreateJobRequest(BaseModel):
     # crawler's by_run logs and requires MINIO_ENDPOINT to be configured.
     mode: Literal["upload", "minio"] = "upload"
     upload_id: str | None = None
-    # False = download and produce signed URLs only, leaving OCR to a later
-    # stage. Much cheaper: OCR is what saturates the CPU.
-    run_ocr: bool = False
 
 
 @router.post("/jobs")
@@ -42,14 +39,12 @@ async def create_job(request: Request, body: CreateJobRequest) -> dict[str, Any]
             confirm_expired=body.confirm_expired,
             mode=body.mode,
             upload_id=body.upload_id,
-            run_ocr=body.run_ocr,
         )
     except RuntimeError as exc:
         # Missing upload or unconfigured MinIO — the message is written for a
         # human, so surface it rather than a bare 500.
         raise HTTPException(400, str(exc)) from exc
-    return {"job_id": job_id, "status": "started", "mode": body.mode,
-            "run_ocr": body.run_ocr}
+    return {"job_id": job_id, "status": "started", "mode": body.mode}
 
 
 @router.get("/jobs")
@@ -109,7 +104,7 @@ async def get_results(
 
 @router.get("/jobs/{job_id}/errors")
 async def get_job_errors(request: Request, job_id: str):
-    """Download + OCR failures for this batch, grouped by class.
+    """Download failures for this batch, grouped by class.
 
     Grouping is what makes 400 failures actionable: "all http_403" means the
     crawl went stale, "all decode_error" means something else entirely.
@@ -179,10 +174,10 @@ async def retry_failed(request: Request, job_id: str):
 
 @router.get("/health/system")
 async def system_health(request: Request):
-    """Host telemetry: RAM, CPU, disk, and per-worker RSS.
+    """Host telemetry: RAM, CPU, disk, image-store size.
 
-    On an 8 GB box running 3 OCR workers, this is how an impending OOM becomes
-    visible before it kills a multi-hour batch.
+    Disk is the number that matters now — downloaded images accumulate and
+    nothing deletes them automatically.
     """
     runtime = request.app.state.runtime
     settings = request.app.state.settings
@@ -190,11 +185,8 @@ async def system_health(request: Request):
     data["images"] = image_store(settings.images_dir)
     data["scheduler"] = runtime.scheduler.status()
     data["config"] = {
-        "ocr_workers": settings.ocr.workers,
         "batch_size": settings.batch_size,
-        "memory_limit_mb": settings.ocr.memory_limit_mb,
         "download_concurrency": settings.download.concurrency,
-        "engine": settings.ocr.engine_name,
         "minio_enabled": settings.minio_enabled,
     }
     return data
@@ -202,7 +194,7 @@ async def system_health(request: Request):
 
 @router.get("/pipeline")
 async def pipeline_status(request: Request):
-    """Where the corpus stands: scanned vs total, run progress, verdict split."""
+    """Where the corpus stands: prepared vs total, plus failures."""
     runtime = request.app.state.runtime
     return await runtime.pipeline_status()
 

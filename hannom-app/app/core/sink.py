@@ -1,12 +1,10 @@
-"""Where verdicts go.
+"""Where prepared records go.
 
 ``ResultSink`` is the output boundary of this stage. The MinIO implementation
-writes into a ``han_scan/`` namespace that mirrors the crawler's own
+writes into a ``han_scan/`` namespace mirroring the crawler's own
 ``export/ logs/by_run/ state/`` convention:
 
-    <group>/han_scan/export/han_valid.jsonl          has Han text -> feeds Gemini
-    <group>/han_scan/export/han_invalid.jsonl        scanned clean
-    <group>/han_scan/export/ready_for_ocr.jsonl      downloaded, OCR skipped
+    <group>/han_scan/export/ready_for_ocr.jsonl      -> feeds the Gemini stage
     <group>/han_scan/errors/failed.jsonl             cumulative failures
     <group>/han_scan/logs/by_run/<run>/result.json   run summary
     <group>/han_scan/logs/by_run/<run>/upserts.jsonl records touched this run
@@ -26,28 +24,27 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from app.core.config import MinioConfig, Settings
-from app.core.models import SCAN_SKIPPED, HanScanError, HanScanRecord, utcnow_iso
+from app.core.models import PreparedPost, PrepError, utcnow_iso
 from app.core.storage import MinioStorage
 
 log = logging.getLogger(__name__)
 
 
 class ResultSink(Protocol):
-    """Output boundary — swap this to publish verdicts somewhere else."""
+    """Output boundary — swap this to publish records somewhere else."""
 
-    def write_results(self, records: list[HanScanRecord], scan_run_id: str) -> None: ...
-    def write_errors(self, errors: list[HanScanError], scan_run_id: str) -> None: ...
+    def write_results(self, records: list[PreparedPost], scan_run_id: str) -> None: ...
+    def write_errors(self, errors: list[PrepError], scan_run_id: str) -> None: ...
     def write_run_summary(self, summary: dict[str, Any], scan_run_id: str) -> None: ...
 
 
 class FileResultSink:
-    """Writes verdicts to local disk for download from the dashboard.
+    """Writes prepared records to local disk for download from the dashboard.
 
     Mirrors the MinIO layout exactly, so a file produced here and one produced
     there are interchangeable to the Gemini stage::
 
-        <data>/results/export/han_valid.jsonl
-        <data>/results/export/han_invalid.jsonl
+        <data>/results/export/ready_for_ocr.jsonl
         <data>/results/errors/failed.jsonl
         <data>/results/logs/by_run/<run>/{result.json,upserts.jsonl,errors.jsonl}
     """
@@ -58,20 +55,8 @@ class FileResultSink:
     # --- paths ----------------------------------------------------------
 
     @property
-    def han_valid_path(self) -> Path:
-        return self.root / "export" / "han_valid.jsonl"
-
-    @property
-    def han_invalid_path(self) -> Path:
-        return self.root / "export" / "han_invalid.jsonl"
-
-    @property
     def ready_for_ocr_path(self) -> Path:
-        """Downloaded and servable, but never scanned here.
-
-        Kept separate from han_valid.jsonl on purpose: these records carry no
-        verdict, and merging them would imply one.
-        """
+        """The single export, consumed by the Gemini stage."""
         return self.root / "export" / "ready_for_ocr.jsonl"
 
     @property
@@ -96,30 +81,15 @@ class FileResultSink:
             # sitting in a page cache that a crash would drop.
             os.fsync(handle.fileno())
 
-    def write_results(self, records: list[HanScanRecord], scan_run_id: str) -> None:
+    def write_results(self, records: list[PreparedPost], scan_run_id: str) -> None:
         if not records:
             return
         rows = [r.to_json() for r in records]
-
-        skipped, valid, invalid = [], [], []
-        for row, record in zip(rows, records):
-            if record.scan_status == SCAN_SKIPPED:
-                skipped.append(row)
-            elif record.han_valid:
-                valid.append(row)
-            else:
-                invalid.append(row)
-
-        self._append(self.ready_for_ocr_path, skipped)
-        self._append(self.han_valid_path, valid)
-        self._append(self.han_invalid_path, invalid)
+        self._append(self.ready_for_ocr_path, rows)
         self._append(self.run_path(scan_run_id, "upserts.jsonl"), rows)
-        log.info(
-            "wrote %d record(s) locally (%d han_valid, %d han_invalid, %d ready_for_ocr)",
-            len(rows), len(valid), len(invalid), len(skipped),
-        )
+        log.info("wrote %d prepared post(s) locally", len(rows))
 
-    def write_errors(self, errors: list[HanScanError], scan_run_id: str) -> None:
+    def write_errors(self, errors: list[PrepError], scan_run_id: str) -> None:
         if not errors:
             return
         rows = [e.to_json() for e in errors]
@@ -165,8 +135,6 @@ class FileResultSink:
 
     def counts(self) -> dict[str, int]:
         return {
-            "han_valid": self._count(self.han_valid_path),
-            "han_invalid": self._count(self.han_invalid_path),
             "ready_for_ocr": self._count(self.ready_for_ocr_path),
             "failed": self._count(self.failed_path),
         }
@@ -176,8 +144,6 @@ class FileResultSink:
         out = []
         for name, path in (
             ("ready_for_ocr.jsonl", self.ready_for_ocr_path),
-            ("han_valid.jsonl", self.han_valid_path),
-            ("han_invalid.jsonl", self.han_invalid_path),
             ("failed.jsonl", self.failed_path),
         ):
             exists = path.exists()
@@ -194,8 +160,6 @@ class FileResultSink:
         this is reachable from an HTTP route."""
         return {
             "ready_for_ocr.jsonl": self.ready_for_ocr_path,
-            "han_valid.jsonl": self.han_valid_path,
-            "han_invalid.jsonl": self.han_invalid_path,
             "failed.jsonl": self.failed_path,
         }.get(name)
 
@@ -221,11 +185,11 @@ class TeeResultSink:
             self.mirror_error = f"{type(exc).__name__}: {exc}"
             log.warning("mirror sink failed (%s); local results are intact", exc)
 
-    def write_results(self, records: list[HanScanRecord], scan_run_id: str) -> None:
+    def write_results(self, records: list[PreparedPost], scan_run_id: str) -> None:
         self.primary.write_results(records, scan_run_id)
         self._mirror("write_results", records, scan_run_id)
 
-    def write_errors(self, errors: list[HanScanError], scan_run_id: str) -> None:
+    def write_errors(self, errors: list[PrepError], scan_run_id: str) -> None:
         self.primary.write_errors(errors, scan_run_id)
         self._mirror("write_errors", errors, scan_run_id)
 
@@ -239,39 +203,15 @@ class MinioResultSink:
         self.cfg: MinioConfig = settings.minio
         self.storage = storage or MinioStorage(settings.minio)
 
-    def write_results(self, records: list[HanScanRecord], scan_run_id: str) -> None:
-        """Split by verdict into the two export files, and log all of them
-        under this run."""
+    def write_results(self, records: list[PreparedPost], scan_run_id: str) -> None:
         if not records:
             return
+        rows = [r.to_json() for r in records]
+        self.storage.append_jsonl(self.cfg.ready_for_ocr_key, rows)
+        self.storage.append_jsonl(self.cfg.run_key(scan_run_id, "upserts.jsonl"), rows)
+        log.info("published %d prepared post(s) for run %s", len(rows), scan_run_id)
 
-        skipped, valid, invalid = [], [], []
-        for record in records:
-            row = record.to_json()
-            if record.scan_status == SCAN_SKIPPED:
-                skipped.append(row)
-            elif record.han_valid:
-                valid.append(row)
-            else:
-                invalid.append(row)
-
-        if skipped:
-            self.storage.append_jsonl(self.cfg.ready_for_ocr_key, skipped)
-        if valid:
-            self.storage.append_jsonl(self.cfg.han_valid_key, valid)
-        if invalid:
-            self.storage.append_jsonl(self.cfg.han_invalid_key, invalid)
-
-        self.storage.append_jsonl(
-            self.cfg.run_key(scan_run_id, "upserts.jsonl"),
-            [r.to_json() for r in records],
-        )
-        log.info(
-            "published %d records (%d han_valid, %d han_invalid, %d ready_for_ocr) for run %s",
-            len(records), len(valid), len(invalid), len(skipped), scan_run_id,
-        )
-
-    def write_errors(self, errors: list[HanScanError], scan_run_id: str) -> None:
+    def write_errors(self, errors: list[PrepError], scan_run_id: str) -> None:
         if not errors:
             return
         rows = [e.to_json() for e in errors]
@@ -294,8 +234,6 @@ class MinioResultSink:
     def counts(self) -> dict[str, int]:
         """Totals for the UI. Cheap enough at our volumes; cached by the caller."""
         return {
-            "han_valid": self.storage.count_lines(self.cfg.han_valid_key),
-            "han_invalid": self.storage.count_lines(self.cfg.han_invalid_key),
             "ready_for_ocr": self.storage.count_lines(self.cfg.ready_for_ocr_key),
             "failed": self.storage.count_lines(self.cfg.failed_key),
         }

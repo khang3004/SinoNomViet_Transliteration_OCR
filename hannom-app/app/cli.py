@@ -35,7 +35,7 @@ log = logging.getLogger("hannom.cli")
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="app.cli", description="Run one Han-scan batch without the web app."
+        prog="app.cli", description="Prepare one batch of images without the web app."
     )
     parser.add_argument(
         "--file", type=Path, default=None,
@@ -46,11 +46,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="read from the crawler's MinIO by_run logs instead of a file",
     )
     parser.add_argument("--limit", type=int, default=None, help="max posts (default BATCH_SIZE)")
-    parser.add_argument(
-        "--ocr", action="store_true",
-        help="also run OCR (CPU-heavy). Without it, images are downloaded and "
-             "given signed URLs for OCR elsewhere.",
-    )
     parser.add_argument(
         "--confirm-expired", action="store_true",
         help="proceed even when many source URLs have already expired",
@@ -137,14 +132,13 @@ async def run_batch(args) -> int:
 
     runner = BatchRunner(settings, source, sink, signer)
     state = await runner.run(
-        job_dir, state, confirm_expired=args.confirm_expired, run_ocr=args.ocr
+        job_dir, state, confirm_expired=args.confirm_expired
     )
 
     summary = {
         "job_id": state.job_id,
         "phase": state.phase.value,
         "counts": state.counts.__dict__,
-        "ocr_run": args.ocr,
         "preflight": state.preflight,
         "error": state.error,
         "awaiting_confirmation": state.awaiting_confirmation,

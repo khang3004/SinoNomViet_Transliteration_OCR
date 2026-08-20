@@ -11,7 +11,7 @@ import json
 import pytest
 
 from app.core.config import MinioConfig, Settings
-from app.core.models import ErrorClass, HanScanError, HanScanRecord, ScannedImage
+from app.core.models import ErrorClass, PrepError, PreparedPost, PreparedImage
 from app.core.sink import MinioResultSink
 from app.core.source import MinioRecordSource
 
@@ -78,8 +78,7 @@ class TestMinioPaths:
 
     def test_write_paths(self, settings):
         cfg = settings.minio
-        assert cfg.han_valid_key == f"{GROUP}/han_scan/export/han_valid.jsonl"
-        assert cfg.han_invalid_key == f"{GROUP}/han_scan/export/han_invalid.jsonl"
+        assert cfg.ready_for_ocr_key == f"{GROUP}/han_scan/export/ready_for_ocr.jsonl"
         assert cfg.failed_key == f"{GROUP}/han_scan/errors/failed.jsonl"
         assert cfg.processed_ids_key == f"{GROUP}/han_scan/state/processed_ids.jsonl"
 
@@ -145,30 +144,30 @@ class TestRecordSource:
 
 
 class TestResultSink:
-    def _record(self, post_id, han_valid):
-        return HanScanRecord(
-            post_id=post_id, group_id="g1", han_valid=han_valid,
-            han_words_total=9 if han_valid else 0, images_scanned=1,
-            images=[ScannedImage(url="https://x/img", idx=0, valid_pic=han_valid)],
+    def _record(self, post_id):
+        return PreparedPost(
+            post_id=post_id, group_id="g1", images_prepared=1,
+            images=[PreparedImage(
+                url="https://x/img", idx=0, source_url="https://cdn/x.jpg",
+                sha256="abc", width=800, height=600,
+            )],
         )
 
-    def test_verdicts_split_across_the_two_export_files(self, settings, storage):
+    def test_records_land_in_the_export_and_the_run_log(self, settings, storage):
         sink = MinioResultSink(settings, storage=storage)
-        sink.write_results([self._record("p1", True), self._record("p2", False)], "S1")
+        sink.write_results([self._record("p1"), self._record("p2")], "S1")
 
         cfg = settings.minio
-        assert storage.count_lines(cfg.han_valid_key) == 1
-        assert storage.count_lines(cfg.han_invalid_key) == 1
-        # …and both land in the per-run log regardless of verdict.
+        assert storage.count_lines(cfg.ready_for_ocr_key) == 2
         assert storage.count_lines(cfg.run_key("S1", "upserts.jsonl")) == 2
 
     def test_failures_are_written_cumulatively_and_per_run(self, settings, storage):
         sink = MinioResultSink(settings, storage=storage)
         sink.write_errors([
-            HanScanError(post_id="p9", group_id="g1", source_url="u",
-                         error_class=ErrorClass.HTTP_404),
-            HanScanError(post_id="p8", group_id="g1", source_url="u",
-                         error_class=ErrorClass.TIMEOUT),
+            PrepError(post_id="p9", group_id="g1", source_url="u",
+                      error_class=ErrorClass.HTTP_404),
+            PrepError(post_id="p8", group_id="g1", source_url="u",
+                      error_class=ErrorClass.TIMEOUT),
         ], "S1")
 
         cfg = settings.minio
@@ -178,10 +177,10 @@ class TestResultSink:
     def test_retryable_flag_is_serialised_for_consumers(self, settings, storage):
         sink = MinioResultSink(settings, storage=storage)
         sink.write_errors([
-            HanScanError(post_id="a", group_id="g", source_url="u",
-                         error_class=ErrorClass.EXPIRED_URL),
-            HanScanError(post_id="b", group_id="g", source_url="u",
-                         error_class=ErrorClass.HTTP_429),
+            PrepError(post_id="a", group_id="g", source_url="u",
+                      error_class=ErrorClass.EXPIRED_URL),
+            PrepError(post_id="b", group_id="g", source_url="u",
+                      error_class=ErrorClass.HTTP_429),
         ], "S1")
 
         rows = {r["post_id"]: r for r in sink.read_failed()}
@@ -190,28 +189,26 @@ class TestResultSink:
         assert [r["post_id"] for r in sink.read_failed(retryable_only=True)] == ["b"]
 
     def test_record_json_matches_the_documented_contract(self, settings, storage):
-        record = self._record("p1", True).to_json()
+        record = self._record("p1").to_json()
         required = {
-            "post_id", "group_id", "post_link", "author", "han_valid",
-            "han_words_total", "images_scanned", "images_failed", "images",
-            "source_key", "source_run_id", "scan_run_id", "stage",
-            "schema_version", "ocr_engine", "scanned_at", "label",
-            "sub_caption", "posted_at",
-            # 1.1 — tells a consumer whether han_valid is a verdict or a null.
-            "scan_status",
+            "post_id", "group_id", "post_link", "author",
+            "images_prepared", "images_failed", "images",
+            "source_key", "source_run_id", "run_id", "stage",
+            "schema_version", "prepared_at", "label", "sub_caption", "posted_at",
         }
         assert required <= set(record)
         assert record["stage"] == "han_scan"
-        assert record["schema_version"] == "han_scan/1.1"
-        assert record["scan_status"] == "scanned"
+        assert record["schema_version"] == "han_scan/2.0"
+        # Schema 2.0 carries no verdict about image contents — the fields are
+        # gone rather than null, so a consumer cannot read absence as "false".
+        assert not {"han_valid", "scan_status", "ocr_engine"} & set(record)
 
-    def test_scanned_image_carries_what_gemini_needs(self, settings, storage):
-        image = self._record("p1", True).to_json()["images"][0]
-        assert {"url", "idx", "valid_pic", "han_words", "source_url"} <= set(image)
+    def test_prepared_image_carries_what_gemini_needs(self, settings, storage):
+        image = self._record("p1").to_json()["images"][0]
+        assert {"url", "idx", "source_url", "sha256", "width", "height"} <= set(image)
+        assert "valid_pic" not in image
 
-    def test_counts_summarise_the_exports(self, settings, storage):
+    def test_counts_summarise_the_export(self, settings, storage):
         sink = MinioResultSink(settings, storage=storage)
-        sink.write_results([self._record("p1", True), self._record("p2", False)], "S1")
-        assert sink.counts() == {
-            "han_valid": 1, "han_invalid": 1, "ready_for_ocr": 0, "failed": 0,
-        }
+        sink.write_results([self._record("p1"), self._record("p2")], "S1")
+        assert sink.counts() == {"ready_for_ocr": 2, "failed": 0}

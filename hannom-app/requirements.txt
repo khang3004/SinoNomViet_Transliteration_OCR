@@ -1,21 +1,11 @@
-# Han Scanner runtime deps.
+# Image-prep runtime deps.
 #
-# PaddlePaddle is NOT listed here: its CPU wheel comes from Paddle's own index
-# and is installed separately in the Dockerfile so this file stays usable with a
-# plain `pip install -r`.
+# No OCR stack: this stage downloads images and serves them, it does not read
+# them. Dropping paddleocr/paddlepaddle/numpy took the image from ~3 GB to a few
+# hundred MB and the build from ~15 minutes to about one.
 #
-# IMPORTANT: paddlepaddle and paddleocr must be bumped TOGETHER. Because paddle
-# is not a pip dependency of paddleocr, nothing enforces the pairing, and a stale
-# runtime cannot parse newer inference models — it fails with
-# "Type of attribute: strides is not right". See PADDLE_VERSION in the Dockerfile.
-#
-# numpy is pinned inside paddlex's window (>=1.24,<2.4). Keep it explicit —
-# paddle's install can otherwise pull a newer numpy that breaks its own runtime.
-numpy==1.26.4
-
-# OCR — PP-OCRv6 model series ships in the 3.7.x package line.
-# Paired with paddlepaddle 3.3.1 (Dockerfile ARG PADDLE_VERSION).
-paddleocr==3.7.0
+# Pillow stays — image_dimensions() in app/core/imagestore.py records width and
+# height on every output record.
 
 # Web layer
 fastapi==0.115.0
@@ -31,5 +21,5 @@ minio==7.2.9
 httpx==0.27.2
 Pillow==10.4.0
 
-# Host telemetry for the monitoring UI and the OCR memory guard
+# Host telemetry for the monitoring UI
 psutil==6.0.0

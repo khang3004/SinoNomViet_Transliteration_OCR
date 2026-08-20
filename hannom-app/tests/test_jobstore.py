@@ -41,7 +41,7 @@ class TestPhase:
         assert phase.terminal is True
 
     @pytest.mark.parametrize(
-        "phase", [Phase.PENDING, Phase.PREFLIGHT, Phase.DOWNLOAD, Phase.OCR, Phase.PUBLISH]
+        "phase", [Phase.PENDING, Phase.PREFLIGHT, Phase.DOWNLOAD, Phase.PUBLISH]
     )
     def test_running_phases(self, phase):
         assert phase.terminal is False
@@ -50,21 +50,21 @@ class TestPhase:
 class TestStatePersistence:
     def test_state_roundtrips(self, store):
         job_dir, state = store.create("run1", limit=500)
-        state.phase = Phase.OCR
-        state.counts.scanned = 42
+        state.phase = Phase.DOWNLOAD
+        state.counts.prepared = 42
         state.preflight = {"total": 10, "expired": 1}
         job_dir.save_state(state)
 
         loaded = job_dir.load_state()
-        assert loaded.phase is Phase.OCR
-        assert loaded.counts.scanned == 42
+        assert loaded.phase is Phase.DOWNLOAD
+        assert loaded.counts.prepared == 42
         assert loaded.preflight["expired"] == 1
 
     def test_save_is_atomic(self, store):
         # A half-written job.json would make a job unreadable after a crash.
         job_dir, state = store.create("run1", limit=10)
         for i in range(20):
-            state.counts.scanned = i
+            state.counts.prepared = i
             job_dir.save_state(state)
             json.loads(job_dir.job_file.read_text(encoding="utf-8"))
 
@@ -140,14 +140,14 @@ class TestEventCursor:
 class TestInterruptedJobs:
     def test_fresh_job_is_not_stale(self, store):
         job_dir, state = store.create("run1", limit=10)
-        state.phase = Phase.OCR
+        state.phase = Phase.DOWNLOAD
         job_dir.save_state(state)
         assert job_dir.is_stale() is False
         assert store.reap_interrupted() == []
 
     def test_dead_job_is_reaped_and_offers_resume(self, store):
         job_dir, state = store.create("run1", limit=10)
-        state.phase = Phase.OCR
+        state.phase = Phase.DOWNLOAD
         job_dir.save_state(state)
 
         old = time.time() - HEARTBEAT_STALE_S - 10

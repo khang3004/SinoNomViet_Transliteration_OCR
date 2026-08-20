@@ -14,7 +14,7 @@ import pytest
 
 from app.core.checkpoint import ProcessedCheckpoint
 from app.core.config import ImageServeConfig, MinioConfig, Settings
-from app.core.models import ErrorClass, HanScanError, HanScanRecord, ScannedImage
+from app.core.models import ErrorClass, PrepError, PreparedPost, PreparedImage
 from app.core.sink import FileResultSink
 from app.core.source import FileRecordSource
 from app.core.uploads import UploadStore, UploadTooLarge
@@ -186,36 +186,34 @@ class TestFileRecordSource:
 
 
 class TestFileResultSink:
-    def _record(self, post_id, han_valid):
-        return HanScanRecord(
-            post_id=post_id, group_id="g1", han_valid=han_valid,
-            han_words_total=9 if han_valid else 0, images_scanned=1,
-            images=[ScannedImage(url="https://x/i", idx=0, valid_pic=han_valid)],
+    def _record(self, post_id):
+        return PreparedPost(
+            post_id=post_id, group_id="g1", images_prepared=1,
+            images=[PreparedImage(url="https://x/i", idx=0, source_url="https://cdn/x.jpg")],
         )
 
-    def test_splits_verdicts_into_two_files(self, settings):
+    def test_writes_the_export_and_the_run_log(self, settings):
         sink = FileResultSink(settings.results_dir)
-        sink.write_results([self._record("p1", True), self._record("p2", False)], "S1")
+        sink.write_results([self._record("p1"), self._record("p2")], "S1")
 
-        assert sink.counts() == {
-            "han_valid": 1, "han_invalid": 1, "ready_for_ocr": 0, "failed": 0,
-        }
-        assert sink.han_valid_path.exists()
+        assert sink.counts() == {"ready_for_ocr": 2, "failed": 0}
+        assert sink.ready_for_ocr_path.exists()
         assert sink.run_path("S1", "upserts.jsonl").exists()
 
     def test_appends_across_batches(self, settings):
+        # Each batch adds to the same export rather than replacing it.
         sink = FileResultSink(settings.results_dir)
-        sink.write_results([self._record("p1", True)], "S1")
-        sink.write_results([self._record("p2", True)], "S2")
-        assert sink.counts()["han_valid"] == 2
+        sink.write_results([self._record("p1")], "S1")
+        sink.write_results([self._record("p2")], "S2")
+        assert sink.counts()["ready_for_ocr"] == 2
 
     def test_errors_go_to_cumulative_and_per_run_files(self, settings):
         sink = FileResultSink(settings.results_dir)
         sink.write_errors([
-            HanScanError(post_id="p9", group_id="g", source_url="u",
-                         error_class=ErrorClass.EXPIRED_URL),
-            HanScanError(post_id="p8", group_id="g", source_url="u",
-                         error_class=ErrorClass.HTTP_429),
+            PrepError(post_id="p9", group_id="g", source_url="u",
+                      error_class=ErrorClass.EXPIRED_URL),
+            PrepError(post_id="p8", group_id="g", source_url="u",
+                      error_class=ErrorClass.HTTP_429),
         ], "S1")
 
         assert sink.counts()["failed"] == 2
@@ -224,28 +222,28 @@ class TestFileResultSink:
 
     def test_output_matches_the_gemini_contract(self, settings):
         sink = FileResultSink(settings.results_dir)
-        sink.write_results([self._record("p1", True)], "S1")
+        sink.write_results([self._record("p1")], "S1")
 
-        row = json.loads(sink.han_valid_path.read_text(encoding="utf-8").splitlines()[0])
+        row = json.loads(sink.ready_for_ocr_path.read_text(encoding="utf-8").splitlines()[0])
         assert row["stage"] == "han_scan"
-        assert row["schema_version"] == "han_scan/1.1"
-        assert row["scan_status"] == "scanned"
-        assert row["han_valid"] is True
+        assert row["schema_version"] == "han_scan/2.0"
         assert "url" in row["images"][0]
+        assert "han_valid" not in row
 
     def test_downloadable_listing(self, settings):
         sink = FileResultSink(settings.results_dir)
         before = {d["name"]: d for d in sink.downloadable()}
-        assert before["han_valid.jsonl"]["available"] is False
+        assert before["ready_for_ocr.jsonl"]["available"] is False
 
-        sink.write_results([self._record("p1", True)], "S1")
+        sink.write_results([self._record("p1")], "S1")
         after = {d["name"]: d for d in sink.downloadable()}
-        assert after["han_valid.jsonl"]["available"] is True
-        assert after["han_valid.jsonl"]["lines"] == 1
+        assert after["ready_for_ocr.jsonl"]["available"] is True
+        assert after["ready_for_ocr.jsonl"]["lines"] == 1
 
     def test_download_names_are_allowlisted(self, settings):
         # This resolves a name arriving from a URL, so it must not path-join.
         sink = FileResultSink(settings.results_dir)
-        assert sink.path_for("han_valid.jsonl") is not None
+        assert sink.path_for("ready_for_ocr.jsonl") is not None
+        assert sink.path_for("failed.jsonl") is not None
         for evil in ["../../etc/passwd", "/etc/passwd", "unknown.jsonl", ""]:
             assert sink.path_for(evil) is None

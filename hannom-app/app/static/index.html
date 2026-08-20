@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Han Scanner — pipeline monitor</title>
+<title>Image Prep — crawl images for OCR</title>
 <style>
   :root {
     color-scheme: light;
@@ -11,9 +11,10 @@
     --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
     --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
     --series-1: #2a78d6; --series-2: #eb6834;
-    --seq-200: #9ec5f4; --seq-450: #2a78d6; --seq-600: #184f95;
-    --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+    --seq-450: #2a78d6;
+    --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
     --good-text: #006300;
+    --shadow: 0 1px 2px rgba(11,11,11,0.06), 0 4px 12px rgba(11,11,11,0.05);
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
@@ -22,8 +23,8 @@
       --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
       --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
       --series-1: #3987e5; --series-2: #d95926;
-      --seq-200: #184f95; --seq-450: #3987e5; --seq-600: #86b6ef;
-      --good-text: #0ca30c;
+      --seq-450: #3987e5; --good-text: #0ca30c;
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.3);
     }
   }
   :root[data-theme="dark"] {
@@ -32,8 +33,8 @@
     --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
     --series-1: #3987e5; --series-2: #d95926;
-    --seq-200: #184f95; --seq-450: #3987e5; --seq-600: #86b6ef;
-    --good-text: #0ca30c;
+    --seq-450: #3987e5; --good-text: #0ca30c;
+    --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.3);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -42,13 +43,10 @@
     background: var(--plane); color: var(--ink);
     font-size: 14px; line-height: 1.45; padding: 1rem;
   }
-  .wrap { max-width: 1280px; margin: 0 auto; }
+  .wrap { max-width: 1320px; margin: 0 auto; }
 
-  header {
-    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
-    margin-bottom: 1.25rem;
-  }
-  header h1 { font-size: 1.1rem; font-weight: 700; }
+  header { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  header h1 { font-size: 1.05rem; font-weight: 700; }
   .spacer { flex: 1; }
 
   .card {
@@ -57,7 +55,7 @@
   }
   .card > h2 {
     font-size: 0.72rem; font-weight: 700; letter-spacing: 0.07em;
-    text-transform: uppercase; color: var(--muted); margin-bottom: 0.9rem;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 0.85rem;
   }
 
   button {
@@ -71,331 +69,262 @@
   button.primary { background: var(--series-1); color: #fff; border-color: transparent; }
   button.danger  { background: var(--critical); color: #fff; border-color: transparent; }
 
-  /* ---- KPI row ---- */
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; }
+  input[type=search], input[type=file] {
+    font-family: inherit; font-size: 0.85rem; padding: 0.42rem 0.6rem;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--plane); color: var(--ink);
+  }
+  input[type=search]:focus { outline: 2px solid var(--series-1); outline-offset: 1px; }
+
+  /* ---- status strip ---- */
+  .strip { display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap; }
+  .stat .k {
+    font-size: 0.68rem; font-weight: 600; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .stat .v { font-size: 1.35rem; font-weight: 700; line-height: 1.15; }
+  .stat .v small { font-size: 0.8rem; font-weight: 400; color: var(--ink-2); }
+
+  .meter { height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; }
+  .meter > i { display: block; height: 100%; border-radius: 4px; background: var(--seq-450); transition: width .4s ease; }
+  .meter.good > i { background: var(--good); }
+  .meter.warn > i { background: var(--warning); }
+  .meter.crit > i { background: var(--critical); }
+
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 0.35rem; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+  /* ---- gallery: the primary surface ---- */
+  .gallery {
+    display: grid; gap: 0.85rem;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  }
   .tile {
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 0.85rem 0.95rem;
+    border-radius: 10px; overflow: hidden; cursor: pointer;
+    display: flex; flex-direction: column; transition: box-shadow .15s ease;
   }
-  .tile .label {
-    font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em;
-    text-transform: uppercase; color: var(--muted); margin-bottom: 0.3rem;
+  .tile:hover { box-shadow: var(--shadow); }
+  .tile .thumb {
+    width: 100%; aspect-ratio: 4 / 3; background: var(--grid);
+    display: block; object-fit: cover;
   }
-  .tile .value { font-size: 1.65rem; font-weight: 700; line-height: 1.1; }
-  .tile .sub { font-size: 0.75rem; color: var(--ink-2); margin-top: 0.15rem; }
-  .tile.accent .value { color: var(--series-1); }
-
-  /* ---- meter (ratio against a limit) ---- */
-  .meter { height: 10px; border-radius: 5px; background: var(--grid); overflow: hidden; }
-  .meter > i { display: block; height: 100%; border-radius: 5px; background: var(--seq-450); transition: width .4s ease; }
-  .meter.good  > i { background: var(--good); }
-  .meter.warn  > i { background: var(--warning); }
-  .meter.crit  > i { background: var(--critical); }
-
-  .hero { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.5rem; }
-  .hero .big { font-size: 2.6rem; font-weight: 700; line-height: 1; }
-  .hero .of  { font-size: 0.9rem; color: var(--ink-2); }
-
-  /* ---- health ---- */
-  .health { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 0.75rem; }
-  .spark { width: 100%; height: 40px; display: block; margin-top: 0.4rem; cursor: crosshair; }
-  .spark-read { font-size: 0.72rem; color: var(--muted); min-height: 1em; font-variant-numeric: tabular-nums; }
-
-  /* ---- phase stepper ---- */
-  .steps { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
-  .step {
-    font-size: 0.73rem; font-weight: 600; padding: 0.22rem 0.6rem;
-    border-radius: 99px; border: 1px solid var(--border); color: var(--muted);
+  .tile .meta { padding: 0.55rem 0.65rem; display: flex; flex-direction: column; gap: 0.2rem; }
+  .tile .who { font-size: 0.82rem; font-weight: 600; }
+  .tile .cap {
+    font-size: 0.75rem; color: var(--ink-2); line-height: 1.35;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
   }
-  .step.active { background: var(--series-1); border-color: transparent; color: #fff; }
-  .step.done   { border-color: var(--good); color: var(--good-text); }
-
-  .bars { display: grid; gap: 0.7rem; }
-  .bar-row .top {
-    display: flex; justify-content: space-between; font-size: 0.78rem;
-    margin-bottom: 0.25rem; color: var(--ink-2);
+  .tile .foot {
+    font-size: 0.68rem; color: var(--muted); display: flex;
+    justify-content: space-between; gap: 0.4rem;
   }
-  .bar-row .top b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .pill {
+    font-size: 0.65rem; font-weight: 700; padding: 0.05rem 0.35rem;
+    border-radius: 3px; border: 1px solid var(--border); color: var(--muted);
+  }
 
-  /* ---- error breakdown: magnitude -> one sequential hue, sorted ---- */
-  /* name column fits the longest class + its tag (e.g. "decode_error terminal") */
-  .ebar { display: grid; grid-template-columns: 178px 1fr 52px; gap: 0.55rem; align-items: center; margin-bottom: 0.4rem; }
-  .ebar .name { font-size: 0.78rem; color: var(--ink-2); font-family: ui-monospace, monospace; white-space: nowrap; }
-  @media (max-width: 560px) { .ebar { grid-template-columns: 1fr 52px; } .ebar .track { grid-column: 1 / -1; } }
-  .ebar .track { height: 15px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+  /* ---- lightbox ---- */
+  .lb {
+    display: none; position: fixed; inset: 0; z-index: 50;
+    background: rgba(0,0,0,0.72); padding: 1.5rem;
+    align-items: center; justify-content: center;
+  }
+  .lb.show { display: flex; }
+  .lb-inner {
+    background: var(--surface); border-radius: 12px; overflow: hidden;
+    max-width: 1050px; width: 100%; max-height: 90vh;
+    display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr);
+  }
+  @media (max-width: 780px) { .lb-inner { grid-template-columns: 1fr; } }
+  .lb-img { background: #000; display: flex; align-items: center; justify-content: center; min-height: 240px; }
+  .lb-img img { max-width: 100%; max-height: 90vh; object-fit: contain; display: block; }
+  .lb-side { padding: 1.1rem 1.25rem; overflow-y: auto; }
+  .lb-side h3 { font-size: 0.95rem; margin-bottom: 0.15rem; }
+  .lb-side .cap { font-size: 0.82rem; color: var(--ink-2); margin: 0.5rem 0 0.9rem; white-space: pre-wrap; }
+  .kv { display: grid; grid-template-columns: 88px 1fr; gap: 0.25rem 0.6rem; font-size: 0.76rem; }
+  .kv dt { color: var(--muted); }
+  .kv dd { word-break: break-all; font-variant-numeric: tabular-nums; }
+  .lb-close { position: absolute; top: 1.5rem; right: 1.5rem; }
+  .thumbstrip { display: flex; gap: 0.35rem; margin-top: 0.8rem; flex-wrap: wrap; }
+  .thumbstrip img {
+    width: 44px; height: 44px; object-fit: cover; border-radius: 4px;
+    border: 2px solid transparent; cursor: pointer;
+  }
+  .thumbstrip img.on { border-color: var(--series-1); }
+
+  /* ---- collapsible ---- */
+  details.card > summary {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--muted); cursor: pointer; list-style: none;
+  }
+  details.card > summary::-webkit-details-marker { display: none; }
+  details.card > summary::before { content: "▸ "; }
+  details.card[open] > summary::before { content: "▾ "; }
+  details.card[open] > summary { margin-bottom: 0.85rem; }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.7rem; }
+  .kpi { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem 0.8rem; }
+  .kpi .k { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .kpi .v { font-size: 1.25rem; font-weight: 700; }
+  .kpi .s { font-size: 0.72rem; color: var(--ink-2); }
+
+  .log {
+    background: var(--plane); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.55rem 0.65rem; max-height: 220px; overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.73rem;
+  }
+  .log div { padding: 0.06rem 0; white-space: pre-wrap; word-break: break-word; }
+  .log .warn { color: var(--warning); } .log .error { color: var(--critical); }
+  .log .ts { color: var(--muted); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+  th, td { text-align: left; padding: 0.32rem 0.45rem; border-bottom: 1px solid var(--grid); }
+  th { color: var(--muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .ebar { display: grid; grid-template-columns: 150px 1fr 48px; gap: 0.5rem; align-items: center; margin-bottom: 0.35rem; }
+  .ebar .name { font-size: 0.76rem; color: var(--ink-2); font-family: ui-monospace, monospace; white-space: nowrap; }
+  .ebar .track { height: 13px; background: var(--grid); border-radius: 4px; overflow: hidden; }
   .ebar .fill { height: 100%; background: var(--seq-450); border-radius: 0 4px 4px 0; }
-  .ebar .n { font-size: 0.8rem; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .tag {
-    font-size: 0.63rem; font-weight: 700; text-transform: uppercase;
-    padding: 0.05rem 0.35rem; border-radius: 3px; border: 1px solid currentColor; margin-left: 0.35rem;
-  }
-  .tag.retry { color: var(--warning); }
-  .tag.term  { color: var(--critical); }
+  .ebar .n { font-size: 0.78rem; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  @media (max-width: 560px) { .ebar { grid-template-columns: 1fr 48px; } .ebar .track { grid-column: 1 / -1; } }
 
-  /* ---- banner ---- */
   .banner {
-    display: none; padding: 0.8rem 1rem; border-radius: 8px; margin-bottom: 1rem;
+    display: none; padding: 0.75rem 0.95rem; border-radius: 8px; margin-bottom: 1rem;
     border: 1px solid var(--warning); font-size: 0.85rem;
   }
   .banner.show { display: block; }
   .banner.crit { border-color: var(--critical); }
-  .banner b { display: block; margin-bottom: 0.25rem; }
-  .banner .row { margin-top: 0.6rem; display: flex; gap: 0.5rem; }
+  .banner b { display: block; margin-bottom: 0.2rem; }
 
-  /* ---- log ---- */
-  .log {
-    background: var(--plane); border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.6rem 0.7rem; max-height: 260px; overflow-y: auto;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem;
-  }
-  .log div { padding: 0.08rem 0; white-space: pre-wrap; word-break: break-word; }
-  .log .warn  { color: var(--warning); }
-  .log .error { color: var(--critical); }
-  .log .ts { color: var(--muted); }
-
-  table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
-  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--grid); }
-  th { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-
-  .tabs { display: flex; gap: 0.3rem; margin-bottom: 1rem; }
-  .tabs button.on { background: var(--series-1); color: #fff; border-color: transparent; }
-  .panel { display: none; } .panel.on { display: block; }
-
-  textarea {
-    width: 100%; height: 150px; font-family: ui-monospace, monospace; font-size: 0.78rem;
-    padding: 0.6rem; border: 1px solid var(--border); border-radius: 6px;
-    background: var(--plane); color: var(--ink); resize: vertical;
-  }
-  /* two explicit paths, so the CPU-heavy one is never picked by accident */
-  .choice {
-    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
-    border: 1px solid var(--border); border-radius: 8px;
-    padding: 0.75rem 0.9rem; margin-bottom: 0.6rem;
-  }
-  .choice-body { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 0.15rem; }
-  .choice-body b { font-size: 0.88rem; }
-  .choice-body .muted { font-size: 0.78rem; line-height: 1.4; }
-  .choice code {
-    font-size: 0.75rem; background: var(--plane);
-    padding: 0.05rem 0.25rem; border-radius: 3px;
-  }
-
-  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 0.3rem; }
-  .muted { color: var(--muted); }
-  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .empty { text-align: center; padding: 2.5rem 1rem; color: var(--muted); font-size: 0.88rem; }
 </style>
 </head>
 <body>
 <div class="wrap">
 
   <header>
-    <h1>Han Scanner</h1>
-    <span class="muted" id="conn">connecting…</span>
+    <h1>Image Prep</h1>
+    <span class="muted" id="conn">…</span>
     <div class="spacer"></div>
     <span class="muted" id="sched-state"></span>
-    <button id="btn-sched">Pause</button>
     <button id="btn-logout">Sign out</button>
   </header>
 
   <div class="banner" id="banner" role="alert">
-    <b id="banner-title"></b>
-    <span id="banner-body"></span>
-    <div class="row" id="banner-actions"></div>
+    <b id="banner-title"></b><span id="banner-body"></span>
+    <div class="row" id="banner-actions" style="margin-top:0.55rem"></div>
   </div>
 
-  <div class="tabs">
-    <button class="on" data-tab="monitor">Monitor</button>
-    <button data-tab="data">Data</button>
-    <button data-tab="demo">Demo scan</button>
-  </div>
-
-  <!-- ================= MONITOR ================= -->
-  <div class="panel on" id="tab-monitor">
-
-    <!-- corpus progress: a single ratio against a limit -> meter, not a chart -->
-    <div class="card">
-      <h2>Corpus progress</h2>
-      <div class="hero">
-        <span class="big" id="p-scanned">—</span>
-        <span class="of">of <span id="p-total">—</span> posts scanned</span>
+  <!-- ============ status + run ============ -->
+  <div class="card">
+    <div class="strip">
+      <div class="stat">
+        <div class="k">Prepared</div>
+        <div class="v"><span id="s-prepared">—</span> <small>of <span id="s-total">—</span> posts</small></div>
       </div>
-      <div class="meter"><i id="p-meter" style="width:0%"></i></div>
-      <div class="row" style="margin-top:0.5rem; font-size:0.78rem;">
-        <span class="muted">source: <b id="p-source">—</b></span>
-        <span class="muted">remaining: <b id="p-remaining">—</b></span>
+      <div class="stat">
+        <div class="k">Images</div>
+        <div class="v" id="s-images">—</div>
       </div>
-    </div>
-
-    <div class="kpis" style="margin-bottom:1rem">
-      <div class="tile"><div class="label">Has Han</div><div class="value" id="k-valid">—</div><div class="sub">feeds Gemini</div></div>
-      <div class="tile"><div class="label">No Han</div><div class="value" id="k-invalid">—</div><div class="sub">filtered out</div></div>
-      <div class="tile"><div class="label">Ready for OCR</div><div class="value" id="k-ready">—</div><div class="sub">URLs issued, unscanned</div></div>
-      <div class="tile"><div class="label">Failed images</div><div class="value" id="k-failed">—</div><div class="sub">see breakdown</div></div>
-      <div class="tile accent"><div class="label">Throughput</div><div class="value" id="k-rate">—</div><div class="sub" id="k-eta">—</div></div>
-    </div>
-
-    <!-- VPS health: 8 GB / 4 vCPU box, RAM is the binding constraint -->
-    <div class="card">
-      <h2>VPS health</h2>
-      <div class="health">
-        <div class="tile">
-          <div class="label">Memory</div>
-          <div class="value" id="h-mem">—</div>
-          <div class="sub" id="h-mem-sub">—</div>
-          <div class="meter" style="margin-top:.45rem"><i id="h-mem-meter" style="width:0%"></i></div>
-          <svg class="spark" id="spark-mem" viewBox="0 0 240 40" preserveAspectRatio="none" aria-label="Memory usage over time"></svg>
-          <div class="spark-read" id="read-mem"></div>
-        </div>
-        <div class="tile">
-          <div class="label">CPU</div>
-          <div class="value" id="h-cpu">—</div>
-          <div class="sub" id="h-cpu-sub">—</div>
-          <div class="meter" style="margin-top:.45rem"><i id="h-cpu-meter" style="width:0%"></i></div>
-          <svg class="spark" id="spark-cpu" viewBox="0 0 240 40" preserveAspectRatio="none" aria-label="CPU usage over time"></svg>
-          <div class="spark-read" id="read-cpu"></div>
-        </div>
-        <div class="tile">
-          <div class="label">Disk</div>
-          <div class="value" id="h-disk">—</div>
-          <div class="sub" id="h-disk-sub">—</div>
-          <div class="meter" style="margin-top:.45rem"><i id="h-disk-meter" style="width:0%"></i></div>
-          <div class="sub" id="h-images" style="margin-top:.5rem">—</div>
-        </div>
-        <div class="tile">
-          <div class="label">OCR workers</div>
-          <div class="value" id="h-workers">—</div>
-          <div class="sub" id="h-worker-rss">—</div>
-          <table style="margin-top:.4rem"><tbody id="h-worker-rows"></tbody></table>
-        </div>
+      <div class="stat">
+        <div class="k">Failed</div>
+        <div class="v" id="s-failed">—</div>
       </div>
-    </div>
-
-    <!-- active batch -->
-    <div class="card">
-      <h2>Batch</h2>
-      <div class="row" style="margin-bottom:0.9rem">
-        <button class="primary" id="btn-start">Start batch</button>
-        <button id="btn-cancel" disabled>Cancel</button>
-        <button id="btn-retry" disabled>Retry failed</button>
-        <span class="muted" id="job-id"></span>
-      </div>
-
-      <div class="steps" id="steps"></div>
-      <div class="bars" id="bars"></div>
-      <div class="sub muted" id="preflight-line" style="margin-top:0.8rem; font-size:0.78rem"></div>
-    </div>
-
-    <div class="card">
-      <h2>Failures by class</h2>
-      <div id="errors"><p class="muted" style="font-size:0.82rem">No failures recorded.</p></div>
-    </div>
-
-    <div class="card">
-      <h2>Activity</h2>
-      <div class="log" id="log"><div class="muted">Waiting for a batch…</div></div>
-    </div>
-
-    <div class="card">
-      <h2>Recent results</h2>
-      <table>
-        <thead><tr><th>Post</th><th>Img</th><th>Verdict</th><th class="num">Han</th><th class="num">Boxes</th><th class="num">ms</th></tr></thead>
-        <tbody id="results"><tr><td colspan="6" class="muted">No results yet.</td></tr></tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ================= DATA ================= -->
-  <div class="panel" id="tab-data">
-    <div class="card">
-      <h2>1 · Upload valid_post.jsonl</h2>
-      <p class="muted" style="font-size:0.82rem; margin-bottom:0.7rem">
-        The crawler's export is cumulative, so re-uploading it after a fresh crawl is
-        normal — a local checkpoint means only genuinely new posts get scanned.
-      </p>
+      <div class="spacer"></div>
       <div class="row">
-        <input type="file" id="file-in" accept=".jsonl,.json,.ndjson"
-               style="font-size:0.85rem; flex:1; min-width:200px" />
-        <button class="primary" id="btn-upload">Upload</button>
-        <span class="muted" id="upload-status"></span>
+        <button class="primary" id="btn-run">Prepare next batch</button>
+        <button id="btn-cancel" disabled>Cancel</button>
       </div>
-      <div class="meter" id="upload-progress-wrap" style="margin-top:0.7rem; display:none">
-        <i id="upload-progress" style="width:0%"></i>
-      </div>
-      <div id="upload-summary" style="margin-top:0.9rem"></div>
     </div>
 
-    <div class="card">
-      <h2>2 · Process</h2>
-      <p class="muted" style="font-size:0.82rem; margin-bottom:0.9rem">
-        Runs one batch of <b id="cfg-batch">—</b> posts. Repeat until nothing is pending —
-        each run picks up where the last stopped.
-      </p>
-
-      <div class="choice">
-        <div class="choice-body">
-          <b>Prepare URLs only</b>
-          <span class="muted">Downloads each image and issues a signed URL on this
-          domain. Network-bound and light on CPU. Results go to
-          <code>ready_for_ocr.jsonl</code> with no verdict — OCR happens downstream.</span>
-        </div>
-        <button class="primary" id="btn-prepare">Prepare</button>
-      </div>
-
-      <div class="choice">
-        <div class="choice-body">
-          <b>Prepare + OCR here</b>
-          <span class="muted">Also runs PP-OCRv6 locally to split posts into
-          <code>han_valid</code> / <code>han_invalid</code>. <b>CPU-heavy</b> — on this
-          host it will saturate all cores for hours.</span>
-        </div>
-        <button id="btn-prepare-ocr">Prepare + OCR</button>
-      </div>
-
-      <p class="muted" id="scan-hint" style="font-size:0.78rem; margin-top:0.6rem"></p>
-    </div>
-
-    <div class="card">
-      <h2>3 · Download results</h2>
-      <p class="muted" style="font-size:0.82rem; margin-bottom:0.7rem">
-        <code>han_valid.jsonl</code> is the file the Gemini stage consumes — each record
-        carries signed image URLs on this domain.
-      </p>
-      <table>
-        <thead><tr><th>File</th><th class="num">Records</th><th class="num">Size</th><th></th></tr></thead>
-        <tbody id="downloads"><tr><td colspan="4" class="muted">Nothing produced yet.</td></tr></tbody>
-      </table>
+    <div class="meter" style="margin-top:0.8rem"><i id="s-meter" style="width:0%"></i></div>
+    <div class="row" style="margin-top:0.5rem; font-size:0.78rem">
+      <span class="muted" id="s-hint">—</span>
+      <span class="spacer"></span>
+      <span class="muted" id="job-line"></span>
     </div>
   </div>
 
-  <!-- ================= DEMO ================= -->
-  <div class="panel" id="tab-demo">
-    <div class="card">
-      <h2>Single-image scan</h2>
-      <p class="muted" style="font-size:0.82rem; margin-bottom:0.7rem">
-        Paste a post object (or any JSON with <code>image_urls</code>) to spot-check the OCR engine.
-      </p>
-      <textarea id="demo-in" placeholder='{"post_id":"…","image_urls":["https://…"]}'></textarea>
-      <div class="row" style="margin-top:0.6rem">
-        <button class="primary" id="btn-demo">Scan</button>
-        <span class="muted" id="demo-status"></span>
-      </div>
-      <div id="demo-out" style="margin-top:0.9rem"></div>
+  <!-- ============ gallery ============ -->
+  <div class="card">
+    <div class="row" style="margin-bottom:0.85rem">
+      <h2 style="margin:0">Prepared images</h2>
+      <span class="spacer"></span>
+      <input type="search" id="q" placeholder="author, post id, caption, or link…" style="min-width:240px" />
+      <button id="btn-prev" disabled>Prev</button>
+      <button id="btn-next" disabled>Next</button>
+      <span class="muted" id="page-info"></span>
     </div>
+    <div class="gallery" id="gallery"></div>
+    <div class="empty" id="gallery-empty" style="display:none"></div>
   </div>
+
+  <!-- ============ collapsed detail ============ -->
+  <details class="card">
+    <summary>Batch activity</summary>
+    <div id="bars" style="margin-bottom:0.8rem"></div>
+    <div class="muted" id="preflight-line" style="font-size:0.78rem; margin-bottom:0.7rem"></div>
+    <div class="log" id="log"><div class="muted">No batch running.</div></div>
+  </details>
+
+  <details class="card">
+    <summary>Failures</summary>
+    <div id="errors"><p class="muted" style="font-size:0.82rem">No failures recorded.</p></div>
+    <div class="row" style="margin-top:0.7rem">
+      <button id="btn-retry">Retry retryable failures</button>
+    </div>
+  </details>
+
+  <details class="card">
+    <summary>Host &amp; storage</summary>
+    <div class="kpis">
+      <div class="kpi"><div class="k">Memory</div><div class="v" id="h-mem">—</div><div class="s" id="h-mem-sub">—</div></div>
+      <div class="kpi"><div class="k">CPU</div><div class="v" id="h-cpu">—</div><div class="s" id="h-cpu-sub">—</div></div>
+      <div class="kpi"><div class="k">Disk</div><div class="v" id="h-disk">—</div><div class="s" id="h-disk-sub">—</div></div>
+      <div class="kpi"><div class="k">Image store</div><div class="v" id="h-imgcount">—</div><div class="s" id="h-imgsize">—</div></div>
+    </div>
+    <p class="muted" style="font-size:0.75rem; margin-top:0.7rem">
+      Nothing deletes downloaded images automatically — they must outlive the Gemini run that consumes them.
+    </p>
+  </details>
+
+  <details class="card">
+    <summary>Source &amp; downloads</summary>
+    <div class="row" style="margin-bottom:0.9rem">
+      <input type="file" id="file-in" accept=".jsonl,.json,.ndjson" />
+      <button class="primary" id="btn-upload">Upload valid_post.jsonl</button>
+      <span class="muted" id="upload-status"></span>
+    </div>
+    <div class="meter" id="up-wrap" style="display:none; margin-bottom:0.8rem"><i id="up-bar" style="width:0%"></i></div>
+    <div id="upload-summary" style="margin-bottom:1rem"></div>
+    <table>
+      <thead><tr><th>File</th><th class="num">Records</th><th class="num">Size</th><th></th></tr></thead>
+      <tbody id="downloads"><tr><td colspan="4" class="muted">Nothing produced yet.</td></tr></tbody>
+    </table>
+  </details>
+</div>
+
+<!-- ============ lightbox ============ -->
+<div class="lb" id="lb" role="dialog" aria-modal="true">
+  <button class="lb-close" id="lb-close">Close</button>
+  <div class="lb-inner" id="lb-inner"></div>
 </div>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const MAX_POINTS = 60;               // ~2 min of history at 2s polling
-const hist = { mem: [], cpu: [] };
-let activeJob = null, eventCursor = 0, lastScanned = null, lastScanTs = null;
-let lastMode = "upload";   // "upload" | "minio"
-let lastRunOcr = false;    // OCR is opt-in: it saturates the CPU
+const PAGE = 24;
+let offset = 0, query = "", total = 0, current = null;
+let activeJob = null, eventCursor = 0;
 
-const fmt = (n) => (n === null || n === undefined) ? "—" : n.toLocaleString();
-const pct = (n) => (n === null || n === undefined) ? "—" : n.toFixed(0) + "%";
+const fmt = (n) => (n === null || n === undefined) ? "—" : Number(n).toLocaleString();
+const pct = (n) => (n === null || n === undefined) ? "—" : Number(n).toFixed(0) + "%";
+const esc = (s) => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
+const mb = (b) => (!b ? "—" : (b / 1048576).toFixed(2) + " MB");
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -407,113 +336,128 @@ async function api(path, opts) {
   return res.json();
 }
 
-/* ---------- sparkline: 2px line, last point marked, hover readout ---------- */
-function drawSpark(svgId, readId, points, unit) {
-  const svg = $(svgId); const W = 240, H = 40, pad = 3;
-  if (!points.length) { svg.innerHTML = ""; return; }
-  const max = Math.max(100, ...points), min = 0;
-  const x = (i) => points.length === 1 ? W : (i / (points.length - 1)) * W;
-  const y = (v) => H - pad - ((v - min) / (max - min || 1)) * (H - pad * 2);
-  const d = points.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-  const area = `${d} L${W},${H} L0,${H} Z`;
-  const lastX = x(points.length - 1), lastY = y(points[points.length - 1]);
+/* ---------------- gallery ---------------- */
+async function loadGallery() {
+  let d;
+  try {
+    d = await api(`/api/gallery?offset=${offset}&limit=${PAGE}&q=${encodeURIComponent(query)}`);
+  } catch { return; }
 
-  svg.innerHTML =
-    `<path d="${area}" fill="var(--series-1)" opacity="0.10"/>` +
-    `<path d="${d}" fill="none" stroke="var(--series-1)" stroke-width="2"
-       vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>` +
-    `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="3"
-       fill="var(--series-1)" stroke="var(--surface)" stroke-width="2"/>` +
-    `<line id="${svgId}-cross" x1="0" y1="0" x2="0" y2="${H}" stroke="var(--axis)"
-       stroke-width="1" vector-effect="non-scaling-stroke" opacity="0"/>`;
+  total = d.total;
+  const grid = $("gallery"), empty = $("gallery-empty");
 
-  svg.onmousemove = (ev) => {
-    const r = svg.getBoundingClientRect();
-    const i = Math.round(((ev.clientX - r.left) / r.width) * (points.length - 1));
-    const v = points[Math.max(0, Math.min(points.length - 1, i))];
-    const cross = document.getElementById(`${svgId}-cross`);
-    if (cross) { cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", "1"); }
-    const agoS = (points.length - 1 - i) * 2;
-    $(readId).textContent = `${v.toFixed(1)}${unit} · ${agoS}s ago`;
-  };
-  svg.onmouseleave = () => {
-    const cross = document.getElementById(`${svgId}-cross`);
-    if (cross) cross.setAttribute("opacity", "0");
-    $(readId).textContent = "";
+  if (!d.items.length) {
+    grid.innerHTML = "";
+    empty.style.display = "block";
+    empty.textContent = query
+      ? `No prepared posts match “${query}”.`
+      : "Nothing prepared yet. Run a batch to download images and issue signed URLs.";
+  } else {
+    empty.style.display = "none";
+    grid.innerHTML = d.items.map((post, i) => {
+      const img = post.images[0];
+      const caption = (post.label || post.sub_caption || "").slice(0, 140);
+      const count = post.images.length > 1
+        ? `<span class="pill">${post.images.length} images</span>` : "";
+      return `
+        <div class="tile" data-i="${i}">
+          ${img
+            ? `<img class="thumb" loading="lazy" src="${esc(img.url)}" alt=""
+                 onerror="this.style.opacity=.25" />`
+            : `<div class="thumb"></div>`}
+          <div class="meta">
+            <span class="who">${esc(post.author || "unknown")}</span>
+            ${caption ? `<span class="cap">${esc(caption)}</span>` : ""}
+            <span class="foot">
+              <span>${esc(post.post_id.slice(0, 14))}</span>
+              ${count}
+            </span>
+          </div>
+        </div>`;
+    }).join("");
+
+    grid.querySelectorAll(".tile").forEach((el) => {
+      el.onclick = () => openLightbox(d.items[+el.dataset.i], 0);
+    });
+  }
+
+  const from = total ? offset + 1 : 0;
+  $("page-info").textContent = `${fmt(from)}–${fmt(offset + d.items.length)} of ${fmt(total)}`;
+  $("btn-prev").disabled = offset <= 0;
+  $("btn-next").disabled = !d.has_more;
+}
+
+function openLightbox(post, idx) {
+  current = { post, idx };
+  const img = post.images[idx];
+  const strip = post.images.length > 1
+    ? `<div class="thumbstrip">${post.images.map((im, i) =>
+        `<img src="${esc(im.url)}" class="${i === idx ? "on" : ""}" data-i="${i}" alt="" />`).join("")}</div>`
+    : "";
+
+  $("lb-inner").innerHTML = `
+    <div class="lb-img">${img ? `<img src="${esc(img.url)}" alt="" />` : ""}</div>
+    <div class="lb-side">
+      <h3>${esc(post.author || "unknown")}</h3>
+      <div class="muted" style="font-size:0.74rem">${esc(post.post_id)}</div>
+      ${post.label || post.sub_caption
+        ? `<div class="cap">${esc(post.label || post.sub_caption)}</div>` : "<div style='height:.7rem'></div>"}
+      ${strip}
+      <dl class="kv" style="margin-top:0.9rem">
+        <dt>Image</dt><dd>${idx + 1} of ${post.images.length}</dd>
+        <dt>Size</dt><dd>${img && img.width ? `${img.width}×${img.height}` : "—"} · ${mb(img && img.bytes)}</dd>
+        <dt>Type</dt><dd>${esc((img && img.content_type) || "—")}</dd>
+        <dt>SHA-256</dt><dd>${esc(((img && img.sha256) || "—").slice(0, 24))}…</dd>
+        <dt>Prepared</dt><dd>${esc((post.prepared_at || "").slice(0, 19))}</dd>
+        <dt>CDN expiry</dt><dd>${esc(((img && img.source_expires_at) || "—").slice(0, 19))}</dd>
+        <dt>URL expiry</dt><dd>${esc(((img && img.url_expires_at) || "—").slice(0, 19))}</dd>
+      </dl>
+      <div class="row" style="margin-top:1rem">
+        ${post.post_link ? `<a href="${esc(post.post_link)}" target="_blank" rel="noopener"><button class="primary">Open post</button></a>` : ""}
+        <button id="lb-copy">Copy image URL</button>
+      </div>
+      <p class="muted" style="font-size:0.7rem; margin-top:0.6rem">
+        This URL is what the Gemini stage fetches. It needs no login.
+      </p>
+    </div>`;
+
+  $("lb").classList.add("show");
+  $("lb-inner").querySelectorAll(".thumbstrip img").forEach((el) => {
+    el.onclick = (e) => { e.stopPropagation(); openLightbox(post, +el.dataset.i); };
+  });
+  const copy = $("lb-copy");
+  if (copy) copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(img.url); copy.textContent = "Copied"; }
+    catch { copy.textContent = "Copy failed"; }
+    setTimeout(() => { copy.textContent = "Copy image URL"; }, 1500);
   };
 }
 
-function meterClass(p) { return p >= 90 ? "crit" : p >= 75 ? "warn" : "good"; }
+function closeLightbox() { $("lb").classList.remove("show"); current = null; }
+$("lb-close").onclick = closeLightbox;
+$("lb").onclick = (e) => { if (e.target === $("lb")) closeLightbox(); };
+document.addEventListener("keydown", (e) => {
+  if (!current) return;
+  if (e.key === "Escape") closeLightbox();
+  if (e.key === "ArrowRight" && current.idx + 1 < current.post.images.length) openLightbox(current.post, current.idx + 1);
+  if (e.key === "ArrowLeft" && current.idx > 0) openLightbox(current.post, current.idx - 1);
+});
 
-/* ---------- health ---------- */
-async function pollHealth() {
-  let h;
-  try { h = await api("/api/health/system"); } catch { return; }
+$("btn-prev").onclick = () => { offset = Math.max(0, offset - PAGE); loadGallery(); };
+$("btn-next").onclick = () => { offset += PAGE; loadGallery(); };
+let searchTimer;
+$("q").oninput = (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { query = e.target.value; offset = 0; loadGallery(); }, 250);
+};
 
-  if (h.memory && h.memory.available) {
-    const m = h.memory;
-    $("h-mem").textContent = pct(m.percent);
-    $("h-mem-sub").textContent = `${(m.used_mb/1024).toFixed(1)} / ${(m.total_mb/1024).toFixed(1)} GB`;
-    const el = $("h-mem-meter"); el.style.width = m.percent + "%";
-    el.parentElement.className = "meter " + meterClass(m.percent);
-    hist.mem.push(m.percent); if (hist.mem.length > MAX_POINTS) hist.mem.shift();
-    drawSpark("spark-mem", "read-mem", hist.mem, "%");
-  }
-  if (h.cpu && h.cpu.available) {
-    const c = h.cpu;
-    $("h-cpu").textContent = pct(c.percent);
-    $("h-cpu-sub").textContent = `${c.count} vCPU`;
-    const el = $("h-cpu-meter"); el.style.width = Math.min(100, c.percent) + "%";
-    el.parentElement.className = "meter " + meterClass(c.percent);
-    hist.cpu.push(c.percent); if (hist.cpu.length > MAX_POINTS) hist.cpu.shift();
-    drawSpark("spark-cpu", "read-cpu", hist.cpu, "%");
-  }
-  if (h.disk && h.disk.available) {
-    const d = h.disk;
-    $("h-disk").textContent = pct(d.percent);
-    $("h-disk-sub").textContent = `${d.free_gb} GB free of ${d.total_gb} GB`;
-    const el = $("h-disk-meter"); el.style.width = d.percent + "%";
-    el.parentElement.className = "meter " + meterClass(d.percent);
-  }
-  if (h.images) $("h-images").textContent = `${fmt(h.images.count)} images stored · ${h.images.mb} MB`;
-
-  const p = h.processes || {};
-  $("h-workers").textContent = p.worker_count ?? 0;
-  const limit = (h.config && h.config.memory_limit_mb) || 0;
-  $("h-worker-rss").textContent = p.available
-    ? `${p.worker_rss_mb || 0} MB` + (limit ? ` of ${limit} MB cap` : "")
-    : "psutil unavailable";
-  $("h-worker-rows").innerHTML = (p.workers || [])
-    .map((w) => `<tr><td class="muted">pid ${w.pid}</td><td class="num">${w.rss_mb} MB</td></tr>`)
-    .join("");
-
-  if (h.config) $("cfg-batch").textContent = fmt(h.config.batch_size);
-
-  if (h.scheduler) {
-    const s = h.scheduler;
-    const minioOn = h.config && h.config.minio_enabled;
-    // The scheduler only polls MinIO, so in upload mode it is idle by design —
-    // showing "paused" there would read as a fault.
-    if (!minioOn) {
-      $("sched-state").textContent = "manual (upload mode)";
-      $("btn-sched").style.display = "none";
-    } else {
-      $("btn-sched").style.display = "";
-      $("sched-state").textContent = s.paused ? "scheduler paused" : `scheduler every ${s.interval_s}s`;
-      $("btn-sched").textContent = s.paused ? "Resume" : "Pause";
-      if (s.last_error) showBanner("Scheduler error", s.last_error, true);
-    }
-  }
-}
-
-/* ---------- pipeline ---------- */
+/* ---------------- pipeline ---------------- */
 async function pollPipeline() {
   let p;
   try { p = await api("/api/pipeline"); } catch { return; }
 
-  // MinIO is optional: when it isn't configured that's the normal upload flow,
-  // not an error state, so don't dress it up as one.
-  const m = p.minio || {};
+  const m = p.minio || {}, up = p.upload || {};
+  // MinIO is optional; not configured is a mode, not a fault.
   if (!m.configured) {
     $("conn").innerHTML = `<span class="dot" style="background:var(--series-1)"></span>upload mode`;
   } else if (m.connected) {
@@ -523,139 +467,42 @@ async function pollPipeline() {
     if (m.error) showBanner("MinIO unreachable", m.error, true);
   }
 
-  const up = p.upload || {};
-  $("p-scanned").textContent   = fmt(p.processed_total);
-  $("p-total").textContent     = fmt(p.corpus_total);
-  $("p-remaining").textContent = fmt(p.remaining);
-  $("p-source").textContent    = up.present
-    ? `upload ${up.upload_id}`
-    : (m.configured ? "MinIO" : "none yet");
-  $("p-meter").style.width     = (p.percent || 0) + "%";
+  $("s-prepared").textContent = fmt(p.processed_total);
+  $("s-total").textContent    = fmt(p.corpus_total);
+  $("s-failed").textContent   = fmt(p.failed);
+  $("s-meter").style.width    = (p.percent || 0) + "%";
 
-  $("k-valid").textContent   = fmt(p.han_valid);
-  $("k-invalid").textContent = fmt(p.han_invalid);
-  $("k-ready").textContent   = fmt(p.ready_for_ocr);
-  $("k-failed").textContent  = fmt(p.failed);
+  $("s-hint").textContent = up.present
+    ? (up.pending_posts
+        ? `${fmt(up.pending_posts)} posts pending (${fmt(up.pending_images)} images)`
+        : "nothing pending — all posts prepared")
+    : (m.configured ? "reading from MinIO" : "upload a valid_post.jsonl to begin");
 
   renderDownloads(p.downloads || []);
-  renderScanHint(up, p.busy);
-
+  $("btn-run").disabled = !!p.busy || (!up.present && !m.configured);
   if (p.active_job && !activeJob) activeJob = p.active_job.job_id;
-  $("btn-start").disabled = !!p.busy;
-  const blocked = !!p.busy || !up.present || !up.pending_posts;
-  $("btn-prepare").disabled = blocked;
-  $("btn-prepare-ocr").disabled = blocked;
 }
 
-function renderScanHint(up, busy) {
-  const el = $("scan-hint");
-  if (busy) { el.textContent = "a batch is already running"; return; }
-  if (!up.present) { el.textContent = "upload a file first"; return; }
-  el.textContent = up.pending_posts
-    ? `${fmt(up.pending_posts)} posts pending (${fmt(up.pending_images)} images)`
-    : "nothing pending — all posts already scanned";
+async function pollGalleryStats() {
+  try { $("s-images").textContent = fmt((await api("/api/gallery/stats")).images); } catch {}
 }
 
 function renderDownloads(files) {
   const any = files.some((f) => f.available);
   $("downloads").innerHTML = any ? files.map((f) => `
-      <tr>
-        <td><code>${f.name}</code></td>
-        <td class="num">${f.available ? fmt(f.lines) : "—"}</td>
-        <td class="num">${f.available ? (f.bytes / 1048576).toFixed(2) + " MB" : "—"}</td>
-        <td style="text-align:right">${f.available
-          ? `<a href="/api/results/${f.name}" download><button>Download</button></a>`
-          : `<span class="muted">not yet</span>`}</td>
-      </tr>`).join("")
+    <tr>
+      <td><code>${f.name}</code></td>
+      <td class="num">${f.available ? fmt(f.lines) : "—"}</td>
+      <td class="num">${f.available ? mb(f.bytes) : "—"}</td>
+      <td style="text-align:right">${f.available
+        ? `<a href="/api/results/${f.name}" download><button>Download</button></a>`
+        : `<span class="muted">not yet</span>`}</td>
+    </tr>`).join("")
     : `<tr><td colspan="4" class="muted">Nothing produced yet.</td></tr>`;
 }
 
-/* ---------- upload ---------- */
-$("btn-upload").onclick = () => {
-  const input = $("file-in");
-  const file = input.files && input.files[0];
-  if (!file) { $("upload-status").textContent = "choose a file first"; return; }
-
-  const body = new FormData();
-  body.append("file", file);
-
-  // XHR rather than fetch: a cumulative export is tens of MB and upload
-  // progress is worth showing.
-  const xhr = new XMLHttpRequest();
-  const wrap = $("upload-progress-wrap");
-  wrap.style.display = "block";
-  $("btn-upload").disabled = true;
-  $("upload-status").textContent = "uploading…";
-
-  xhr.upload.onprogress = (e) => {
-    if (e.lengthComputable) $("upload-progress").style.width = (e.loaded / e.total * 100) + "%";
-  };
-  xhr.onload = () => {
-    $("btn-upload").disabled = false;
-    wrap.style.display = "none";
-    $("upload-progress").style.width = "0%";
-    if (xhr.status === 401) { window.location.reload(); return; }
-    let d;
-    try { d = JSON.parse(xhr.responseText); } catch { d = {}; }
-    if (xhr.status >= 400) {
-      $("upload-status").textContent = "";
-      showBanner("Upload failed", d.detail || `HTTP ${xhr.status}`, true);
-      return;
-    }
-    $("upload-status").textContent = "";
-    renderUploadSummary(d);
-    pollPipeline();
-  };
-  xhr.onerror = () => {
-    $("btn-upload").disabled = false;
-    wrap.style.display = "none";
-    $("upload-status").textContent = "";
-    showBanner("Upload failed", "network error", true);
-  };
-  xhr.open("POST", "/api/uploads");
-  xhr.send(body);
-};
-
-function renderUploadSummary(d) {
-  if (!d.present) { $("upload-summary").innerHTML = ""; return; }
-  const nothing = !d.scannable_posts;
-  $("upload-summary").innerHTML = `
-    <div class="kpis">
-      <div class="tile"><div class="label">Scannable posts</div><div class="value">${fmt(d.scannable_posts)}</div></div>
-      <div class="tile"><div class="label">Already scanned</div><div class="value">${fmt(d.already_processed)}</div><div class="sub">skipped by checkpoint</div></div>
-      <div class="tile accent"><div class="label">Pending</div><div class="value">${fmt(d.pending_posts)}</div><div class="sub">${fmt(d.pending_images)} images</div></div>
-      <div class="tile"><div class="label">Malformed lines</div><div class="value">${fmt(d.malformed_lines)}</div><div class="sub">skipped</div></div>
-    </div>
-    ${nothing ? `<p style="color:var(--warning);font-size:0.82rem;margin-top:0.7rem">
-      No scannable posts found. Check this is the crawler's <code>valid_post.jsonl</code> —
-      records need <code>is_valid: true</code> and a non-empty <code>image_urls</code>.</p>` : ""}`;
-}
-
-$("btn-prepare").onclick     = () => startBatch(false, "upload", false);
-$("btn-prepare-ocr").onclick = () => startBatch(false, "upload", true);
-
-/* ---------- batch ---------- */
-const PHASES = ["preflight", "download", "ocr", "publish", "done"];
-
-function renderSteps(phase, runOcr) {
-  const phases = runOcr === false
-    ? PHASES.filter((p) => p !== "ocr")   // OCR never runs in prepare-only mode
-    : PHASES;
-  const i = phases.indexOf(phase);
-  $("steps").innerHTML = phases.map((name, n) => {
-    const cls = phase === name ? "active" : (i > n && i >= 0 ? "done" : "");
-    return `<span class="step ${cls}">${name}</span>`;
-  }).join("");
-}
-
-function bar(label, done, total, note) {
-  const p = total ? Math.min(100, (done / total) * 100) : 0;
-  return `<div class="bar-row">
-      <div class="top"><span>${label}${note ? ` <span class="muted">${note}</span>` : ""}</span>
-        <span><b>${fmt(done)}</b> / ${fmt(total)}</span></div>
-      <div class="meter"><i style="width:${p}%"></i></div>
-    </div>`;
-}
+/* ---------------- job ---------------- */
+const PHASES = ["preflight", "download", "publish", "done"];
 
 async function pollJob() {
   if (!activeJob) return;
@@ -663,50 +510,46 @@ async function pollJob() {
   try { j = await api(`/api/jobs/${activeJob}`); } catch { activeJob = null; return; }
 
   const c = j.counts || {};
-  $("job-id").textContent =
-    `${j.job_id} · ${j.phase} · ${j.run_ocr ? "with OCR" : "URLs only"}`;
-  renderSteps(j.phase, j.run_ocr);
-
+  $("job-line").textContent = `${j.job_id} · ${j.phase}`;
   $("bars").innerHTML =
     bar("Downloaded", c.downloaded, c.total_images, c.download_failed ? `· ${c.download_failed} failed` : "") +
-    (j.run_ocr === false ? "" :
-      bar("Scanned", c.scanned, c.total_images, c.scan_failed ? `· ${c.scan_failed} failed` : "")) +
     bar("Published", c.published, c.total_posts, "posts");
 
   const pf = j.preflight || {};
   $("preflight-line").textContent = pf.total
-    ? `Preflight: ${pf.total} images — ${pf.expired} expired, ${pf.expiring_soon} expiring soon, ${pf.healthy} healthy, ${pf.unknown_expiry} unknown expiry.`
+    ? `Preflight: ${pf.total} images — ${pf.expired} expired, ${pf.expiring_soon} expiring soon, ${pf.healthy} healthy.`
     : "";
 
-  // throughput + ETA from the scanned counter between polls
-  const now = Date.now();
-  if (lastScanned !== null && c.scanned > lastScanned) {
-    const rate = (c.scanned - lastScanned) / ((now - lastScanTs) / 1000);
-    $("k-rate").textContent = rate.toFixed(2) + "/s";
-    const left = (c.total_images || 0) - (c.scanned || 0);
-    $("k-eta").textContent = rate > 0 ? `~${Math.ceil(left / rate / 60)} min left in batch` : "—";
-  }
-  if (lastScanned === null || c.scanned !== lastScanned) { lastScanned = c.scanned; lastScanTs = now; }
-
-  const active = j.is_active;
-  $("btn-cancel").disabled = !active;
-  $("btn-retry").disabled  = active;
+  $("btn-cancel").disabled = !j.is_active;
 
   if (j.awaiting_confirmation) {
     showBanner(
       "Paused — most source URLs have already expired",
-      `${pf.expired} of ${pf.total} images are past their signed-URL expiry. ` +
-      `Re-crawling is usually the right move; scanning anyway will mostly produce failures.`,
+      `${pf.expired} of ${pf.total} images are past their signed-URL expiry. Re-crawling is usually the right move.`,
       false,
-      [{ label: "Scan anyway", cls: "danger", fn: () => startBatch(true) }]
+      [{ label: "Prepare anyway", cls: "danger", fn: () => startBatch(true) }]
     );
   }
 
   await pollEvents();
   await pollErrors();
-  await pollResults();
 
-  if (!active) { activeJob = null; lastScanned = null; }
+  if (!j.is_active) {
+    activeJob = null;
+    // A finished batch means new images to browse.
+    offset = 0; loadGallery(); pollGalleryStats(); pollPipeline();
+  }
+}
+
+function bar(label, done, totalN, note) {
+  const p = totalN ? Math.min(100, (done / totalN) * 100) : 0;
+  return `<div style="margin-bottom:0.6rem">
+      <div class="row" style="font-size:0.78rem; justify-content:space-between; margin-bottom:0.2rem">
+        <span>${label} ${note ? `<span class="muted">${note}</span>` : ""}</span>
+        <span><b>${fmt(done)}</b> / ${fmt(totalN)}</span>
+      </div>
+      <div class="meter"><i style="width:${p}%"></i></div>
+    </div>`;
 }
 
 async function pollEvents() {
@@ -719,8 +562,7 @@ async function pollEvents() {
   for (const e of d.events) {
     const div = document.createElement("div");
     div.className = e.level;
-    const t = (e.ts || "").slice(11, 19);
-    div.innerHTML = `<span class="ts">${t}</span>  ${escapeHtml(e.message)}`;
+    div.innerHTML = `<span class="ts">${(e.ts || "").slice(11, 19)}</span>  ${esc(e.message)}`;
     log.appendChild(div);
   }
   eventCursor = d.cursor;
@@ -736,97 +578,86 @@ async function pollErrors() {
     $("errors").innerHTML = `<p class="muted" style="font-size:0.82rem">No failures recorded.</p>`;
     return;
   }
-  const RETRYABLE = new Set(["http_429", "http_5xx", "timeout", "dns_error", "ocr_error"]);
+  const RETRYABLE = new Set(["http_429", "http_5xx", "timeout", "dns_error"]);
   const max = entries[0][1].count;
-  $("errors").innerHTML = entries.map(([name, info]) => {
-    const w = (info.count / max) * 100;
-    const retry = RETRYABLE.has(name);
-    const tag = `<span class="tag ${retry ? "retry" : "term"}">${retry ? "retryable" : "terminal"}</span>`;
-    const sample = info.sample && info.sample.detail ? escapeHtml(String(info.sample.detail).slice(0, 90)) : "";
-    return `<div class="ebar" title="${sample}">
-        <span class="name">${name}${tag}</span>
-        <span class="track"><span class="fill" style="width:${w}%"></span></span>
+  $("errors").innerHTML = entries.map(([name, info]) => `
+      <div class="ebar" title="${esc(info.sample?.detail || "")}">
+        <span class="name">${name}
+          <span class="pill">${RETRYABLE.has(name) ? "retryable" : "terminal"}</span></span>
+        <span class="track"><span class="fill" style="width:${(info.count / max) * 100}%"></span></span>
         <span class="n">${fmt(info.count)}</span>
-      </div>`;
-  }).join("") + `<p class="muted" style="font-size:0.72rem;margin-top:.5rem">
-      ${fmt(d.total)} failed images. Retryable classes can be re-run with “Retry failed”.</p>`;
+      </div>`).join("");
 }
 
-async function pollResults() {
-  if (!activeJob) return;
-  let d;
-  try { d = await api(`/api/jobs/${activeJob}/results?limit=15`); } catch { return; }
-  const rows = d.results.slice(-15).reverse();
-  $("results").innerHTML = rows.length ? rows.map((r) => `
-      <tr>
-        <td>${escapeHtml(r.post_id || "")}</td>
-        <td class="num">${r.idx}</td>
-        <td>${!r.ok
-          ? `<span class="dot" style="background:var(--critical)"></span>${escapeHtml(r.error_class || "failed")}`
-          : r.valid_pic === null || r.valid_pic === undefined
-            // null means nothing looked at it — never render that as "none"
-            ? `<span class="dot" style="background:var(--series-1)"></span>not scanned`
-            : r.valid_pic
-              ? `<span class="dot" style="background:var(--good)"></span>has Han`
-              : `<span class="dot" style="background:var(--axis)"></span>none`}</td>
-        <!-- em dash, not 0: an unscanned image has no count, and "0" would
-             read as "measured, found nothing" -->
-        <td class="num">${r.han_words ?? "—"}</td>
-        <td class="num">${r.boxes ?? "—"}</td>
-        <td class="num">${r.scan_ms ?? "—"}</td>
-      </tr>`).join("")
-    : `<tr><td colspan="6" class="muted">No results yet.</td></tr>`;
+/* ---------------- health ---------------- */
+function meterClass(p) { return p >= 90 ? "crit" : p >= 75 ? "warn" : "good"; }
+
+async function pollHealth() {
+  let h;
+  try { h = await api("/api/health/system"); } catch { return; }
+
+  if (h.memory?.available) {
+    $("h-mem").textContent = pct(h.memory.percent);
+    $("h-mem-sub").textContent = `${(h.memory.used_mb / 1024).toFixed(1)} / ${(h.memory.total_mb / 1024).toFixed(1)} GB`;
+  }
+  if (h.cpu?.available) {
+    $("h-cpu").textContent = pct(h.cpu.percent);
+    $("h-cpu-sub").textContent = `${h.cpu.count} vCPU`;
+  }
+  if (h.disk?.available) {
+    $("h-disk").textContent = pct(h.disk.percent);
+    $("h-disk-sub").textContent = `${h.disk.free_gb} GB free of ${h.disk.total_gb} GB`;
+  }
+  if (h.images) {
+    $("h-imgcount").textContent = fmt(h.images.count);
+    $("h-imgsize").textContent = `${h.images.mb} MB on disk`;
+  }
+  if (h.scheduler) {
+    const on = h.config?.minio_enabled;
+    $("sched-state").textContent = on
+      ? (h.scheduler.paused ? "scheduler paused" : `auto every ${h.scheduler.interval_s}s`)
+      : "manual";
+  }
 }
 
-/* ---------- banner ---------- */
+/* ---------------- actions ---------------- */
 function showBanner(title, body, critical, actions) {
-  const b = $("banner");
   $("banner-title").textContent = title;
   $("banner-body").textContent = body;
-  b.className = "banner show" + (critical ? " crit" : "");
+  $("banner").className = "banner show" + (critical ? " crit" : "");
   const row = $("banner-actions"); row.innerHTML = "";
   for (const a of actions || []) {
-    const btn = document.createElement("button");
-    btn.textContent = a.label; btn.className = a.cls || "";
-    btn.onclick = () => { hideBanner(); a.fn(); };
-    row.appendChild(btn);
+    const b = document.createElement("button");
+    b.textContent = a.label; b.className = a.cls || "";
+    b.onclick = () => { hideBanner(); a.fn(); };
+    row.appendChild(b);
   }
-  const dismiss = document.createElement("button");
-  dismiss.textContent = "Dismiss"; dismiss.onclick = hideBanner;
-  row.appendChild(dismiss);
+  const d = document.createElement("button");
+  d.textContent = "Dismiss"; d.onclick = hideBanner;
+  row.appendChild(d);
 }
 function hideBanner() { $("banner").className = "banner"; }
 
-function escapeHtml(s) {
-  const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML;
-}
-
-/* ---------- actions ---------- */
-async function startBatch(confirmExpired, mode, runOcr) {
-  $("btn-start").disabled = true;
-  lastMode = mode || lastMode;
-  if (runOcr !== undefined) lastRunOcr = !!runOcr;
+async function startBatch(confirmExpired) {
+  $("btn-run").disabled = true;
   try {
     const d = await api("/api/jobs", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        confirm_expired: !!confirmExpired, mode: lastMode, run_ocr: lastRunOcr,
-      }),
+      body: JSON.stringify({ confirm_expired: !!confirmExpired }),
     });
-    activeJob = d.job_id; eventCursor = 0; lastScanned = null;
-    $("log").innerHTML = "";
-    // Jump to the monitor so progress is visible immediately.
-    document.querySelector('.tabs button[data-tab="monitor"]').click();
+    activeJob = d.job_id; eventCursor = 0; $("log").innerHTML = "";
+    document.querySelector("details.card").open = true;
   } catch (e) {
-    showBanner("Could not start batch", e.message, true);
-    $("btn-start").disabled = false;
+    showBanner("Could not start", e.message, true);
+    $("btn-run").disabled = false;
   }
 }
 
-$("btn-start").onclick  = () => startBatch(false);
+$("btn-run").onclick = () => startBatch(false);
 $("btn-cancel").onclick = async () => {
   if (!activeJob) return;
-  try { await api(`/api/jobs/${activeJob}/cancel`, { method: "POST" }); } catch (e) { showBanner("Cancel failed", e.message, true); }
+  try { await api(`/api/jobs/${activeJob}/cancel`, { method: "POST" }); }
+  catch (e) { showBanner("Cancel failed", e.message, true); }
 };
 $("btn-retry").onclick = async () => {
   const target = activeJob || (await api("/api/jobs?limit=1")).jobs[0]?.job_id;
@@ -837,53 +668,61 @@ $("btn-retry").onclick = async () => {
     activeJob = d.job_id; eventCursor = 0; $("log").innerHTML = "";
   } catch (e) { showBanner("Retry failed", e.message, true); }
 };
-$("btn-sched").onclick = async () => {
-  const paused = $("btn-sched").textContent === "Resume";
-  await api(`/api/scheduler/${paused ? "resume" : "pause"}`, { method: "POST" });
-  pollHealth();
-};
 $("btn-logout").onclick = async () => {
   await fetch("/api/auth/logout", { method: "POST" });
   window.location.reload();
 };
 
-document.querySelectorAll(".tabs button").forEach((b) => {
-  b.onclick = () => {
-    document.querySelectorAll(".tabs button").forEach((x) => x.classList.remove("on"));
-    document.querySelectorAll(".panel").forEach((p) => p.classList.remove("on"));
-    b.classList.add("on");
-    $("tab-" + b.dataset.tab).classList.add("on");
-  };
-});
+$("btn-upload").onclick = () => {
+  const file = $("file-in").files?.[0];
+  if (!file) { $("upload-status").textContent = "choose a file first"; return; }
 
-$("btn-demo").onclick = async () => {
-  const raw = $("demo-in").value.trim();
-  if (!raw) return;
-  $("demo-status").textContent = "scanning…";
-  $("demo-out").innerHTML = "";
-  try {
-    const body = JSON.parse(raw);
-    const d = await api("/api/scan", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    });
-    const good = d.valid_pic;
-    $("demo-out").innerHTML = `
-      <div class="tile" style="border-color:${good ? "var(--good)" : "var(--axis)"}">
-        <div class="label">${good ? "Has Han text" : "No Han text"}</div>
-        <div class="value">${d.han_words} <span class="sub">Han chars in ${d.boxes} boxes</span></div>
-        <div class="log" style="margin-top:.6rem">${(d.texts || []).map(escapeHtml).join("<br>") || "<span class='muted'>no text</span>"}</div>
-      </div>`;
-    $("demo-status").textContent = "";
-  } catch (e) {
-    $("demo-status").textContent = "";
-    $("demo-out").innerHTML = `<p style="color:var(--critical);font-size:0.85rem">${escapeHtml(e.message)}</p>`;
-  }
+  const body = new FormData(); body.append("file", file);
+  const xhr = new XMLHttpRequest();
+  $("up-wrap").style.display = "block";
+  $("btn-upload").disabled = true;
+  $("upload-status").textContent = "uploading…";
+
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) $("up-bar").style.width = (e.loaded / e.total * 100) + "%";
+  };
+  xhr.onload = () => {
+    $("btn-upload").disabled = false;
+    $("up-wrap").style.display = "none"; $("up-bar").style.width = "0%";
+    if (xhr.status === 401) { window.location.reload(); return; }
+    let d; try { d = JSON.parse(xhr.responseText); } catch { d = {}; }
+    $("upload-status").textContent = "";
+    if (xhr.status >= 400) { showBanner("Upload failed", d.detail || `HTTP ${xhr.status}`, true); return; }
+    renderUploadSummary(d);
+    pollPipeline();
+  };
+  xhr.onerror = () => {
+    $("btn-upload").disabled = false;
+    $("up-wrap").style.display = "none";
+    $("upload-status").textContent = "";
+    showBanner("Upload failed", "network error", true);
+  };
+  xhr.open("POST", "/api/uploads");
+  xhr.send(body);
 };
 
-/* ---------- loops ---------- */
-pollHealth(); pollPipeline(); pollJob();
-setInterval(pollHealth, 2000);
+function renderUploadSummary(d) {
+  if (!d.present) { $("upload-summary").innerHTML = ""; return; }
+  $("upload-summary").innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><div class="k">Scannable</div><div class="v">${fmt(d.scannable_posts)}</div></div>
+      <div class="kpi"><div class="k">Already done</div><div class="v">${fmt(d.already_processed)}</div><div class="s">skipped by checkpoint</div></div>
+      <div class="kpi"><div class="k">Pending</div><div class="v">${fmt(d.pending_posts)}</div><div class="s">${fmt(d.pending_images)} images</div></div>
+      <div class="kpi"><div class="k">Malformed</div><div class="v">${fmt(d.malformed_lines)}</div><div class="s">lines skipped</div></div>
+    </div>
+    ${!d.scannable_posts ? `<p style="color:var(--warning);font-size:0.82rem;margin-top:0.7rem">
+      No scannable posts found — check this is the crawler's <code>valid_post.jsonl</code>.</p>` : ""}`;
+}
+
+/* ---------------- loops ---------------- */
+pollPipeline(); pollHealth(); pollGalleryStats(); loadGallery(); pollJob();
 setInterval(pollPipeline, 5000);
+setInterval(pollHealth, 5000);
 setInterval(pollJob, 2000);
 </script>
 </body>
