@@ -64,9 +64,19 @@ def cmd_check() -> int:
     ))
 
     index = drive.DriveIndex(
-        settings.drive_index_path, settings.drive.folder_id, settings.drive.api_key
+        settings.drive_index_path,
+        settings.drive.folder_id,
+        settings.drive.service_account,
     )
-    print(f"drive index   : {len(index.load())} files")
+    meta = index.meta()
+    route = "service account" if settings.drive.complete_listing else (
+        f"public folder page (caps at {drive.EMBEDDED_VIEW_LIMIT})"
+    )
+    print(f"drive listing : {route}")
+    print(
+        f"drive index   : {len(index.load())} files"
+        + (" (TRUNCATED)" if meta.get("truncated") else "")
+    )
 
     missing = [k for k, v in describe_secrets().items()
                if not v and k in {"AUTH_SECRET", "APP_PASSWORD_HASH"}]
@@ -141,7 +151,10 @@ def cmd_drive_index() -> int:
 
     settings = _settings()
     index = DriveIndex(
-        settings.drive_index_path, settings.drive.folder_id, settings.drive.api_key
+        settings.drive_index_path,
+        settings.drive.folder_id,
+        settings.drive.service_account,
+        timeout_s=settings.drive.timeout_s,
     )
     report = asyncio.run(index.refresh())
     if report.error:

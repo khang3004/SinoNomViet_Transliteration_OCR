@@ -73,19 +73,27 @@ def parse_targets(raw: str) -> dict[Band, float]:
 class DriveConfig:
     """The upstream team's public image folder.
 
-    ``api_key`` is a plain Google API key restricted to the Drive API. It reads
-    only what is already public; it is still an env secret because a leaked key
-    burns someone's quota.
+    Only ``folder_id`` is required: images download anonymously, and the folder
+    can be listed anonymously too, just capped at 5,500 entries.
+
+    ``service_account`` — a path to a service-account JSON key, or the JSON
+    itself — lifts that cap. It is the only way Drive will list a folder of
+    arbitrary size; an API key is refused outright by ``files.list``.
     """
 
     folder_id: str = ""
-    api_key: str = ""
-    timeout_s: float = 60.0
+    service_account: str = ""
+    timeout_s: float = 120.0
     max_bytes: int = 25 * 1024 * 1024
 
     @property
     def configured(self) -> bool:
-        return bool(self.folder_id and self.api_key)
+        return bool(self.folder_id)
+
+    @property
+    def complete_listing(self) -> bool:
+        """Whether the whole folder can be seen, not just the first 5,500."""
+        return bool(self.folder_id and self.service_account)
 
 
 @dataclass(frozen=True)
@@ -154,8 +162,8 @@ def load_settings() -> Settings:
         drive=DriveConfig(
             # Accept the full folder URL too — that is what gets pasted.
             folder_id=folder_id_from(_env("GOOGLE_DRIVE_FOLDER_ID")),
-            api_key=_env("GOOGLE_DRIVE_API_KEY"),
-            timeout_s=_env_float("DRIVE_TIMEOUT", 60.0),
+            service_account=_env("GOOGLE_SERVICE_ACCOUNT"),
+            timeout_s=_env_float("DRIVE_TIMEOUT", 120.0),
             max_bytes=_env_int("DRIVE_MAX_BYTES", 25 * 1024 * 1024),
         ),
         images=ImageServeConfig(
@@ -179,5 +187,5 @@ def describe_secrets() -> dict[str, bool]:
         "AUTH_SECRET": bool(_env("AUTH_SECRET")),
         "APP_PASSWORD_HASH": bool(_env("APP_PASSWORD_HASH")),
         "IMAGE_SIGNING_SECRET": bool(_env("IMAGE_SIGNING_SECRET")),
-        "GOOGLE_DRIVE_API_KEY": bool(_env("GOOGLE_DRIVE_API_KEY")),
+        "GOOGLE_SERVICE_ACCOUNT": bool(_env("GOOGLE_SERVICE_ACCOUNT")),
     }

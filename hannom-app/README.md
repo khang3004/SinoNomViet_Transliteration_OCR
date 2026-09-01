@@ -139,21 +139,46 @@ id stays intact everywhere else, because it is the join key against their data.
 
 ## Images
 
-Their Drive folder is public, but a public folder can be *read* anonymously and
-not *listed* anonymously — so a Google API key is needed once to map filenames
-to Drive file ids. The key is free, restricted to the Drive API, and grants
-nothing beyond what is already public.
+Their Drive folder is public. That makes **downloading** trivial — a file in a
+publicly shared folder is readable from
+`drive.google.com/uc?export=download&id=…` with no credentials at all, and the
+app never authenticates to fetch one.
 
-Reviewers never load from Drive directly. The app mirrors each image to local
-disk the first time someone opens it and serves it from `/img/*` thereafter:
-the folder is not exposed in devtools, a room full of reviewers does not
-rate-limit the folder, and the second person to open an image gets it instantly.
-Nobody waits for nine thousand downloads a few-hundred-image sample will never
-touch.
+**Listing** the folder is the hard part, and Google offers exactly one workable
+route:
+
+| Route | Works | Limit |
+|---|---|---|
+| `files.list` + API key | **no** — `401 API keys are not supported by this API` | — |
+| `files.list` + service account | yes, paginated | none |
+| public `embeddedfolderview` page | yes, no credentials | **5,500 files, no paging** |
+
+The API key path is a dead end no matter how the key is configured: unlike most
+Google APIs, Drive demands a principal rather than just a project. Don't spend
+time on it.
+
+So with only `GOOGLE_DRIVE_FOLDER_ID` set, the app scrapes the public folder
+page — fine for a smaller folder, and enough to get started. Past 5,500 files
+that listing silently stops, so the app reports `truncated` and says so on the
+dashboard rather than quietly auditing a partial corpus. Setting
+`GOOGLE_SERVICE_ACCOUNT` (a path to a service-account JSON key, or the JSON
+itself) switches to `files.list` and lifts the cap.
+
+**The study is drawn only from images the index can resolve.** A truncated index
+therefore costs coverage, never reviewer time: nobody is handed a thumbnail that
+cannot load. The dashboard shows indexed-vs-corpus so the gap is visible.
+
+Reviewers never load from Drive directly either. The app mirrors each image to
+local disk the first time someone opens it and serves it from `/img/*`
+thereafter: the folder is not exposed in devtools, a room full of reviewers does
+not rate-limit it, and the second person to open an image gets it instantly.
+Nobody waits for nine thousand downloads a 500-image study will never touch.
 
 `/img/*` is HMAC-signed rather than cookie-gated, so an `<img>` tag loads
 without a session round-trip. A forged or expired signature is a 403 before the
-filesystem is touched.
+filesystem is touched. If Drive serves an HTML interstitial instead of bytes —
+what happens when a file is not actually public — it is refused rather than
+cached, so a broken thumbnail always has an explanation.
 
 ## Accounts
 

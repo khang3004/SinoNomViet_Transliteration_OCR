@@ -53,12 +53,17 @@ async def lifespan(app: FastAPI):
         settings.sampling.per_post_cap,
         {b.value: round(w, 3) for b, w in settings.sampling.targets.items()},
     )
-    if settings.drive.configured:
-        log.info("drive folder: %s", settings.drive.folder_id)
+    if not settings.drive.configured:
+        log.warning(
+            "GOOGLE_DRIVE_FOLDER_ID is not set — images cannot be fetched."
+        )
+    elif settings.drive.complete_listing:
+        log.info("drive folder: %s (service account)", settings.drive.folder_id)
     else:
         log.warning(
-            "GOOGLE_DRIVE_FOLDER_ID / GOOGLE_DRIVE_API_KEY are not both set — "
-            "images cannot be fetched until they are."
+            "drive folder: %s (public listing, capped at 5500 files). Set "
+            "GOOGLE_SERVICE_ACCOUNT to index a larger folder.",
+            settings.drive.folder_id,
         )
     if not settings.images.signing_secret:
         log.warning(

@@ -315,6 +315,7 @@
     <div class="kpis" style="margin-top:1rem">
       <div class="kpi"><div class="k">Study</div><div class="v" id="k-target">—</div><div class="s" id="k-sampled">—</div></div>
       <div class="kpi"><div class="k">Corpus</div><div class="v" id="k-records">—</div><div class="s" id="k-posts">—</div></div>
+      <div class="kpi"><div class="k">Indexed images</div><div class="v" id="k-drawable">—</div><div class="s" id="k-drawable-sub">—</div></div>
       <div class="kpi"><div class="k">Claimed</div><div class="v" id="k-assigned">—</div><div class="s" id="k-pending">—</div></div>
       <div class="kpi"><div class="k">Reviewed</div><div class="v" id="k-reviewed">—</div><div class="s" id="k-coverage">—</div></div>
       <div class="kpi"><div class="k">Audited pairs</div><div class="v" id="k-pairs">—</div><div class="s">ground truth vs Gemini</div></div>
@@ -345,6 +346,7 @@
       <button id="btn-upload">Upload</button>
       <button class="primary" id="btn-ingest">Ingest</button>
       <button id="btn-drive">Index Drive folder</button>
+      <span class="muted" id="drive-line" style="font-size:0.76rem"></span>
       <span class="muted" id="admin-status"></span>
     </div>
     <div class="tablewrap" style="margin-bottom:1.2rem">
@@ -806,6 +808,15 @@ async function loadProgress() {
     : "";
 
   const drive = p.status.drive || {};
+  $("k-drawable").textContent = fmt(p.corpus.drawable);
+  $("k-drawable-sub").textContent = p.corpus.records
+    ? `of ${fmt(p.corpus.records)} in the corpus` : "index the Drive folder";
+  $("drive-line").textContent = drive.indexed
+    ? `${fmt(drive.indexed)} files via ` +
+      (drive.method === "service_account" ? "service account" : "the public folder page") +
+      (drive.truncated ? " — TRUNCATED" : "")
+    : "not indexed yet";
+
   if (!p.corpus.records) {
     banner("No upstream data loaded",
       "Upload their ground_truth files under Admin, then press Ingest.", false);
@@ -815,11 +826,18 @@ async function loadProgress() {
       "which of them this audit covers — reviewing cannot start until then.", false);
   } else if (!drive.configured) {
     banner("Google Drive is not configured",
-      "Set GOOGLE_DRIVE_FOLDER_ID and GOOGLE_DRIVE_API_KEY, then press Index Drive folder. " +
+      "Set GOOGLE_DRIVE_FOLDER_ID, then press Index Drive folder. " +
       "Until then no images will load.", true);
   } else if (!drive.indexed) {
     banner("Drive folder not indexed yet",
       "Press \u201cIndex Drive folder\u201d under Admin to map filenames to Drive files.", false);
+  } else if (drive.truncated) {
+    banner("Drive listing is incomplete",
+      `Only ${fmt(drive.indexed)} files could be listed. The public folder listing ` +
+      "stops at 5,500 and cannot page further, so the rest of the folder is invisible " +
+      "and the study can only be drawn from what is indexed. Set GOOGLE_SERVICE_ACCOUNT " +
+      "to index the whole folder — an API key will not work, Drive refuses them for " +
+      "folder listing.", true);
   } else if (!p.status.signing_configured) {
     banner("IMAGE_SIGNING_SECRET is not set", "No image URLs can be minted.", true);
   } else {
@@ -903,7 +921,10 @@ $("btn-drive").onclick = async () => {
   $("admin-status").textContent = "Listing the Drive folder…";
   try {
     const result = await api("/api/drive/refresh", { method: "POST" });
-    $("admin-status").textContent = `Indexed ${result.images} images.`;
+    $("admin-status").textContent =
+      `Indexed ${result.images} images via ` +
+      (result.method === "service_account" ? "the service account" : "the public folder page") +
+      (result.truncated ? " — listing was truncated at the 5,500 cap." : ".");
     await refreshAll();
   } catch (e) { $("admin-status").textContent = e.message; }
 };

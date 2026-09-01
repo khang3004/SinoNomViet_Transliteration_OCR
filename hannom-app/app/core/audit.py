@@ -26,7 +26,7 @@ import threading
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from app.core import sampling
 from app.core.corpus import IngestReport
@@ -132,10 +132,18 @@ class QueueItem:
 class AuditStore:
     """Assignment and review state over a corpus snapshot."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        eligible: Callable[[CorpusRecord], bool] | None = None,
+    ) -> None:
         self.data_dir = Path(data_dir)
         self.corpus = CorpusStore(self.data_dir / "corpus")
         self.sample = SampleStore(self.data_dir)
+        # Whether a record can actually be shown. Injected rather than imported
+        # so core stays free of the Drive layer. Without it every record counts
+        # as eligible, which is what the tests and the CLI want.
+        self.eligible = eligible
         self.assignments = JsonlLog(self.data_dir / "assignments.jsonl")
         self.reviews = JsonlLog(self.data_dir / "reviews.jsonl")
         # Assignment must be serialised: two reviewers clicking "get more" at
@@ -159,6 +167,19 @@ class AuditStore:
 
     def records_by_id(self) -> dict[str, CorpusRecord]:
         return {r.record_id: r for r in self.corpus.records()}
+
+    def drawable(self) -> list[CorpusRecord]:
+        """Corpus records whose image can actually be displayed.
+
+        A record whose image is missing from the Drive index would reach a
+        reviewer as a broken thumbnail, waste their time, and then be flagged
+        and replaced. Excluding it from the draw is both cheaper and honest:
+        the study is built only from images the app can show.
+        """
+        records = self.corpus.records()
+        if self.eligible is None:
+            return records
+        return [r for r in records if self.eligible(r)]
 
     def sample_records(self) -> list[CorpusRecord]:
         """The study, in corpus order — the ~500 images this audit is about."""
@@ -194,9 +215,14 @@ class AuditStore:
         """
         if size <= 0:
             raise AuditError("A study needs at least one image.")
-        records = self.corpus.records()
-        if not records:
+        if not self.corpus.records():
             raise AuditError("Load the upstream data before drawing a sample.")
+        records = self.drawable()
+        if not records:
+            raise AuditError(
+                "None of the loaded records have an image in the Drive index. "
+                "Index the Drive folder first, and check the filenames match."
+            )
 
         with self._draw_lock:
             self.sample.reset(
@@ -223,7 +249,7 @@ class AuditStore:
             return SampleDraw([], 0, Counter(), Counter())
         with self._draw_lock:
             return self.sample.draw_into(
-                self.corpus.records(), count=deficit, rng=rng, reason="replacement"
+                self.drawable(), count=deficit, rng=rng, reason="replacement"
             )
 
     # --- assignment ------------------------------------------------------
@@ -477,6 +503,7 @@ class AuditStore:
         return {
             "corpus": {
                 "records": len(self.corpus.records()),
+                "drawable": len(self.drawable()),
                 "posts": self.corpus.post_count(),
                 "ingest": self.corpus.report(),
             },

@@ -22,12 +22,18 @@ log = logging.getLogger(__name__)
 class Runtime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.audit = AuditStore(settings.data_dir)
         self.users = UserStore(settings.users_path, super_admin=_super_admin())
         self.drive_index = DriveIndex(
             path=settings.drive_index_path,
             folder_id=settings.drive.folder_id,
-            api_key=settings.drive.api_key,
+            service_account=settings.drive.service_account,
+            timeout_s=settings.drive.timeout_s,
+        )
+        # The study is drawn only from images the Drive index can resolve, so a
+        # truncated index costs coverage rather than handing reviewers blanks.
+        self.audit = AuditStore(
+            settings.data_dir,
+            eligible=lambda record: self.drive_index.has(record.image),
         )
         self.images = DriveImages(
             self.drive_index, settings.images_dir, max_bytes=settings.drive.max_bytes

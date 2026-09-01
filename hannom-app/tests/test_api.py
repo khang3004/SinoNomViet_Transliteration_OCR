@@ -13,6 +13,32 @@ ADMIN_PASSWORD = "admin-password"
 POST_A = "UzpfSTEwMDAwMDU5MzExMzI1ODpWSzoyNzgzNTQ4OTgyNjA5MzEwMA=="
 
 
+def image_name(i):
+    return f"{POST_A[:-4]}{i:03d}==_0.jpg"
+
+
+def seed_drive_index(tmp_path, count=40, indexed=None):
+    """A Drive index, as a folder listing would have produced.
+
+    The study is drawn only from images the index can resolve, so without this
+    nothing is drawable — which is the behaviour, not a test fixture quirk.
+    """
+    names = range(count) if indexed is None else indexed
+    (tmp_path / "drive_index.json").write_text(
+        json.dumps(
+            {
+                "meta": {"method": "test", "images": len(list(names)), "truncated": False},
+                "files": {
+                    image_name(i): {"id": f"driveid{i:04d}" + "x" * 20,
+                                    "mime": "image/jpeg", "size": 1000}
+                    for i in (range(count) if indexed is None else indexed)
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def make_jsonl(path, count=40):
     """A spread of bands so a stratified draw has something to draw from."""
     rows = []
@@ -25,7 +51,7 @@ def make_jsonl(path, count=40):
         }[i % 4]
         rows.append(
             {
-                "image": f"{POST_A[:-4]}{i:03d}==_0.jpg",
+                "image": image_name(i),
                 "ground_truth": "年歲漸長",
                 "label": "",
                 "gemini": [{"text": gemini}],
@@ -64,9 +90,10 @@ def login(client, username, password):
     return response.json()
 
 
-def seed_corpus(client, tmp_path, count=40, sample=True):
+def seed_corpus(client, tmp_path, count=40, sample=True, indexed=None):
     """Sign in as admin, upload a ground_truth.jsonl, ingest it, draw the study."""
     login(client, "root", ADMIN_PASSWORD)
+    seed_drive_index(tmp_path, count, indexed)
     path = tmp_path / "ground_truth.jsonl"
     make_jsonl(path, count)
     with open(path, "rb") as handle:
@@ -396,6 +423,23 @@ class TestStudySample:
     def test_top_up_is_available_to_an_admin(self, client, tmp_path):
         seed_corpus(client, tmp_path)
         assert client.post("/api/sample/top-up").json()["added"] == 0
+
+    def test_images_missing_from_the_drive_index_are_never_drawn(
+        self, client, tmp_path
+    ):
+        """A truncated index costs coverage; it must not cost reviewer time."""
+        seed_corpus(client, tmp_path, sample=False, indexed=range(12))
+        result = client.post("/api/sample", json={"size": 24}).json()
+        assert result["added"] == 12
+        assert client.get("/api/progress").json()["corpus"]["drawable"] == 12
+
+    def test_drawing_without_an_indexed_folder_explains_itself(
+        self, client, tmp_path
+    ):
+        seed_corpus(client, tmp_path, sample=False, indexed=[])
+        response = client.post("/api/sample", json={})
+        assert response.status_code == 400
+        assert "Drive index" in response.json()["detail"]
 
 
 class TestExports:
