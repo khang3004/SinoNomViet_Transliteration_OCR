@@ -55,6 +55,17 @@ class JsonlLog:
             self._cache = None
             self._signature = None
 
+    def clear(self) -> None:
+        """Delete the log and its cache.
+
+        Only for a log that represents a restartable set — the study sample —
+        never for assignments or reviews, which are the record of work done.
+        """
+        with self._lock:
+            self.path.unlink(missing_ok=True)
+            self._cache = None
+            self._signature = None
+
     # --- reading ---------------------------------------------------------
 
     def _stat_signature(self) -> tuple[float, int] | None:

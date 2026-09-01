@@ -3,19 +3,22 @@
 A review console for auditing another team's Hán-Nôm transcriptions.
 
 They hand over ~9,000 calligraphy images in a public Google Drive folder, a
-`ground_truth.jsonl` and a `ground_truth.xlsx`. This app draws a stratified
-random sample, hands each reviewer a disjoint slice, and records — image by
-image — whether their `ground_truth` actually matches the photograph.
+`ground_truth.jsonl` and a `ground_truth.xlsx`. Reviewing all of them is not the
+plan. The app draws a **study sample of 500**, hands each reviewer a disjoint
+slice of it, and records — image by image — whether their `ground_truth`
+actually matches the photograph.
 
 The output is the number their files cannot give you: **how accurate their
 labels are**, and therefore how much to trust every model score computed
 against them.
 
 ```
-their Drive folder ─┐
-their ground_truth ─┼─► sample ─► reviewers ─► verdicts ─► reviews.xlsx
-                    ┘   (stratified, disjoint)
+9,000 images ─► study sample (500) ─► reviewers ─► verdicts ─► reviews.xlsx
+                stratified, capped     disjoint
 ```
+
+The study is the unit that matters. It is drawn once, it is the denominator of
+every progress bar, and reviewers are never handed anything outside it.
 
 ## What a reviewer sees
 
@@ -29,41 +32,48 @@ one question: **does their transcription match the image?**
 | `minor` | small errors: variant forms, a stray character | yes |
 | `wrong` | substantially wrong | yes |
 | `unreadable` | image too damaged or unclear to judge | no |
-| `not_an_image` | broken, missing, or not a photograph | no — returned to the pool |
+| `not_an_image` | broken, missing, or not a photograph | no — dropped and replaced |
 
 Gemini gets a lighter `good` / `partial` / `bad` rating alongside. DeepSeek is
 shown but not scored.
 
 **Nothing is pre-filled.** The correction box starts empty, and a verdict is
 only recorded when the reviewer chooses one — so clicking through without
-looking cannot masquerade as a perfect score. `not_an_image` hands the record
-back rather than counting it, and the reviewer is owed a replacement.
+looking cannot masquerade as a perfect score. `not_an_image` does not count as
+a review — the image leaves the study and a replacement is drawn for it.
 
-## How the sample is drawn
+## How the study is drawn
 
-A uniform draw over nine thousand images spends most of its effort on rows where
-the model and the label already agree, which teaches nothing. So the draw is
+A uniform 500 out of 9,000 would spend most of its effort on rows where the
+model and the label already agree, which teaches nothing. So the draw is
 stratified on **disagreement** — how far their Gemini output sits from their own
 ground truth:
 
-| Band | Definition | Default share |
-|---|---|---|
-| `exact` | identical after whitespace folding | 15% |
-| `near` | ≥ 90% character accuracy | 20% |
-| `far` | 50–90% | 25% |
-| `poor` | < 50% | 25% |
-| `empty` | one side blank | 15% |
+| Band | Definition | Share | At 500 |
+|---|---|---|---|
+| `exact` | identical after whitespace folding | 15% | 75 |
+| `near` | ≥ 90% character accuracy | 20% | 100 |
+| `far` | 50–90% | 25% | 125 |
+| `poor` | < 50% | 25% | 125 |
+| `empty` | one side blank | 15% | 75 |
 
 Two constraints ride along:
 
 - **Per-post cap** (default 2). One prolific page can contribute dozens of
-  images; without a cap the sample would describe that page, not the corpus.
-- **No overlap.** Reviewers never share a record, so the cap is a global running
-  total and a drawn record is gone from the pool.
+  images; without a cap the study would describe that page, not the corpus.
+- **No overlap.** Reviewers never share a record, so a claimed image is gone
+  from the pool until it is released.
 
 Shortfalls redistribute: if a band runs dry, its quota moves to the bands that
-still have depth rather than silently returning a short sample. Tune it all with
-`SAMPLE_TARGETS`, `SAMPLE_PER_POST_CAP` and `SAMPLE_BATCH`.
+still have depth rather than silently returning a short study.
+
+**An unusable image is replaced, not just dropped.** When a reviewer marks one
+`not_an_image` it leaves the study, is recorded as dropped so it can never be
+handed out again, and a fresh image from the *same band* takes its place. The
+study still ends with 500 judged images rather than 493.
+
+Tune it with `SAMPLE_SIZE`, `SAMPLE_TARGETS`, `SAMPLE_PER_POST_CAP` and
+`SAMPLE_BATCH` (how many a reviewer claims per click).
 
 ## Accuracy, reported twice
 
@@ -181,9 +191,14 @@ Then, signed in as the admin:
 
 1. **Upload** `ground_truth.jsonl` and `ground_truth.xlsx`
 2. **Ingest** — merges them and reports what was skipped and why
-3. **Index Drive folder** — maps filenames to Drive file ids
-4. **Add a reviewer** for each person on the team
-5. Everyone presses **Get images** and starts
+3. **Draw study sample** — fixes which 500 images this audit covers
+4. **Index Drive folder** — maps filenames to Drive file ids
+5. **Add a reviewer** for each person on the team
+6. Everyone presses **Get images** and starts
+
+Step 3 is the one that defines the audit. Reviewing is refused until it has
+happened, and redrawing later replaces which images are in the study (reviews
+already recorded are kept).
 
 Export from the same panel as `.xlsx`, `.csv` or `.jsonl`. Accuracy columns are
 written as numbers with a percent format, not as `"97.50%"` strings — a text
@@ -197,6 +212,8 @@ No database. Everything is files under `DATA_DIR`:
 ```
 corpus/records.jsonl     the merged upstream data — replaced wholesale on ingest
 corpus/ingest.json       what the last merge produced and skipped
+sample.jsonl             which records are in the study; drops and replacements
+sample.json              the study's size, band shares and per-post cap
 assignments.jsonl        append-only claims; the latest row per record wins
 reviews.jsonl            append-only verdicts; a changed mind adds a row
 users.json               reviewer accounts (bcrypt hashes)
@@ -222,6 +239,7 @@ app/core/     no web framework, ever — app/cli.py proves it
   metrics.py    Levenshtein, CER and max-length accuracy
   corpus.py     read + merge their jsonl and xlsx
   sampling.py   stratified draw, per-post cap, shortfall redistribution
+  sample.py     the study: membership, drops, replacements
   audit.py      corpus snapshot, assignments, reviews, progress
   drive.py      folder listing and lazy image mirroring
   users.py      accounts

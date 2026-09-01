@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core.models import Band
+from app.core.sample import DEFAULT_SIZE as DEFAULT_SAMPLE_SIZE
 from app.core.sampling import DEFAULT_PER_POST_CAP, DEFAULT_TARGETS
 
 log = logging.getLogger(__name__)
@@ -102,7 +103,11 @@ class ImageServeConfig:
 
 @dataclass(frozen=True)
 class SamplingConfig:
-    default_batch: int = 100
+    # The study: how many of the ~9,000 images this audit actually reviews.
+    # Everything else here is about how those are drawn and handed out.
+    sample_size: int = DEFAULT_SAMPLE_SIZE
+    # How many of the study a reviewer claims per "Get images" click.
+    default_batch: int = 50
     max_batch: int = 1000
     per_post_cap: int = DEFAULT_PER_POST_CAP
     targets: dict[Band, float] = field(default_factory=lambda: dict(DEFAULT_TARGETS))
@@ -159,7 +164,8 @@ def load_settings() -> Settings:
             ttl_days=_env_int("IMAGE_URL_TTL_DAYS", 7),
         ),
         sampling=SamplingConfig(
-            default_batch=_env_int("SAMPLE_BATCH", 100),
+            sample_size=_env_int("SAMPLE_SIZE", DEFAULT_SAMPLE_SIZE),
+            default_batch=_env_int("SAMPLE_BATCH", 50),
             max_batch=_env_int("SAMPLE_MAX_BATCH", 1000),
             per_post_cap=_env_int("SAMPLE_PER_POST_CAP", DEFAULT_PER_POST_CAP),
             targets=parse_targets(_env("SAMPLE_TARGETS")),

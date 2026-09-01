@@ -1,10 +1,13 @@
 import random
+from collections import Counter
 
 import pytest
 
 from app.core.audit import AuditError, AuditStore
 from app.core.corpus import IngestReport
 from app.core.models import Band, CorpusRecord, GeminiVerdict, Verdict
+
+SAMPLE_SIZE = 100
 
 
 def record(post: str, idx: int, band: Band, ground_truth="年歲漸長", gemini="年歲漸長"):
@@ -19,17 +22,31 @@ def record(post: str, idx: int, band: Band, ground_truth="年歲漸長", gemini=
     )
 
 
-@pytest.fixture
-def store(tmp_path):
-    audit = AuditStore(tmp_path)
+def corpus_records(per_band: int = 40, posts: int = 100) -> list[CorpusRecord]:
+    """A corpus far larger than the study, spread across many posts."""
     records = []
     n = 0
     for band in Band:
-        for _ in range(40):
-            records.append(record(f"post{n % 100}", n // 100, band))
+        for _ in range(per_band):
+            records.append(record(f"post{n % posts}", n // posts, band))
             n += 1
+    return records
+
+
+@pytest.fixture
+def loaded(tmp_path):
+    """Corpus loaded, no study drawn yet."""
+    audit = AuditStore(tmp_path)
+    records = corpus_records()
     audit.corpus.replace(records, IngestReport(records=len(records)))
     return audit
+
+
+@pytest.fixture
+def store(loaded):
+    """Corpus loaded and a study of 100 drawn."""
+    loaded.create_sample(SAMPLE_SIZE, rng=random.Random(42))
+    return loaded
 
 
 class TestCorpusStore:
@@ -38,12 +55,66 @@ class TestCorpusStore:
         first.corpus.replace([record("p", 0, Band.EXACT)], IngestReport(records=1))
         assert len(AuditStore(tmp_path).corpus.records()) == 1
 
-    def test_reingest_replaces_rather_than_appends(self, store):
-        store.corpus.replace([record("p", 0, Band.EXACT)], IngestReport(records=1))
-        assert len(store.corpus.records()) == 1
+    def test_reingest_replaces_rather_than_appends(self, loaded):
+        loaded.corpus.replace([record("p", 0, Band.EXACT)], IngestReport(records=1))
+        assert len(loaded.corpus.records()) == 1
 
     def test_an_absent_corpus_is_empty_not_an_error(self, tmp_path):
         assert AuditStore(tmp_path).corpus.records() == []
+
+
+class TestStudySample:
+    def test_draws_exactly_the_requested_size(self, loaded):
+        result = loaded.create_sample(SAMPLE_SIZE, rng=random.Random(1))
+        assert len(result.added) == SAMPLE_SIZE
+        assert len(loaded.sample.members()) == SAMPLE_SIZE
+
+    def test_the_distribution_applies_to_the_sample_not_to_each_batch(self, store):
+        """500-of-9000 is the point: the shares describe the study itself."""
+        counts = Counter(r.band for r in store.sample_records())
+        assert counts[Band.EXACT] == 15
+        assert counts[Band.NEAR] == 20
+        assert counts[Band.FAR] == 25
+        assert counts[Band.POOR] == 25
+        assert counts[Band.EMPTY] == 15
+
+    def test_no_post_exceeds_the_cap_within_the_study(self, loaded):
+        loaded.create_sample(SAMPLE_SIZE, per_post_cap=1, rng=random.Random(3))
+        counts = Counter(r.post_id for r in loaded.sample_records())
+        assert max(counts.values()) == 1
+
+    def test_the_study_is_a_small_slice_of_the_corpus(self, store):
+        assert len(store.corpus.records()) == 200
+        assert len(store.sample_records()) == SAMPLE_SIZE
+
+    def test_survives_a_reload(self, store, tmp_path):
+        assert len(AuditStore(tmp_path).sample.members()) == SAMPLE_SIZE
+
+    def test_a_thin_corpus_yields_a_short_study_and_says_so(self, tmp_path):
+        audit = AuditStore(tmp_path)
+        audit.corpus.replace(
+            [record(f"p{i}", 0, Band.POOR) for i in range(10)],
+            IngestReport(records=10),
+        )
+        result = audit.create_sample(SAMPLE_SIZE, rng=random.Random(1))
+        assert len(result.added) == 10 and result.short == 90
+
+    def test_cannot_draw_without_a_corpus(self, tmp_path):
+        with pytest.raises(AuditError, match="Load the upstream data"):
+            AuditStore(tmp_path).create_sample(SAMPLE_SIZE)
+
+    def test_redrawing_replaces_membership(self, store):
+        first = set(store.sample.members())
+        store.create_sample(SAMPLE_SIZE, rng=random.Random(999))
+        second = set(store.sample.members())
+        assert len(second) == SAMPLE_SIZE
+        assert first != second
+
+    def test_redrawing_keeps_reviews_already_recorded(self, store):
+        item = store.assign("alice", 1, rng=random.Random(1)).records[0]
+        store.submit("alice", item.record_id, Verdict.CORRECT)
+        store.create_sample(SAMPLE_SIZE, rng=random.Random(7))
+        assert item.record_id in store.review_state()
 
 
 class TestAssignment:
@@ -52,10 +123,25 @@ class TestAssignment:
         assert len(result.records) == 20
         assert len(store.queue("alice")) == 20
 
+    def test_only_ever_hands_out_study_records(self, store):
+        """The other 100 corpus images must never reach a reviewer."""
+        members = store.sample.members()
+        result = store.assign("alice", 40, rng=random.Random(1))
+        assert {r.record_id for r in result.records} <= members
+
+    def test_refuses_before_a_study_exists(self, loaded):
+        with pytest.raises(AuditError, match="No study sample"):
+            loaded.assign("alice", 10)
+
     def test_reviewers_never_share_a_record(self, store):
-        a = store.assign("alice", 50, rng=random.Random(1))
-        b = store.assign("bob", 50, rng=random.Random(1))
+        a = store.assign("alice", 40, rng=random.Random(1))
+        b = store.assign("bob", 40, rng=random.Random(1))
         assert not {r.record_id for r in a.records} & {r.record_id for r in b.records}
+
+    def test_the_study_runs_out_rather_than_spilling_into_the_corpus(self, store):
+        result = store.assign("alice", SAMPLE_SIZE + 50, rng=random.Random(1))
+        assert len(result.records) == SAMPLE_SIZE
+        assert result.short == 50
 
     def test_a_reviewer_sees_only_their_own_queue(self, store):
         store.assign("alice", 10, rng=random.Random(1))
@@ -76,7 +162,7 @@ class TestAssignment:
         with pytest.raises(AuditError):
             store.assign("alice", 0)
 
-    def test_released_records_return_to_the_pool(self, store):
+    def test_released_records_return_to_the_study_pool(self, store):
         result = store.assign("alice", 5, rng=random.Random(1))
         target = result.records[0].record_id
         store.release(target, "alice")
@@ -109,32 +195,23 @@ class TestSubmit:
         assert review.ground_truth_similarity["distance"] == 1
         assert review.ground_truth_similarity["cer_accuracy"] == 0.75
 
-    def test_gemini_is_scored_against_the_audited_truth_not_their_label(self, store):
+    def test_gemini_is_scored_against_the_audited_truth_not_their_label(self, tmp_path):
+        store = AuditStore(tmp_path)
         store.corpus.replace(
             [record("p", 0, Band.FAR, ground_truth="錯誤文字", gemini="正確文字")],
             IngestReport(records=1),
         )
+        store.create_sample(1, rng=random.Random(1))
         store.assign("alice", 1, rng=random.Random(1))
         review = store.submit("alice", "p:0", Verdict.WRONG, corrected="正確文字")
         assert review.gemini_vs_corrected["cer_accuracy"] == 1.0
-        assert review.ground_truth_similarity["cer_accuracy"] < 1.0
+        assert review.ground_truth_similarity["cer_accuracy"] == 0.5
 
     def test_unreadable_records_no_transcription(self, store):
         item = self._assign_one(store)
         review = store.submit("alice", item.record_id, Verdict.UNREADABLE)
         assert review.corrected == ""
         assert review.ground_truth_similarity == {}
-
-    def test_a_broken_image_is_handed_back_for_replacement(self, store):
-        item = self._assign_one(store)
-        store.submit("alice", item.record_id, Verdict.NOT_AN_IMAGE)
-        assert store.queue("alice") == []
-        assert item.record_id in {r.record_id for r in store.available()}
-
-    def test_a_broken_image_does_not_count_as_reviewed(self, store):
-        item = self._assign_one(store)
-        store.submit("alice", item.record_id, Verdict.NOT_AN_IMAGE)
-        assert store.progress()["reviewed"] == 0
 
     def test_reviewers_cannot_touch_each_others_records(self, store):
         item = self._assign_one(store, "alice")
@@ -143,9 +220,7 @@ class TestSubmit:
 
     def test_an_admin_can_override(self, store):
         item = self._assign_one(store, "alice")
-        review = store.submit(
-            "root", item.record_id, Verdict.CORRECT, is_admin=True
-        )
+        review = store.submit("root", item.record_id, Verdict.CORRECT, is_admin=True)
         assert review.username == "root"
 
     def test_unknown_records_are_rejected(self, store):
@@ -162,31 +237,105 @@ class TestSubmit:
         assert len(store.reviews.rows()) == 2
 
 
+class TestUnusableImages:
+    def _assign_one(self, store, user="alice"):
+        return store.assign(user, 1, rng=random.Random(1)).records[0]
+
+    def test_a_broken_image_leaves_the_reviewers_queue(self, store):
+        item = self._assign_one(store)
+        store.submit("alice", item.record_id, Verdict.NOT_AN_IMAGE)
+        assert store.queue("alice") == []
+
+    def test_it_does_not_count_as_reviewed(self, store):
+        item = self._assign_one(store)
+        store.submit("alice", item.record_id, Verdict.NOT_AN_IMAGE)
+        assert store.progress()["reviewed"] == 0
+
+    def test_the_study_is_refilled_to_its_target_size(self, store):
+        """500 judged images was the plan, not 500 minus the broken ones."""
+        item = self._assign_one(store)
+        store.submit("alice", item.record_id, Verdict.NOT_AN_IMAGE)
+        assert len(store.sample.members()) == SAMPLE_SIZE
+
+    def test_the_replacement_comes_from_the_same_band(self, store):
+        item = self._assign_one(store)
+        before = Counter(r.band for r in store.sample_records())
+        store.submit("alice", item.record_id, Verdict.NOT_AN_IMAGE)
+        assert Counter(r.band for r in store.sample_records()) == before
+
+    def test_a_dropped_image_is_never_handed_out_again(self, store):
+        item = self._assign_one(store)
+        store.submit("alice", item.record_id, Verdict.NOT_AN_IMAGE)
+        assert item.record_id not in store.sample.members()
+        assert item.record_id not in {r.record_id for r in store.available()}
+        store.assign("bob", SAMPLE_SIZE, rng=random.Random(5))
+        assert item.record_id not in {i.record.record_id for i in store.queue("bob")}
+
+    def test_the_drop_is_recorded_with_its_reason(self, store):
+        item = self._assign_one(store)
+        store.submit("alice", item.record_id, Verdict.NOT_AN_IMAGE)
+        assert store.sample.dropped()[item.record_id] == "flagged_unusable"
+
+    def test_top_up_is_a_no_op_when_the_study_is_full(self, store):
+        assert store.top_up_sample().added == []
+
+    def test_an_exhausted_corpus_cannot_refill_forever(self, tmp_path):
+        audit = AuditStore(tmp_path)
+        audit.corpus.replace(
+            [record(f"p{i}", 0, Band.POOR) for i in range(3)], IngestReport(records=3)
+        )
+        audit.create_sample(3, rng=random.Random(1))
+        for item in audit.assign("alice", 3, rng=random.Random(1)).records:
+            audit.submit("alice", item.record_id, Verdict.NOT_AN_IMAGE)
+        # Nothing left to draw, and no crash — the study is simply short.
+        assert audit.sample.members() == set()
+        assert audit.progress()["percent"] == 0.0
+
+
 class TestProgress:
-    def test_counts_assigned_reviewed_and_pending(self, store):
+    def test_the_denominator_is_the_study_not_what_was_claimed(self, store):
         result = store.assign("alice", 10, rng=random.Random(1))
         for item in result.records[:4]:
             store.submit("alice", item.record_id, Verdict.CORRECT)
 
         progress = store.progress()
+        assert progress["target"] == SAMPLE_SIZE
         assert progress["assigned"] == 10
         assert progress["reviewed"] == 4
         assert progress["pending"] == 6
-        assert progress["percent"] == 40.0
+        assert progress["unclaimed"] == 90
+        # 4 of the study's 100 — not 40% of the 10 someone happened to claim.
+        assert progress["percent"] == 4.0
 
-    def test_reports_fill_per_band(self, store):
-        store.assign("alice", 100, rng=random.Random(1))
+    def test_reports_the_share_of_the_corpus_sampled(self, store):
+        assert store.progress()["sampled_percent"] == 50.0
+
+    def test_reports_target_and_fill_per_band(self, store):
+        store.assign("alice", SAMPLE_SIZE, rng=random.Random(1))
         bands = {b["band"]: b for b in store.progress()["bands"]}
+        assert bands["exact"]["target"] == 15
+        assert bands["exact"]["in_sample"] == 15
         assert bands["exact"]["assigned"] == 15
-        assert bands["poor"]["assigned"] == 25
         assert bands["exact"]["in_corpus"] == 40
-        assert bands["exact"]["available"] == 25
+        assert bands["poor"]["target"] == 25
+        assert bands["poor"]["in_sample"] == 25
 
-    def test_reports_the_headline_accuracies(self, store):
+    def test_band_percent_tracks_reviews(self, store):
+        exact = [r for r in store.sample_records() if r.band is Band.EXACT]
+        store.assign("alice", SAMPLE_SIZE, rng=random.Random(1))
+        for rec in exact[:3]:
+            store.submit("alice", rec.record_id, Verdict.CORRECT)
+        bands = {b["band"]: b for b in store.progress()["bands"]}
+        assert bands["exact"]["reviewed"] == 3
+        assert bands["exact"]["percent"] == 20.0
+
+    def test_reports_the_headline_accuracies(self, tmp_path):
+        store = AuditStore(tmp_path)
         store.corpus.replace(
             [record("p", 0, Band.FAR, ground_truth="錯誤文字", gemini="正確文字")],
             IngestReport(records=1),
         )
+        store.create_sample(1, rng=random.Random(1))
         store.assign("alice", 1, rng=random.Random(1))
         store.submit("alice", "p:0", Verdict.WRONG, corrected="正確文字")
 
@@ -199,6 +348,16 @@ class TestProgress:
 
     def test_accuracies_are_none_before_any_review(self, store):
         assert store.progress()["ground_truth_accuracy"] is None
+
+    def test_the_sample_status_is_reported(self, store):
+        sample = store.progress()["sample"]
+        assert sample["exists"] and sample["size"] == SAMPLE_SIZE
+        assert sample["active"] == SAMPLE_SIZE and sample["complete"]
+
+    def test_progress_is_zero_before_a_study_is_drawn(self, loaded):
+        progress = loaded.progress()
+        assert progress["target"] == 0 and progress["percent"] == 0.0
+        assert progress["sample"]["exists"] is False
 
 
 class TestTeamView:

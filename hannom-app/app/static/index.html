@@ -134,11 +134,13 @@
     border-radius: 3px; border: 1px solid var(--border); color: var(--muted);
     white-space: nowrap;
   }
-  .pill.exact { color: var(--good-text); border-color: var(--good); }
-  .pill.near  { color: var(--good-text); border-color: var(--grid); }
-  .pill.far   { color: var(--warning); border-color: var(--warning); }
-  .pill.poor  { color: var(--critical); border-color: var(--critical); }
-  .pill.empty { color: var(--muted); border-style: dashed; }
+  /* Band pills are namespaced: an unprefixed `.empty` would collide with the
+     empty-state class below and inherit its 2.5rem padding. */
+  .pill.b-exact { color: var(--good-text); border-color: var(--good); }
+  .pill.b-near  { color: var(--good-text); border-color: var(--grid); }
+  .pill.b-far   { color: var(--warning); border-color: var(--warning); }
+  .pill.b-poor  { color: var(--critical); border-color: var(--critical); }
+  .pill.b-empty { color: var(--muted); border-style: dashed; }
   .pill.v-correct { color: var(--good-text); border-color: var(--good); }
   .pill.v-minor { color: var(--warning); border-color: var(--warning); }
   .pill.v-wrong, .pill.v-not_an_image { color: var(--critical); border-color: var(--critical); }
@@ -246,12 +248,12 @@
   <div class="card">
     <div class="strip">
       <div class="stat">
-        <div class="k">My queue</div>
-        <div class="v"><span id="s-done">—</span> <small>of <span id="s-mine">—</span> reviewed</small></div>
+        <div class="k">Study progress</div>
+        <div class="v"><span id="s-team">—</span> <small>of <span id="s-target">—</span> images</small></div>
       </div>
       <div class="stat">
-        <div class="k">Team reviewed</div>
-        <div class="v" id="s-team">—</div>
+        <div class="k">My queue</div>
+        <div class="v"><span id="s-done">—</span> <small>of <span id="s-mine">—</span> reviewed</small></div>
       </div>
       <div class="stat">
         <div class="k">Their label accuracy</div>
@@ -263,17 +265,22 @@
       </div>
       <div class="spacer"></div>
       <div class="row">
-        <input type="number" id="assign-n" min="1" max="1000" step="10" value="100" style="width:88px" aria-label="How many images" />
+        <input type="number" id="assign-n" min="1" max="1000" step="10" value="50" style="width:82px" aria-label="How many images" />
         <button class="primary" id="btn-assign">Get images</button>
         <button id="btn-review" disabled>Start reviewing</button>
       </div>
     </div>
 
-    <div class="meter" style="margin-top:0.8rem"><i id="s-meter" style="width:0%"></i></div>
+    <div class="meter" style="margin-top:0.8rem" title="The whole team's progress through the study">
+      <i id="s-meter" style="width:0%"></i>
+    </div>
     <div class="row" style="margin-top:0.5rem; font-size:0.78rem">
       <span class="muted" id="s-hint">—</span>
       <span class="spacer"></span>
       <span class="muted" id="s-coverage"></span>
+    </div>
+    <div class="meter" style="margin-top:0.7rem; height:5px" title="Your own queue">
+      <i id="s-mymeter" style="width:0%; background:var(--series-2)"></i>
     </div>
   </div>
 
@@ -299,12 +306,14 @@
   <details class="card" open>
     <summary>Sample distribution &amp; progress</summary>
     <p class="muted" style="font-size:0.78rem; margin-bottom:0.85rem">
-      The draw is stratified on how far the upstream Gemini output sits from their own
-      ground truth, so reviewer time lands on disagreement rather than on rows everyone
-      already agrees about. The orange tick marks each band's target share.
+      The study is a fixed sample drawn once from the full corpus, stratified on how far
+      the upstream Gemini output sits from their own ground truth — so reviewer time lands
+      on disagreement rather than on rows everyone already agrees about. Each bar is one
+      band's share of the study: solid is reviewed, pale is claimed but not yet judged.
     </p>
     <div id="bands"></div>
     <div class="kpis" style="margin-top:1rem">
+      <div class="kpi"><div class="k">Study</div><div class="v" id="k-target">—</div><div class="s" id="k-sampled">—</div></div>
       <div class="kpi"><div class="k">Corpus</div><div class="v" id="k-records">—</div><div class="s" id="k-posts">—</div></div>
       <div class="kpi"><div class="k">Claimed</div><div class="v" id="k-assigned">—</div><div class="s" id="k-pending">—</div></div>
       <div class="kpi"><div class="k">Reviewed</div><div class="v" id="k-reviewed">—</div><div class="s" id="k-coverage">—</div></div>
@@ -343,6 +352,20 @@
         <thead><tr><th>File</th><th class="num">Size</th><th>Uploaded</th></tr></thead>
         <tbody id="uploads"><tr><td colspan="3" class="muted">Nothing uploaded yet.</td></tr></tbody>
       </table>
+    </div>
+
+    <h2>Study sample</h2>
+    <p class="muted" style="font-size:0.76rem; margin-bottom:0.6rem">
+      Drawn once from the whole corpus and then fixed — it is the denominator of every
+      progress bar. Redrawing replaces which images are in the study; reviews already
+      recorded are kept.
+    </p>
+    <div class="row" style="margin-bottom:1.2rem">
+      <input type="number" id="sample-n" min="1" max="100000" step="50" style="width:104px"
+             aria-label="Study size" />
+      <button class="primary" id="btn-sample">Draw study sample</button>
+      <button id="btn-topup">Top up</button>
+      <span class="muted" id="sample-status"></span>
     </div>
 
     <h2>Add a reviewer</h2>
@@ -385,6 +408,7 @@ const state = {
   me: null, tab: "mine", offset: 0, query: "", reviewer: "",
   items: [], total: 0, hasMore: false, current: null, openedAt: 0,
 };
+let lastProgress = null;
 
 const fmt = (n) => (n === null || n === undefined) ? "—" : Number(n).toLocaleString();
 const esc = (s) => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
@@ -440,11 +464,11 @@ async function loadGallery() {
       state.hasMore = state.offset + state.items.length < state.total;
       $("s-mine").textContent = fmt(all.total);
       $("s-done").textContent = fmt(all.done);
-      $("s-meter").style.width = all.total ? (all.done / all.total * 100) + "%" : "0%";
+      $("s-mymeter").style.width = all.total ? (all.done / all.total * 100) + "%" : "0%";
       $("btn-review").disabled = all.remaining === 0;
       $("s-hint").textContent = all.total === 0
-        ? "No images yet — choose how many and press Get images."
-        : `${fmt(all.remaining)} left to review`;
+        ? "No images claimed yet — choose how many and press Get images."
+        : `${fmt(all.remaining)} left in your queue`;
     } else {
       const params = new URLSearchParams({
         offset: state.offset, limit: PAGE, q: state.query, reviewer: state.reviewer,
@@ -496,7 +520,7 @@ function tile(item, i) {
       <div class="meta">
         <span class="cap cjk">${esc(text.slice(0, 90)) || "<span class='muted'>no transcription</span>"}</span>
         <span class="foot">
-          <span class="pill ${esc(item.band)}">${esc(item.band_label)}</span>
+          <span class="pill b-${esc(item.band)}">${esc(item.band_label)}</span>
           ${verdictPill || who || `<span>#${esc(String(item.idx))}</span>`}
         </span>
       </div>
@@ -522,7 +546,7 @@ function openReview(i) {
     </div>
     <div class="lb-side">
       <div class="row" style="margin-bottom:0.6rem">
-        <span class="pill ${esc(item.band)}">${esc(item.band_label)}</span>
+        <span class="pill b-${esc(item.band)}">${esc(item.band_label)}</span>
         <span class="muted" style="font-size:0.72rem">${esc(item.image)}</span>
         <span class="spacer"></span>
         <span class="muted" style="font-size:0.72rem">${state.offset + i + 1} / ${fmt(state.total)}</span>
@@ -669,8 +693,9 @@ function wireWorkspace(item, review, editable) {
       // otherwise overwrite this the moment it lands.
       if (result.released) {
         banner("Image flagged as unusable",
-          "It has gone back to the pool and no longer counts against your queue. " +
-          "Press Get images to draw a replacement.", false);
+          "It has been dropped from the study and a replacement drawn in its place, " +
+          "so the study still covers its full target. Press Get images to claim more.",
+          false);
       }
       advance(1);
     } catch (e) {
@@ -708,34 +733,49 @@ document.addEventListener("keydown", (e) => {
 async function loadProgress() {
   let p;
   try { p = await api("/api/progress"); } catch { return; }
+  lastProgress = p;
 
+  const sample = p.sample || {};
+  // The headline bar is the whole team's way through the study — the fixed
+  // sample — not through whatever anyone happens to have claimed.
   $("s-team").textContent = fmt(p.reviewed);
+  $("s-target").textContent = fmt(p.target);
+  $("s-meter").style.width = (p.percent || 0) + "%";
   $("s-gt").textContent = pctOf(p.ground_truth_accuracy);
   $("s-gemini").textContent = pctOf(p.gemini_accuracy);
-  $("s-coverage").textContent = `${p.coverage_percent}% of the corpus audited`;
+  $("s-coverage").textContent = p.target
+    ? `study ${p.percent}% judged · ${fmt(p.unclaimed)} unclaimed · ${p.sampled_percent}% of the corpus`
+    : "";
 
+  $("k-target").textContent = fmt(p.target);
+  $("k-sampled").textContent = p.target
+    ? `${p.sampled_percent}% of the corpus` : "not drawn yet";
   $("k-records").textContent = fmt(p.corpus.records);
   $("k-posts").textContent = `${fmt(p.corpus.posts)} posts`;
   $("k-assigned").textContent = fmt(p.assigned);
   $("k-pending").textContent = `${fmt(p.pending)} awaiting a verdict`;
   $("k-reviewed").textContent = fmt(p.reviewed);
-  $("k-coverage").textContent = `${p.percent}% of claimed`;
+  $("k-coverage").textContent = `${p.percent}% of the study`;
   $("k-pairs").textContent = fmt(p.audited_pairs);
-  $("corpus-line").textContent = p.corpus.records
-    ? `${fmt(p.corpus.records)} images loaded` : "no corpus loaded";
+  $("corpus-line").textContent = p.target
+    ? `study of ${fmt(p.target)} from ${fmt(p.corpus.records)} images`
+    : `${fmt(p.corpus.records)} images loaded · no study drawn`;
 
-  const max = Math.max(1, ...p.bands.map((b) => b.in_corpus));
-  $("bands").innerHTML = p.bands.map((b) => `
+  // Each band's bar is scaled to its own target, so a band at 80% reads as 80%
+  // whether its target is 75 images or 125.
+  $("bands").innerHTML = p.bands.map((b) => {
+    const target = b.target || b.in_sample || 1;
+    return `
     <div class="ebar">
       <span class="name">${esc(b.label)}</span>
       <span class="track">
-        <i class="fill assigned" style="width:${b.assigned / max * 100}%"></i>
-        <i class="fill reviewed" style="width:${b.reviewed / max * 100}%"></i>
-        <i class="target" style="left:${Math.min(100, b.target_share * p.assigned / max * 100)}%"
-           title="target share ${(b.target_share * 100).toFixed(0)}%"></i>
+        <i class="fill assigned" style="width:${Math.min(100, b.assigned / target * 100)}%"></i>
+        <i class="fill reviewed" style="width:${Math.min(100, b.reviewed / target * 100)}%"></i>
       </span>
-      <span class="n">${fmt(b.reviewed)}/${fmt(b.assigned)} <span class="muted">of ${fmt(b.in_corpus)}</span></span>
-    </div>`).join("");
+      <span class="n">${fmt(b.reviewed)}/${fmt(b.target)}
+        <span class="muted">${(b.target_share * 100).toFixed(0)}%</span></span>
+    </div>`;
+  }).join("");
 
   const verdicts = Object.entries(p.verdicts || {});
   $("verdict-mix").innerHTML = verdicts.length
@@ -757,14 +797,29 @@ async function loadProgress() {
     </tr>`).join("")
     : `<tr><td colspan="8" class="muted">No activity yet.</td></tr>`;
 
+  if ($("sample-n") && !$("sample-n").value) {
+    $("sample-n").value = sample.size || (p.status.sampling || {}).sample_size || 500;
+  }
+  $("sample-status").textContent = sample.exists
+    ? `${fmt(sample.active)} of ${fmt(sample.size)} in the study` +
+      (sample.dropped ? ` · ${fmt(sample.dropped)} dropped as unusable` : "")
+    : "";
+
   const drive = p.status.drive || {};
-  if (!drive.configured) {
+  if (!p.corpus.records) {
+    banner("No upstream data loaded",
+      "Upload their ground_truth files under Admin, then press Ingest.", false);
+  } else if (!sample.exists) {
+    banner("No study sample yet",
+      `The corpus holds ${fmt(p.corpus.records)} images. Draw the study under Admin to fix ` +
+      "which of them this audit covers — reviewing cannot start until then.", false);
+  } else if (!drive.configured) {
     banner("Google Drive is not configured",
       "Set GOOGLE_DRIVE_FOLDER_ID and GOOGLE_DRIVE_API_KEY, then press Index Drive folder. " +
       "Until then no images will load.", true);
   } else if (!drive.indexed) {
     banner("Drive folder not indexed yet",
-      "Press “Index Drive folder” under Admin to map filenames to Drive files.", false);
+      "Press \u201cIndex Drive folder\u201d under Admin to map filenames to Drive files.", false);
   } else if (!p.status.signing_configured) {
     banner("IMAGE_SIGNING_SECRET is not set", "No image URLs can be minted.", true);
   } else {
@@ -851,6 +906,42 @@ $("btn-drive").onclick = async () => {
     $("admin-status").textContent = `Indexed ${result.images} images.`;
     await refreshAll();
   } catch (e) { $("admin-status").textContent = e.message; }
+};
+
+$("btn-sample").onclick = async () => {
+  const size = Math.max(1, parseInt($("sample-n").value, 10) || 500);
+  const drawn = lastProgress && lastProgress.sample && lastProgress.sample.exists;
+  const reviewed = lastProgress ? lastProgress.reviewed : 0;
+  // Redrawing changes what the audit is about, so it asks first.
+  if (drawn && !confirm(
+        "Redraw the study at " + size + " images?\n\n" +
+        "This replaces which images are in it. " + reviewed + " review(s) already " +
+        "recorded are kept, but images that drop out stop counting.")) {
+    return;
+  }
+  $("btn-sample").disabled = true;
+  $("sample-status").textContent = "Drawing\u2026";
+  try {
+    const result = await api("/api/sample", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ size }),
+    });
+    $("sample-status").textContent = `Study drawn: ${result.added} images.`;
+    if (result.message) banner("Study is short of its target", result.message, false);
+    await refreshAll();
+  } catch (e) { $("sample-status").textContent = e.message; }
+  $("btn-sample").disabled = false;
+};
+
+$("btn-topup").onclick = async () => {
+  $("sample-status").textContent = "Topping up\u2026";
+  try {
+    const result = await api("/api/sample/top-up", { method: "POST" });
+    $("sample-status").textContent = result.added
+      ? `Added ${result.added} replacement(s).` : "Study is already full.";
+    await refreshAll();
+  } catch (e) { $("sample-status").textContent = e.message; }
 };
 
 $("btn-adduser").onclick = async () => {

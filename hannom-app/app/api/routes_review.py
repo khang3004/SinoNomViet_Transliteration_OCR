@@ -12,7 +12,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.api.auth import current_user
+from app.api.auth import current_user, require_admin
 from app.core.audit import AuditError, QueueItem
 from app.core.models import GeminiVerdict, Verdict
 
@@ -59,10 +59,11 @@ class AssignRequest(BaseModel):
 async def assign_more(
     request: Request, body: AssignRequest, user: dict = Depends(current_user)
 ):
-    """Draw another stratified batch for the caller.
+    """Claim another batch of the study for the caller.
 
-    This is also the top-up path: a reviewer who flags images as unusable is
-    short of their target and asks for replacements here.
+    Records come from inside the study sample only, and no two reviewers ever
+    get the same one. This is also the top-up path after images were flagged as
+    unusable and replaced.
     """
     runtime = _runtime(request)
     cfg = runtime.settings.sampling
@@ -71,11 +72,45 @@ async def assign_more(
         raise HTTPException(400, f"at most {cfg.max_batch} images per request")
 
     try:
-        result = runtime.audit.assign(
-            user["username"],
-            count,
+        result = runtime.audit.assign(user["username"], count)
+    except AuditError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    payload = result.to_json()
+    if result.short:
+        remaining = len(runtime.audit.available())
+        payload["message"] = (
+            f"Claimed {len(result.records)} of {count} — the study has "
+            f"{remaining} unclaimed images left."
+            if remaining
+            else f"Claimed {len(result.records)} of {count} — every image in the "
+            "study is now claimed."
+        )
+    return payload
+
+
+class SampleRequest(BaseModel):
+    size: int = Field(default=0, ge=0, le=100000)
+
+
+@router.post("/sample")
+async def draw_sample(
+    request: Request, body: SampleRequest, user: dict = Depends(require_admin)
+):
+    """Draw the study sample — the fixed set of images this audit is about.
+
+    Destructive: it replaces the previous membership. Reviews already recorded
+    are kept, so re-drawing after a corrective re-ingest does not lose work.
+    """
+    runtime = _runtime(request)
+    cfg = runtime.settings.sampling
+    size = body.size or cfg.sample_size
+    try:
+        result = runtime.audit.create_sample(
+            size,
             targets=cfg.targets,
             per_post_cap=cfg.per_post_cap,
+            created_by=user["username"],
         )
     except AuditError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -83,10 +118,17 @@ async def assign_more(
     payload = result.to_json()
     if result.short:
         payload["message"] = (
-            f"Only {len(result.records)} of {count} could be drawn — the pool is "
-            "running out, or the per-post cap is holding the rest back."
+            f"Drew {len(result.added)} of {size} — the corpus does not hold enough "
+            "images to fill every band at the per-post cap."
         )
     return payload
+
+
+@router.post("/sample/top-up")
+async def top_up_sample(request: Request, user: dict = Depends(require_admin)):
+    """Refill the study to its target size after unusable images were dropped."""
+    result = _runtime(request).audit.top_up_sample()
+    return result.to_json()
 
 
 # --- verdicts ----------------------------------------------------------

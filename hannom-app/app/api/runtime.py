@@ -70,6 +70,7 @@ class Runtime:
             "signing_configured": bool(self.settings.images.signing_secret),
             "public_base_url": self.settings.images.public_base_url,
             "sampling": {
+                "sample_size": self.settings.sampling.sample_size,
                 "default_batch": self.settings.sampling.default_batch,
                 "max_batch": self.settings.sampling.max_batch,
                 "per_post_cap": self.settings.sampling.per_post_cap,

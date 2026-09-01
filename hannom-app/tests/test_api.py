@@ -47,6 +47,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("IMAGE_SIGNING_SECRET", "s" * 48)
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://review.example")
+    monkeypatch.setenv("SAMPLE_SIZE", "24")
     monkeypatch.setenv("SAMPLE_BATCH", "20")
 
     from app.api.main import create_app
@@ -63,8 +64,8 @@ def login(client, username, password):
     return response.json()
 
 
-def seed_corpus(client, tmp_path, count=40):
-    """Sign in as admin, upload a ground_truth.jsonl, ingest it."""
+def seed_corpus(client, tmp_path, count=40, sample=True):
+    """Sign in as admin, upload a ground_truth.jsonl, ingest it, draw the study."""
     login(client, "root", ADMIN_PASSWORD)
     path = tmp_path / "ground_truth.jsonl"
     make_jsonl(path, count)
@@ -76,7 +77,11 @@ def seed_corpus(client, tmp_path, count=40):
     assert response.status_code == 200, response.text
     response = client.post("/api/corpus/ingest")
     assert response.status_code == 200, response.text
-    return response.json()
+    ingested = response.json()
+    if sample:
+        drawn = client.post("/api/sample", json={})
+        assert drawn.status_code == 200, drawn.text
+    return ingested
 
 
 class TestAuth:
@@ -221,13 +226,18 @@ class TestReviewFlow:
         seed_corpus(client, tmp_path)
         assert client.post("/api/queue/assign", json={}).json()["drawn"] == 20
 
-    def test_a_short_pool_says_so_rather_than_silently_under_delivering(
-        self, client, tmp_path
-    ):
-        seed_corpus(client, tmp_path, count=4)
-        result = client.post("/api/queue/assign", json={"count": 50}).json()
-        assert result["drawn"] < 50
+    def test_claiming_stops_at_the_edge_of_the_study(self, client, tmp_path):
+        """The other images in the corpus are not the audit and must not leak in."""
+        seed_corpus(client, tmp_path)
+        result = client.post("/api/queue/assign", json={"count": 500}).json()
+        assert result["drawn"] == 24  # SAMPLE_SIZE, not the 40-record corpus
         assert "message" in result
+
+    def test_reviewing_is_refused_before_a_study_is_drawn(self, client, tmp_path):
+        seed_corpus(client, tmp_path, sample=False)
+        response = client.post("/api/queue/assign", json={"count": 5})
+        assert response.status_code == 400
+        assert "No study sample" in response.json()["detail"]
 
     def test_marking_a_label_wrong_needs_the_correction(self, client, tmp_path):
         seed_corpus(client, tmp_path)
@@ -318,22 +328,74 @@ class TestReviewFlow:
 
 
 class TestProgressPanel:
-    def test_reports_the_band_plan_against_actual_fill(self, client, tmp_path):
+    def test_the_bar_measures_the_study_not_what_was_claimed(self, client, tmp_path):
         seed_corpus(client, tmp_path)
-        client.post("/api/queue/assign", json={"count": 20})
+        client.post("/api/queue/assign", json={"count": 4})
+        record_id = client.get("/api/queue").json()["items"][0]["record_id"]
+        client.post("/api/review", json={"record_id": record_id, "verdict": "correct"})
 
         progress = client.get("/api/progress").json()
-        assert progress["assigned"] == 20
+        assert progress["target"] == 24
+        assert progress["assigned"] == 4
+        assert progress["reviewed"] == 1
+        # 1 of the 24-image study, not 25% of the 4 that were claimed.
+        assert progress["percent"] == round(100 / 24, 1)
+
+    def test_reports_the_band_plan_against_actual_fill(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        client.post("/api/queue/assign", json={"count": 24})
+
+        progress = client.get("/api/progress").json()
         bands = {b["band"]: b for b in progress["bands"]}
         assert bands["exact"]["target_share"] == 0.15
-        assert sum(b["assigned"] for b in bands.values()) == 20
+        assert sum(b["in_sample"] for b in bands.values()) == 24
+        assert sum(b["assigned"] for b in bands.values()) == 24
         assert progress["reviewers"][0]["username"] == "root"
+
+    def test_reports_the_study_status(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        sample = client.get("/api/progress").json()["sample"]
+        assert sample["exists"] and sample["size"] == 24 and sample["active"] == 24
 
     def test_exposes_the_configured_sampling_plan(self, client, tmp_path):
         seed_corpus(client, tmp_path)
         status = client.get("/api/progress").json()["status"]
+        assert status["sampling"]["sample_size"] == 24
         assert status["sampling"]["default_batch"] == 20
         assert status["sampling"]["per_post_cap"] == 2
+
+
+class TestStudySample:
+    def test_only_an_admin_can_draw_the_study(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        client.post("/api/users", json={"username": "mai", "password": "password123"})
+        client.post("/api/auth/logout")
+        login(client, "mai", "password123")
+        assert client.post("/api/sample", json={}).status_code == 403
+
+    def test_an_explicit_size_overrides_the_default(self, client, tmp_path):
+        seed_corpus(client, tmp_path, sample=False)
+        result = client.post("/api/sample", json={"size": 10}).json()
+        assert result["added"] == 10
+        assert client.get("/api/progress").json()["target"] == 10
+
+    def test_a_flagged_image_is_replaced_so_the_study_stays_whole(
+        self, client, tmp_path
+    ):
+        seed_corpus(client, tmp_path)
+        client.post("/api/queue/assign", json={"count": 3})
+        record_id = client.get("/api/queue").json()["items"][0]["record_id"]
+        client.post(
+            "/api/review",
+            json={"record_id": record_id, "verdict": "not_an_image"},
+        )
+        sample = client.get("/api/progress").json()["sample"]
+        assert sample["active"] == 24
+        assert sample["dropped"] == 1
+
+    def test_top_up_is_available_to_an_admin(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        assert client.post("/api/sample/top-up").json()["added"] == 0
 
 
 class TestExports:

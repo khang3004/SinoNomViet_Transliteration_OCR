@@ -4,6 +4,9 @@ Three logs, one purpose:
 
 * ``corpus/records.jsonl`` — a snapshot of the merged upstream data. Replaced
   wholesale when new files are uploaded, never appended to.
+* ``sample.jsonl`` — which of those ~9,000 records are in the study. Reviewers
+  are only ever assigned from inside it, and it is the denominator of every
+  progress bar (see ``app.core.sample``).
 * ``assignments.jsonl`` — append-only claims. A record belongs to exactly one
   reviewer; releasing it writes a new row rather than deleting the old one.
 * ``reviews.jsonl`` — append-only verdicts. A reviewer changing their mind adds
@@ -37,6 +40,7 @@ from app.core.models import (
     Review,
     Verdict,
 )
+from app.core.sample import SampleDraw, SampleStore
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +135,7 @@ class AuditStore:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = Path(data_dir)
         self.corpus = CorpusStore(self.data_dir / "corpus")
+        self.sample = SampleStore(self.data_dir)
         self.assignments = JsonlLog(self.data_dir / "assignments.jsonl")
         self.reviews = JsonlLog(self.data_dir / "reviews.jsonl")
         # Assignment must be serialised: two reviewers clicking "get more" at
@@ -152,23 +157,74 @@ class AuditStore:
             rid: a for rid, a in self.assignment_state().items() if not a.released
         }
 
-    def post_counts(self) -> dict[str, int]:
-        """Images per post already committed to the audit.
+    def records_by_id(self) -> dict[str, CorpusRecord]:
+        return {r.record_id: r for r in self.corpus.records()}
 
-        Counted from live assignments, so a released record frees its slot and
-        the post can contribute again.
-        """
-        counts: dict[str, int] = defaultdict(int)
-        for record_id in self.active_assignments():
-            record = self.corpus.get(record_id)
-            if record is not None:
-                counts[record.post_id] += 1
-        return dict(counts)
+    def sample_records(self) -> list[CorpusRecord]:
+        """The study, in corpus order — the ~500 images this audit is about."""
+        members = self.sample.members()
+        return [r for r in self.corpus.records() if r.record_id in members]
 
     def available(self) -> list[CorpusRecord]:
-        """Records nobody holds."""
+        """Study records nobody holds.
+
+        Scoped to the sample, not the corpus: a reviewer must never be handed
+        one of the other 8,500 images, because nothing outside the study counts
+        towards it.
+        """
         held = set(self.active_assignments())
-        return [r for r in self.corpus.records() if r.record_id not in held]
+        return [r for r in self.sample_records() if r.record_id not in held]
+
+    # --- the study sample ------------------------------------------------
+
+    def create_sample(
+        self,
+        size: int,
+        *,
+        targets: dict[Band, float] | None = None,
+        per_post_cap: int = sampling.DEFAULT_PER_POST_CAP,
+        created_by: str = "",
+        rng: random.Random | None = None,
+    ) -> SampleDraw:
+        """Draw the study: ``size`` images, stratified and capped per post.
+
+        Destructive by design — it discards the previous membership. Reviews are
+        never touched, so re-drawing after a corrective re-ingest keeps every
+        verdict already recorded for records that stay in.
+        """
+        if size <= 0:
+            raise AuditError("A study needs at least one image.")
+        records = self.corpus.records()
+        if not records:
+            raise AuditError("Load the upstream data before drawing a sample.")
+
+        with self._draw_lock:
+            self.sample.reset(
+                size,
+                sampling.normalize_targets(targets),
+                per_post_cap,
+                created_by=created_by,
+            )
+            result = self.sample.draw_into(records, count=size, rng=rng)
+        log.info("study sample drawn: %d of %d requested", len(result.added), size)
+        return result
+
+    def top_up_sample(self, rng: random.Random | None = None) -> SampleDraw:
+        """Refill the study to its target size after drops.
+
+        Called automatically when a reviewer flags an image as unusable: the
+        study is meant to yield ``size`` judged images, so a broken one is
+        replaced rather than quietly shrinking the denominator.
+        """
+        if not self.sample.exists:
+            return SampleDraw([], 0, Counter(), Counter())
+        deficit = self.sample.size - len(self.sample.members())
+        if deficit <= 0:
+            return SampleDraw([], 0, Counter(), Counter())
+        with self._draw_lock:
+            return self.sample.draw_into(
+                self.corpus.records(), count=deficit, rng=rng, reason="replacement"
+            )
 
     # --- assignment ------------------------------------------------------
 
@@ -178,23 +234,30 @@ class AuditStore:
         count: int,
         *,
         targets: dict[Band, float] | None = None,
-        per_post_cap: int = sampling.DEFAULT_PER_POST_CAP,
         rng: random.Random | None = None,
     ) -> sampling.SampleResult:
-        """Draw and claim ``count`` records for one reviewer.
+        """Draw and claim ``count`` study records for one reviewer.
 
         The lock spans draw *and* write. Drawing outside it would let two
         concurrent requests select the same record and both believe they own it.
+
+        The per-post cap is NOT re-applied here: it was already enforced when
+        the study was drawn, and applying it again would block a reviewer from
+        legitimately holding both images of a post that the study admitted.
         """
         if count <= 0:
             raise AuditError("Ask for at least one image.")
+        if not self.sample.exists:
+            raise AuditError(
+                "No study sample has been drawn yet — an admin needs to draw one "
+                "before reviewing can start."
+            )
         with self._draw_lock:
             result = sampling.draw(
                 self.available(),
                 n=count,
-                targets=targets,
-                per_post_cap=per_post_cap,
-                post_counts=self.post_counts(),
+                targets=targets or self.sample.targets(),
+                per_post_cap=0,
                 rng=rng,
             )
             if result.records:
@@ -284,10 +347,15 @@ class AuditStore:
 
         self.reviews.append(review.to_json())
 
-        # An unusable image was never reviewable work: return it so it stops
-        # occupying a slot, and so the reviewer can be topped up.
+        # An unusable image was never reviewable work. Return it, drop it from
+        # the study so it cannot be handed to the next reviewer, and pull a
+        # replacement in the same band — the study is meant to yield `size`
+        # judged images, not `size` minus however many were broken.
         if verdict is Verdict.NOT_AN_IMAGE:
             self.release(record_id, username)
+            if self.sample.exists and record_id in self.sample.members():
+                self.sample.drop(record_id, record.band, reason="flagged_unusable")
+                self.top_up_sample()
 
         return review
 
@@ -329,22 +397,29 @@ class AuditStore:
     # --- progress --------------------------------------------------------
 
     def progress(self, targets: dict[Band, float] | None = None) -> dict[str, Any]:
-        """The panel: corpus depth, claimed, reviewed, per band and overall."""
-        shares = sampling.normalize_targets(targets)
-        records = self.corpus.records()
-        by_id = {r.record_id: r for r in records}
+        """The panel: study depth, claimed, reviewed, per band and overall.
 
-        corpus_bands = sampling.band_distribution(records)
+        The denominator is the **study sample**, not the corpus and not what
+        reviewers happen to have claimed. "62% done" means 62% of the 500 images
+        this audit set out to judge.
+        """
+        by_id = self.records_by_id()
+        in_study = self.sample_records()
+        size = self.sample.size or len(in_study)
+        shares = targets or self.sample.targets()
+
+        plan = sampling.quotas(size, shares) if size else {}
+        study_bands = sampling.band_distribution(in_study)
         assigned_bands: Counter = Counter()
         reviewed_bands: Counter = Counter()
 
-        active = self.active_assignments()
-        for record_id in active:
+        for record_id in self.active_assignments():
             record = by_id.get(record_id)
             if record is not None:
                 assigned_bands[record.band.value] += 1
 
         reviews = self.review_state()
+        members = self.sample.members()
         verdicts: Counter = Counter()
         gemini_verdicts: Counter = Counter()
         gt_accuracy: list[float] = []
@@ -353,6 +428,10 @@ class AuditStore:
         for record_id, review in reviews.items():
             verdicts[review.verdict.value] += 1
             if not review.verdict.counts_as_reviewed:
+                continue
+            # Only the study counts. A review of a record later dropped from the
+            # sample stays on disk but must not inflate the study's progress.
+            if record_id not in members:
                 continue
             record = by_id.get(record_id)
             if record is not None:
@@ -373,39 +452,44 @@ class AuditStore:
 
         bands = []
         for band in Band:
-            in_corpus = corpus_bands.get(band.value, 0)
+            target = plan.get(band, 0)
+            in_sample = study_bands.get(band.value, 0)
             assigned = assigned_bands.get(band.value, 0)
             reviewed = reviewed_bands.get(band.value, 0)
             bands.append(
                 {
                     "band": band.value,
                     "label": band.label,
-                    "target_share": round(shares.get(band, 0.0), 4),
-                    "in_corpus": in_corpus,
+                    "target_share": round(
+                        sampling.normalize_targets(shares).get(band, 0.0), 4
+                    ),
+                    "target": target,
+                    "in_sample": in_sample,
+                    "in_corpus": self.corpus.band_counts().get(band.value, 0),
                     "assigned": assigned,
                     "reviewed": reviewed,
-                    "remaining": max(0, assigned - reviewed),
-                    "available": in_corpus - assigned,
-                    "actual_share": round(reviewed / reviewed_total, 4)
-                    if reviewed_total
-                    else 0.0,
+                    "remaining": max(0, in_sample - reviewed),
+                    "unclaimed": max(0, in_sample - assigned),
+                    "percent": round(reviewed / in_sample * 100, 1) if in_sample else 0.0,
                 }
             )
 
         return {
             "corpus": {
-                "records": len(records),
+                "records": len(self.corpus.records()),
                 "posts": self.corpus.post_count(),
                 "ingest": self.corpus.report(),
             },
+            "sample": self.sample.status(by_id),
+            "target": size,
             "assigned": assigned_total,
             "reviewed": reviewed_total,
+            "unclaimed": max(0, len(in_study) - assigned_total),
             "pending": max(0, assigned_total - reviewed_total),
-            "percent": round(reviewed_total / assigned_total * 100, 1)
-            if assigned_total
-            else 0.0,
-            "coverage_percent": round(reviewed_total / len(records) * 100, 1)
-            if records
+            # The team progress bar: reviewed out of the study, full stop.
+            "percent": round(reviewed_total / size * 100, 1) if size else 0.0,
+            "sampled_percent": round(size / len(self.corpus.records()) * 100, 2)
+            if self.corpus.records()
             else 0.0,
             "bands": bands,
             "verdicts": dict(verdicts),
