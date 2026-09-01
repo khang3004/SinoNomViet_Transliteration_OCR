@@ -1,23 +1,31 @@
-"""Single-user session auth: bcrypt password + JWT in an HttpOnly cookie.
+"""Session auth: bcrypt passwords + JWT in an HttpOnly cookie.
 
-Derived from the previous ``app/auth.py``, which had the crypto right but was
-wired to Postgres (``users_repo``) and ``pipeline.config``, both since removed.
-The password-hashing and token helpers carry over unchanged; the user store is
-now a single env-configured account.
+The app is internet-facing on its own domain, so this login IS the security
+boundary, not a convenience.
 
-This app is internet-facing on its own domain — Tailscale only covers the
-VPS -> MinIO hop — so this login IS the security boundary, not a convenience.
+Two account sources, deliberately:
+
+* the **super admin** comes from the environment (``APP_USERNAME`` /
+  ``APP_PASSWORD_HASH``) and cannot be created, renamed or disabled through the
+  UI — so a mistake in the user file can never lock everyone out;
+* **reviewers** live in ``data/users.json`` and are created by an admin.
+
+The role travels inside the signed token. That means a reviewer promoted or
+disabled mid-session keeps their old role until the token expires, which is the
+trade for not hitting the user file on every request; ``/api/auth/me`` re-reads
+the store, and destructive actions re-check it server-side.
 """
 
 from __future__ import annotations
 
 import hmac
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 
 from fastapi import HTTPException, Request
+
+from app.core.users import ROLE_ADMIN, User, UserStore, hash_password, verify_password
 
 logger = logging.getLogger("hannom.auth")
 
@@ -26,45 +34,33 @@ _ALG = "HS256"
 _TTL_S = 7 * 24 * 3600
 
 PUBLIC_PATHS = {"/login", "/healthz", "/favicon.ico"}
-# /img/ is public by design: the Gemini stage fetches anonymously. It is guarded
-# by an HMAC signature instead of a session (see app/api/routes_images.py).
+# /img/ is signature-guarded rather than cookie-guarded so that <img> tags load
+# without a session round-trip (see app/api/routes_images.py).
 PUBLIC_PREFIXES = ("/static/", "/img/", "/api/auth/")
 
-# Brute-force protection. In-memory is sound because the service runs a single
-# uvicorn worker (job state requires that anyway).
 _MAX_FAILURES = 5
 _LOCKOUT_S = 300.0
+
+__all__ = [
+    "COOKIE_NAME", "AuthConfig", "AuthNotConfigured", "LoginThrottle",
+    "current_user", "require_admin", "hash_password", "verify_password",
+    "is_public_path", "make_token", "decode_token", "user_from_request",
+]
 
 
 class AuthNotConfigured(RuntimeError):
     """Refuse to serve rather than serve unprotected."""
 
 
-# --- passwords ---------------------------------------------------------
-# bcrypt directly (not passlib, whose 1.7.4 backend detection breaks with
-# bcrypt 4.x). bcrypt hashes only the first 72 BYTES, so truncate explicitly.
-def hash_password(plain: str) -> str:
-    import bcrypt
-
-    return bcrypt.hashpw(plain.encode("utf-8")[:72], bcrypt.gensalt()).decode("ascii")
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    import bcrypt
-
-    try:
-        return bcrypt.checkpw(plain.encode("utf-8")[:72], hashed.encode("ascii"))
-    except Exception:  # noqa: BLE001 - malformed hash -> not verified
-        return False
-
-
 # --- tokens ------------------------------------------------------------
-def make_token(username: str, secret: str) -> str:
+def make_token(username: str, role: str, secret: str) -> str:
     import jwt
 
     now = int(time.time())
     return jwt.encode(
-        {"sub": username, "iat": now, "exp": now + _TTL_S}, secret, algorithm=_ALG
+        {"sub": username, "role": role, "iat": now, "exp": now + _TTL_S},
+        secret,
+        algorithm=_ALG,
     )
 
 
@@ -73,7 +69,10 @@ def decode_token(token: str, secret: str) -> dict | None:
 
     try:
         payload = jwt.decode(token, secret, algorithms=[_ALG])
-        return {"username": payload["sub"]}
+        return {
+            "username": payload["sub"],
+            "role": payload.get("role", "reviewer"),
+        }
     except Exception:  # noqa: BLE001 - expired/invalid/tampered
         return None
 
@@ -84,7 +83,7 @@ def is_public_path(path: str) -> bool:
 
 @dataclass
 class LoginThrottle:
-    """Per-IP failed-login lockout."""
+    """Per-IP failed-login lockout. In-memory is sound: one uvicorn worker."""
 
     failures: dict[str, list[float]] = field(default_factory=dict)
 
@@ -111,21 +110,18 @@ class AuthConfig:
 
     @classmethod
     def from_env(cls) -> "AuthConfig":
+        import os
+
         return cls(
             secret=os.environ.get("AUTH_SECRET", "").strip(),
-            username=os.environ.get("APP_USERNAME", "admin").strip(),
+            username=os.environ.get("APP_USERNAME", "admin").strip().lower(),
             password_hash=os.environ.get("APP_PASSWORD_HASH", "").strip(),
             cookie_secure=os.environ.get("COOKIE_SECURE", "1").strip().lower()
             in {"1", "true", "yes", "on"},
         )
 
     def validate(self) -> None:
-        """Fail fast rather than serve an unprotected app.
-
-        The previous implementation only logged a warning when AUTH_SECRET was
-        missing and kept serving — on a public domain that is a silently
-        wide-open admin panel, so it is now a hard startup failure.
-        """
+        """Fail fast rather than serve an unprotected app."""
         missing = []
         if not self.secret:
             missing.append("AUTH_SECRET")
@@ -142,12 +138,18 @@ class AuthConfig:
                 "`python -c \"import secrets; print(secrets.token_urlsafe(48))\"`"
             )
 
-    def authenticate(self, username: str, password: str) -> bool:
-        # Compare the username in constant time too, so response timing does not
-        # reveal whether the account name was right.
-        user_ok = hmac.compare_digest(username.encode(), self.username.encode())
-        pass_ok = verify_password(password, self.password_hash)
-        return user_ok and pass_ok
+    def authenticate(self, username: str, password: str, users: UserStore) -> User | None:
+        """Super admin first, then the reviewer store."""
+        name = (username or "").strip().lower()
+
+        # Constant-time on the username too, so response timing does not reveal
+        # whether the admin account name was guessed correctly.
+        is_admin_name = hmac.compare_digest(name.encode(), self.username.encode())
+        if is_admin_name and verify_password(password, self.password_hash):
+            return User(username=self.username, role=ROLE_ADMIN, display_name="Super admin")
+        if is_admin_name:
+            return None
+        return users.authenticate(name, password)
 
 
 def user_from_request(request: Request, secret: str) -> dict | None:
@@ -160,4 +162,21 @@ def current_user(request: Request) -> dict:
     user = getattr(request.state, "user", None)
     if user is None:
         raise HTTPException(status_code=401, detail="not authenticated")
+    return user
+
+
+def require_admin(request: Request) -> dict:
+    """FastAPI dependency: require an admin session.
+
+    Re-reads the user store rather than trusting the token's role alone, so
+    revoking an admin takes effect immediately for anything destructive.
+    """
+    user = current_user(request)
+    store: UserStore | None = getattr(request.app.state, "users", None)
+    if store is not None:
+        stored = store.get(user["username"])
+        if stored is None or not stored.is_admin or not stored.active:
+            raise HTTPException(status_code=403, detail="admin only")
+    elif user.get("role") != ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="admin only")
     return user

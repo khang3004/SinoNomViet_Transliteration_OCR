@@ -1,16 +1,14 @@
-"""Stored ``valid_post.jsonl`` uploads.
+"""Storing the two files the upstream team hands over.
 
-The crawler's export is cumulative, so a normal workflow is: crawl, export,
-upload, scan; then later crawl again, export again, upload the (now larger) file
-again. The checkpoint in ``app.core.checkpoint`` is what makes that second upload
-scan only the new posts rather than the whole corpus.
+``ground_truth.jsonl`` and ``ground_truth.xlsx`` are uploaded by an admin and
+land under ``<data>/uploads/`` under fixed names, so re-uploading a corrected
+export simply replaces the previous one and the next ingest picks it up.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import shutil
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,57 +16,76 @@ from typing import Any, BinaryIO
 
 log = logging.getLogger(__name__)
 
-FILENAME = "valid_post.jsonl"
-# 20k posts of crawler JSON lands well under this; the cap is here so a stray
-# upload cannot fill the disk the images need.
-MAX_UPLOAD_BYTES = 512 * 1024 * 1024
+JSONL_NAME = "ground_truth.jsonl"
+XLSX_NAME = "ground_truth.xlsx"
+
+# 9k rows of transcription plus a spreadsheet lands far under this; the cap is
+# here so a stray upload cannot fill the disk the mirrored images need.
+MAX_UPLOAD_BYTES = 256 * 1024 * 1024
 CHUNK = 1024 * 1024
+
+JSONL_SUFFIXES = {".jsonl", ".json", ".ndjson"}
+XLSX_SUFFIXES = {".xlsx", ".xlsm"}
 
 
 class UploadTooLarge(ValueError):
     pass
 
 
+class UnknownUploadKind(ValueError):
+    pass
+
+
+def kind_for(filename: str) -> str:
+    """'jsonl' or 'xlsx', decided by extension."""
+    suffix = Path(filename or "").suffix.lower()
+    if suffix in JSONL_SUFFIXES:
+        return "jsonl"
+    if suffix in XLSX_SUFFIXES:
+        return "xlsx"
+    raise UnknownUploadKind(
+        f"Expected a .jsonl or .xlsx file, got {filename!r}."
+    )
+
+
 @dataclass
-class Upload:
-    upload_id: str
+class StoredUpload:
+    kind: str
     path: Path
-    uploaded_at: str
     bytes: int
+    uploaded_at: str
     original_name: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return {
-            "upload_id": self.upload_id,
-            "uploaded_at": self.uploaded_at,
+            "kind": self.kind,
+            "name": self.path.name,
             "bytes": self.bytes,
             "mb": round(self.bytes / 1048576, 2),
+            "uploaded_at": self.uploaded_at,
             "original_name": self.original_name,
         }
 
 
 class UploadStore:
-    """One directory per upload under ``<data>/uploads/``."""
-
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
 
-    def _meta_path(self, upload_id: str) -> Path:
-        return self.root / upload_id / "meta.json"
+    def path_for(self, kind: str) -> Path:
+        return self.root / (JSONL_NAME if kind == "jsonl" else XLSX_NAME)
 
-    def save(self, stream: BinaryIO, original_name: str = "") -> Upload:
-        """Stream to disk in chunks.
+    def save(self, stream: BinaryIO, original_name: str) -> StoredUpload:
+        """Stream to disk in chunks, replacing any previous file of that kind.
 
-        Never ``read()`` the whole body: a cumulative export runs to tens of MB
-        and holding it in memory buys nothing.
+        Never ``read()`` the whole body: the spreadsheet runs to tens of MB and
+        holding it in memory buys nothing.
         """
-        upload_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        target_dir = self.root / upload_id
-        target_dir.mkdir(parents=True, exist_ok=True)
-        path = target_dir / FILENAME
+        kind = kind_for(original_name)
+        self.root.mkdir(parents=True, exist_ok=True)
+        target = self.path_for(kind)
+        tmp = target.with_suffix(target.suffix + ".part")
 
         total = 0
-        tmp = path.with_suffix(".jsonl.part")
         try:
             with open(tmp, "wb") as handle:
                 while True:
@@ -81,66 +98,43 @@ class UploadStore:
                             f"upload exceeds {MAX_UPLOAD_BYTES // 1048576} MB"
                         )
                     handle.write(chunk)
+                handle.flush()
+                os.fsync(handle.fileno())
             # Rename only once fully written, so a partial upload is never
-            # mistaken for a complete one.
-            tmp.replace(path)
+            # ingested as if it were complete.
+            tmp.replace(target)
         except BaseException:
             tmp.unlink(missing_ok=True)
-            shutil.rmtree(target_dir, ignore_errors=True)
             raise
 
-        upload = Upload(
-            upload_id=upload_id,
-            path=path,
-            uploaded_at=datetime.now(timezone.utc).isoformat(),
+        stored = StoredUpload(
+            kind=kind,
+            path=target,
             bytes=total,
+            uploaded_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             original_name=original_name,
         )
-        self._meta_path(upload_id).write_text(
-            json.dumps(upload.to_json(), ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        log.info("stored upload %s (%d bytes)", upload_id, total)
-        return upload
+        log.info("stored %s upload (%d bytes)", kind, total)
+        return stored
 
-    def get(self, upload_id: str) -> Upload | None:
-        # upload_id reaches this from a URL path; keep it to our own format.
-        if not upload_id.isalnum() and not upload_id.replace("T", "").isdigit():
-            return None
-        meta = self._meta_path(upload_id)
-        path = self.root / upload_id / FILENAME
-        if not meta.exists() or not path.exists():
-            return None
-        try:
-            data = json.loads(meta.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return None
-        return Upload(
-            upload_id=upload_id,
-            path=path,
-            uploaded_at=data.get("uploaded_at", ""),
-            bytes=data.get("bytes", 0),
-            original_name=data.get("original_name", ""),
-        )
-
-    def list(self) -> list[Upload]:
-        if not self.root.exists():
-            return []
-        uploads = []
-        for entry in sorted(self.root.iterdir(), reverse=True):
-            if not entry.is_dir():
-                continue
-            upload = self.get(entry.name)
-            if upload is not None:
-                uploads.append(upload)
-        return uploads
-
-    def latest(self) -> Upload | None:
-        uploads = self.list()
-        return uploads[0] if uploads else None
-
-    def delete(self, upload_id: str) -> bool:
-        upload = self.get(upload_id)
-        if upload is None:
-            return False
-        shutil.rmtree(upload.path.parent, ignore_errors=True)
-        return True
+    def describe(self) -> list[dict[str, Any]]:
+        rows = []
+        for kind in ("jsonl", "xlsx"):
+            path = self.path_for(kind)
+            if path.exists():
+                info = path.stat()
+                rows.append(
+                    StoredUpload(
+                        kind=kind,
+                        path=path,
+                        bytes=info.st_size,
+                        uploaded_at=datetime.fromtimestamp(
+                            info.st_mtime, tz=timezone.utc
+                        ).isoformat(timespec="seconds"),
+                    ).to_json()
+                )
+            else:
+                rows.append({"kind": kind, "name": self.path_for(kind).name,
+                             "bytes": 0, "mb": 0.0, "uploaded_at": "",
+                             "original_name": "", "missing": True})
+        return rows

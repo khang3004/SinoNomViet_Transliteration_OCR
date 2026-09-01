@@ -1,13 +1,13 @@
-# Image prep — one service, no database.
+# OCR Review — one service, no database.
 #
 #   docker compose up --build -d
-#   docker compose logs -f scanner
+#   docker compose logs -f review
 #
 # Secrets come from an untracked .env (see .env.example). Never bake them into
 # the image.
 
 services:
-  scanner:
+  review:
     build:
       context: .
       dockerfile: Dockerfile
@@ -18,26 +18,21 @@ services:
 
     # Bound to loopback: a reverse proxy (Caddy/nginx) terminates TLS for the
     # public domain and forwards here. Publishing 0.0.0.0 would expose the app
-    # directly, and /img/* is deliberately unauthenticated.
+    # directly, and /img/* is deliberately session-free.
     ports:
       - "127.0.0.1:8000:8000"
 
     volumes:
-      # Downloaded images live here until the Gemini stage consumes them, so
-      # this must survive container replacement. Job state lives here too.
+      # Reviews, assignments, the corpus snapshot and the mirrored images all
+      # live here. This MUST survive container replacement — it is the work.
       - ./data:/data
 
-    # MinIO is reached over Tailscale, which runs on the HOST, not in here.
-    # Bridge networking normally routes 100.x via the host — verify with:
-    #   docker compose exec scanner curl -sS http://<tailnet-ip>:9000/minio/health/live
-    # If that fails, comment out the `ports:` block above and uncomment:
-    # network_mode: host
-
-    # Generous headroom: without OCR this process is IO-bound and light.
+    # Light: no models, no image processing. The corpus snapshot and the
+    # append-only logs are the only sizeable things held in memory.
     deploy:
       resources:
         limits:
-          memory: 2g
+          memory: 1g
 
     logging:
       driver: json-file

@@ -1,8 +1,12 @@
-"""Locating stored images on disk, safely.
+"""Locating mirrored images on disk, safely.
 
-``post_id`` originates in crawler data and ends up in a filesystem path, so it is
-untrusted input. This lives in ``core`` rather than the route module so the
-containment rules are testable without a web framework.
+Post ids originate in the upstream team's data and end up in a filesystem path,
+so they are untrusted input. This lives in ``core`` rather than the route module
+so the containment rules are testable without a web framework.
+
+Note the alphabet: paths and URLs carry the *slug* form of a post id (see
+``app.core.postid``), never the raw base64 — which may contain ``/`` and would
+otherwise create directories.
 """
 
 from __future__ import annotations
@@ -14,28 +18,21 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-SAFE_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# The slug alphabet: URL-safe base64 with padding removed.
+SAFE_SLUG = re.compile(r"^[A-Za-z0-9_-]{1,512}$")
 
-ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 
 CONTENT_TYPES = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
+    ".tif": "image/tiff", ".tiff": "image/tiff",
 }
 
 
-def is_safe_post_id(post_id: str) -> bool:
-    """Reject ids containing separators, traversal, or absurd length.
-
-    ``..`` alone is not enough to exclude — a literal dot is legal in an id, so
-    the allowlist is on the whole string rather than a denylist of sequences.
-    """
-    if not SAFE_ID.match(post_id):
-        return False
-    return ".." not in post_id
+def is_safe_slug(value: str) -> bool:
+    """Reject anything containing separators, traversal, or absurd length."""
+    return bool(SAFE_SLUG.match(value or "")) and ".." not in value
 
 
 def parse_image_filename(filename: str) -> tuple[int, str] | None:
@@ -49,21 +46,21 @@ def parse_image_filename(filename: str) -> tuple[int, str] | None:
     return int(stem), suffix
 
 
-def shard_for(post_id: str) -> str:
-    """Two-char shard: 20k files in one directory is slow to stat."""
-    return (post_id[:2] or "00").lower()
+def shard_for(post_slug: str) -> str:
+    """Two-char shard: nine thousand files in one directory is slow to stat."""
+    return (post_slug[:2] or "00").lower()
 
 
 def resolve_image_path(
-    images_dir: Path, post_id: str, idx: int, suffix: str
+    images_dir: Path, post_slug: str, idx: int, suffix: str
 ) -> Path | None:
-    """Locate a stored image, or None.
+    """Locate a mirrored image, or None.
 
     Returns None unless the resolved path is genuinely inside ``images_dir``.
-    That containment check — not the id regex — is what actually stops a crafted
-    post_id from reading arbitrary files.
+    That containment check — not the alphabet regex — is what actually stops a
+    crafted id from reading arbitrary files.
     """
-    if not is_safe_post_id(post_id):
+    if not is_safe_slug(post_slug):
         return None
 
     try:
@@ -71,18 +68,18 @@ def resolve_image_path(
     except OSError:
         return None
 
-    shard = shard_for(post_id)
-    # Tolerate a suffix mismatch: the URL may say .jpg while the CDN served .png.
+    shard = shard_for(post_slug)
+    # Tolerate a suffix mismatch: the record may say .jpg while Drive served png.
     ordered = [suffix] + [s for s in sorted(ALLOWED_SUFFIXES) if s != suffix]
 
     for candidate_suffix in ordered:
-        candidate = images_dir / shard / f"{post_id}_{idx}{candidate_suffix}"
+        candidate = images_dir / shard / f"{post_slug}_{idx}{candidate_suffix}"
         try:
             resolved = candidate.resolve()
         except OSError:
             continue
         if not resolved.is_relative_to(root):
-            log.warning("rejected path escape for post_id=%r", post_id)
+            log.warning("rejected path escape for post slug %r", post_slug)
             return None
         if resolved.is_file():
             return resolved
@@ -96,10 +93,8 @@ def content_type_for(path: Path) -> str:
 def image_dimensions(data: bytes) -> tuple[int | None, int | None]:
     """(width, height) from image bytes, without a full decode.
 
-    Plain Pillow metadata, used by the downloader to populate every output
-    record.
-    Best-effort: a truncated image still downloads and serves fine, it just has
-    no dimensions.
+    Best-effort: a truncated image still displays and is still reviewable, it
+    just has no dimensions to show.
     """
     try:
         from PIL import Image

@@ -1,235 +1,239 @@
-# Image Prep
+# OCR Review
 
-A stage in the Facebook crawl pipeline. It takes crawled post records, downloads
-each image, and makes it fetchable from your own domain so the next stage can OCR
-it:
+A review console for auditing another team's Hán-Nôm transcriptions.
 
-```
-crawl Facebook → MinIO → [Image Prep] → Gemini batch (boxing + OCR)
-```
+They hand over ~9,000 calligraphy images in a public Google Drive folder, a
+`ground_truth.jsonl` and a `ground_truth.xlsx`. This app draws a stratified
+random sample, hands each reviewer a disjoint slice, and records — image by
+image — whether their `ground_truth` actually matches the photograph.
 
-It makes **no claim about image contents**. An earlier version ran PaddleOCR here
-to filter out images without Han text, but that filter cost hours of CPU on a
-4-vCPU box to save work the Gemini stage does anyway. Dropping it took the
-container from ~3 GB to a few hundred MB and the build from ~15 minutes to about
-one. The history is in git if the filter is ever wanted back.
-
----
-
-## Two ways to feed it
-
-**Upload (works today, no MinIO needed):**
-
-1. Upload the crawler's `valid_post.jsonl` from the dashboard
-2. Prepare — repeat until nothing is pending
-3. Download `ready_for_ocr.jsonl` and hand it to the Gemini stage
-
-That export is **cumulative**, so re-uploading after a fresh crawl is expected. A
-local checkpoint (`data/state/processed_ids.jsonl`) keyed on `post_id` means the
-second upload only processes genuinely new posts.
-
-**MinIO (optional):** with `MINIO_ENDPOINT` and `MINIO_GROUP_PREFIX` both set, it
-reads the crawler's `logs/by_run/*/upserts.jsonl` directly and mirrors results
-back, with a scheduler keeping pace automatically. Everything MinIO stays dormant
-otherwise — the app runs normally without it and hides those parts of the UI.
-Results are always written locally; MinIO is a mirror, never the only copy.
-
----
-
-## How a batch works
+The output is the number their files cannot give you: **how accurate their
+labels are**, and therefore how much to trust every model score computed
+against them.
 
 ```
-preflight  decode every signed-URL expiry  →  gate
-download   fetch from the Facebook CDN     →  minutes, high concurrency
-publish    signed URLs + errors            →  written as posts finish
+their Drive folder ─┐
+their ground_truth ─┼─► sample ─► reviewers ─► verdicts ─► reviews.xlsx
+                    ┘   (stratified, disjoint)
 ```
 
-**Preflight is a gate, not a log line.** fbcdn signs image URLs with a lifetime
-measured in hours. If more than 10% are already dead, the batch pauses for a
-human — a stale crawl is worth re-running rather than downloading dead links.
+## What a reviewer sees
 
-**Publishing happens during the run.** Finished posts are written and
-checkpointed as their images land, so stopping costs the in-flight items rather
-than the batch. A post is published only once *all* its images are resolved.
+The image on the left; on the right, their `ground_truth`, the `gemini` output
+with its distance from that label, and the `deepseek` output for context. Then
+one question: **does their transcription match the image?**
 
-**Images already on disk are never re-downloaded**, which makes an interrupted
-run free to redo — and matters because those CDN URLs may have expired since.
+| Verdict | Meaning | Correction required |
+|---|---|---|
+| `correct` | matches the image | no — the server adopts their label as the truth |
+| `minor` | small errors: variant forms, a stray character | yes |
+| `wrong` | substantially wrong | yes |
+| `unreadable` | image too damaged or unclear to judge | no |
+| `not_an_image` | broken, missing, or not a photograph | no — returned to the pool |
 
----
+Gemini gets a lighter `good` / `partial` / `bad` rating alongside. DeepSeek is
+shown but not scored.
 
-## The admin gallery
+**Nothing is pre-filled.** The correction box starts empty, and a verdict is
+only recorded when the reviewer chooses one — so clicking through without
+looking cannot masquerade as a perfect score. `not_an_image` hands the record
+back rather than counting it, and the reviewer is owed a replacement.
 
-The main page is a browser over what has been prepared: a grid of thumbnails,
-each showing the author, caption and post id. Clicking one opens a lightbox with
-dimensions, size, sha256, both expiry timestamps, the source CDN URL, a copy
-button for the signed URL, and a link straight to the original Facebook post.
-Arrow keys move between images in a multi-image post.
+## How the sample is drawn
 
-Search filters on author, post id, caption and post link — paste a Facebook URL
-to find its post.
+A uniform draw over nine thousand images spends most of its effort on rows where
+the model and the label already agree, which teaches nothing. So the draw is
+stratified on **disagreement** — how far their Gemini output sits from their own
+ground truth:
 
-**Thumbnails re-sign on read.** A record written a month ago carries a signature
-that has since expired; the gallery mints a fresh one so browsing never shows
-broken images. The stored URL is what the Gemini stage consumes and is shown
-alongside.
+| Band | Definition | Default share |
+|---|---|---|
+| `exact` | identical after whitespace folding | 15% |
+| `near` | ≥ 90% character accuracy | 20% |
+| `far` | 50–90% | 25% |
+| `poor` | < 50% | 25% |
+| `empty` | one side blank | 15% |
 
----
+Two constraints ride along:
 
-## Images are served from this VPS
+- **Per-post cap** (default 2). One prolific page can contribute dozens of
+  images; without a cap the sample would describe that page, not the corpus.
+- **No overlap.** Reviewers never share a record, so the cap is a global running
+  total and a drawn record is gone from the pool.
 
-The Gemini stage uses URLs from your domain and fetches them **anonymously**,
-while the rest of the app sits behind a login. The resolution: `/img/*` is the
-only unauthenticated route, guarded by an **HMAC signature** instead of a session.
-Only URLs this service minted will serve, and they expire after
-`IMAGE_URL_TTL_DAYS` (default 30 — a TTL shorter than the downstream Gemini run
-is a silent failure at the last step).
+Shortfalls redistribute: if a band runs dry, its quota moves to the bands that
+still have depth rather than silently returning a short sample. Tune it all with
+`SAMPLE_TARGETS`, `SAMPLE_PER_POST_CAP` and `SAMPLE_BATCH`.
 
-Nothing auto-deletes images: they have to outlive the run that consumes them, and
-deleting one whose source URL has expired is unrecoverable.
+## Accuracy, reported twice
 
----
+Every comparison reports two numbers, because they diverge exactly where it
+matters:
 
-## Output contract
+- **`cer_accuracy`** = `1 − distance / len(reference)` — the standard CER
+  convention. Quote this one outside the project.
+- **`max_accuracy`** = `1 − distance / max(len(a), len(b))` — the convention
+  the upstream team's `Task.xlsx` uses.
 
-`ready_for_ocr.jsonl`, one object per post:
+When a model hallucinates extra text the hypothesis is longer, so `max` divides
+by the larger number and flatters the very failure this audit exists to find.
+
+Whitespace is folded before comparison: in Hán-Nôm transcription line breaks
+record layout, not content. Text is NFC-normalised, so a decomposed character
+is not counted as an edit.
+
+Once a reviewer has audited a record, **their correction becomes the reference**
+and both their `ground_truth` and `gemini` are measured against it. That is
+where `ground_truth_accuracy` and `gemini_accuracy` on the dashboard come from.
+
+## The data it reads
+
+The two files are complementary, and join on `image` — the only field both
+share:
 
 ```jsonc
-{
-  "post_id": "...", "group_id": "...", "post_link": "...", "author": "...",
-  "story_post_id": null, "tile_id": null,
-  "images_prepared": 2, "images_failed": 0,
-  "images": [{
-    "url": "https://<domain>/img/<post_id>/0.jpg?exp=...&sig=...",  // Gemini fetches this
-    "idx": 0, "width": 1170, "height": 1461, "bytes": 284113,
-    "content_type": "image/jpeg", "sha256": "...",
-    "source_url": "https://scontent....fbcdn.net/...",
-    "source_expires_at": "2026-08-18T03:06:59+00:00",
-    "url_expires_at": "2026-09-16T...", "downloaded_at": "..."
-  }],
-  "source_key": "...", "source_run_id": "...", "run_id": "...",
-  "stage": "han_scan", "schema_version": "han_scan/2.0",
-  "prepared_at": "...", "label": "...", "sub_caption": "...", "posted_at": null
-}
+// ground_truth.jsonl — model outputs, no post identity
+{ "image": "...", "ground_truth": "...", "label": "...",
+  "gemini": [{"text": "..."}], "deepseek": [{"text": "..."}] }
 ```
 
-Schema 2.0 **removed** the Han-detection fields (`han_valid`, `han_words_total`,
-`valid_pic`, `scan_status`, …) rather than leaving them permanently null. A null
-field that can never be filled invites a consumer to read it as `false` and
-silently drop every post.
+```
+ground_truth.xlsx — post identity
+post_id | image | caption | ground_truth | gemini_ocr | post_link
+```
 
-Errors carry an `error_class` and a `retryable` flag, so a retry sweep skips
-permanently dead links (`expired_url`, `http_404`) and only re-runs transient ones
-(`timeout`, `http_429`, `http_5xx`).
+Either file alone produces a usable corpus; together they produce a complete
+one. Header spelling and case are tolerated (`FB Caption`, `Gemini OCR`, `Link`).
 
----
+Rows are dropped at ingest, with a counted reason, when the `image` is blank or
+is not an image file, or when there is no `ground_truth` to audit.
 
-## Where things land
+### Post ids
 
-Under `DATA_DIR`, mirroring the MinIO layout so files from either path are
-interchangeable to the Gemini stage:
+Their filenames are `<base64_post_id>_<idx>.jpg`. The base64 decodes to a
+Facebook story id:
 
-| Path | Contents |
-|---|---|
-| `results/export/ready_for_ocr.jsonl` | The export → feeds Gemini |
-| `results/errors/failed.jsonl` | Cumulative failures, for retry sweeps |
-| `results/logs/by_run/<run>/…` | Per-run `result.json`, `upserts.jsonl`, `errors.jsonl` |
-| `state/processed_ids.jsonl` | The checkpoint |
-| `uploads/<id>/valid_post.jsonl` | Uploaded exports |
-| `images/` | Downloaded images, served to Gemini |
+```
+UzpfSTEwMDAwMDU5MzExMzI1ODpWSzoyNzgzNTQ4OTgyNjA5MzEwMA==
+  -> S:_I100000593113258:VK:27835489826093100
+  -> https://www.facebook.com/permalink.php?story_fbid=27835489826093100&id=100000593113258
+```
 
-Under MinIO (when configured) the same tree lives at
-`<bucket>/<group_prefix>/han_scan/`. The `han_scan` name is kept as an identifier
-the crawl team may already reference — renaming it would orphan existing objects.
+So every image links straight back to its post, whether or not the xlsx supplied
+a `post_link`. An id that does not decode yields no link rather than a guessed
+one — a half-built URL would send a reviewer to the wrong post silently.
 
----
+Standard base64 contains `+`, `/` and `=`, none of which survive a URL path, so
+paths and URLs carry a **slug** form (`+`→`-`, `/`→`_`, padding dropped). The raw
+id stays intact everywhere else, because it is the join key against their data.
+
+## Images
+
+Their Drive folder is public, but a public folder can be *read* anonymously and
+not *listed* anonymously — so a Google API key is needed once to map filenames
+to Drive file ids. The key is free, restricted to the Drive API, and grants
+nothing beyond what is already public.
+
+Reviewers never load from Drive directly. The app mirrors each image to local
+disk the first time someone opens it and serves it from `/img/*` thereafter:
+the folder is not exposed in devtools, a room full of reviewers does not
+rate-limit the folder, and the second person to open an image gets it instantly.
+Nobody waits for nine thousand downloads a few-hundred-image sample will never
+touch.
+
+`/img/*` is HMAC-signed rather than cookie-gated, so an `<img>` tag loads
+without a session round-trip. A forged or expired signature is a 403 before the
+filesystem is touched.
+
+## Accounts
+
+The **super admin** comes from the environment (`APP_USERNAME`,
+`APP_PASSWORD_HASH`) and cannot be created, renamed or disabled through the UI —
+so a mistake in the user file can never lock everyone out. Reviewers are added
+by an admin under **Admin → Add a reviewer** and stored in `data/users.json` as
+bcrypt hashes.
+
+Accounts are disabled, never deleted: every review references its reviewer by
+name, and removing the account would orphan that attribution in the export.
+
+Everyone can see everyone else's completed reviews — that is the
+**Everyone's reviews** tab — but only the holder of a record can judge it.
 
 ## Running it
 
 ```bash
-cp .env.example .env      # then fill it in — the app refuses to start without AUTH_SECRET
+cp .env.example .env      # then fill in the blanks
+docker compose up -d --build
+docker compose logs -f review
+```
+
+Generate the two secrets and the password hash:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
 ```bash
-docker compose up --build -d && docker compose logs -f scanner
+docker compose run --rm review python -m app.cli --hash-password
 ```
 
-Six values need filling: `AUTH_SECRET`, `APP_USERNAME`, `APP_PASSWORD_HASH`,
-`COOKIE_SECURE`, `PUBLIC_BASE_URL`, `IMAGE_SIGNING_SECRET`. Generate secrets with
-`python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+Then, signed in as the admin:
 
-The app binds `127.0.0.1:8000`; put a reverse proxy in front for the public
-domain. `--workers 1` is **required** — batch state lives in the process, and a
-second uvicorn worker would fork it and corrupt progress tracking.
+1. **Upload** `ground_truth.jsonl` and `ground_truth.xlsx`
+2. **Ingest** — merges them and reports what was skipped and why
+3. **Index Drive folder** — maps filenames to Drive file ids
+4. **Add a reviewer** for each person on the team
+5. Everyone presses **Get images** and starts
 
-### Headless
+Export from the same panel as `.xlsx`, `.csv` or `.jsonl`. Accuracy columns are
+written as numbers with a percent format, not as `"97.50%"` strings — a text
+column cannot be averaged, which is the first thing anyone does with the sheet.
+The CSV carries a UTF-8 BOM so Excel does not render the CJK as mojibake.
 
-The core has no web dependency, so it also runs without the app:
+## Storage
 
-```bash
-docker compose run --rm scanner python -m app.cli --check
-```
-
-```bash
-docker compose run --rm scanner python -m app.cli --preflight-only
-```
-
-```bash
-docker compose run --rm scanner python -m app.cli --limit 500
-```
-
-Add `--minio` to read the crawler's by_run logs instead of an upload. `--check`
-reports configuration and does **not** fail when MinIO is absent — that's normal.
-
----
-
-## Architecture
+No database. Everything is files under `DATA_DIR`:
 
 ```
-app/
-  core/     the pipeline — NO web imports, ever
-            models  parser  source  sink  storage  downloader  batch
-            jobstore  scheduler  signing  imagestore  gallery  health
-  api/      the HTTP adapter — FastAPI lives only here
-  cli.py    headless runner (proves core is genuinely decoupled)
+corpus/records.jsonl     the merged upstream data — replaced wholesale on ingest
+corpus/ingest.json       what the last merge produced and skipped
+assignments.jsonl        append-only claims; the latest row per record wins
+reviews.jsonl            append-only verdicts; a changed mind adds a row
+users.json               reviewer accounts (bcrypt hashes)
+drive_index.json         filename -> Drive file id
+images/<shard>/…         mirrored images
+uploads/                 the two files as uploaded
 ```
 
-`core` talks to two protocols, so either side can be swapped without touching
-pipeline logic:
+Append-only and fsynced: a reviewer's edit never destroys what they said before,
+two writers cannot interleave into a corrupted record, and a crash loses at most
+the line being written. Re-ingesting corrected upstream data keeps existing
+reviews attached, because `record_id` is derived from the post id and image
+index rather than from row position.
 
-```python
-class RecordSource(Protocol):
-    def iter_pending(self, limit: int) -> PendingBatch: ...
-    def mark_done(self, post_ids: list[str], run_id: str) -> None: ...
+`--workers 1` is required, not a suggestion: assignment is serialised by an
+in-process lock, and a second worker would hand the same image to two reviewers.
 
-class ResultSink(Protocol):
-    def write_results(self, records: list[PreparedPost], run_id: str) -> None: ...
-    def write_errors(self, errors: list[PrepError], run_id: str) -> None: ...
+## Layout
+
 ```
-
-Shipped: `FileRecordSource` / `MinioRecordSource`, and `FileResultSink` /
-`MinioResultSink` / `TeeResultSink` (local plus mirror).
-
-**Unknown record shapes:** `core/parser.py` ships a `RecordParser` protocol with a
-`CustomRecordParser` stub. Implement `parse()` there for a schema the default does
-not handle; nothing else changes.
-
----
+app/core/     no web framework, ever — app/cli.py proves it
+  postid.py     base64 <-> permalink <-> path-safe slug
+  metrics.py    Levenshtein, CER and max-length accuracy
+  corpus.py     read + merge their jsonl and xlsx
+  sampling.py   stratified draw, per-post cap, shortfall redistribution
+  audit.py      corpus snapshot, assignments, reviews, progress
+  drive.py      folder listing and lazy image mirroring
+  users.py      accounts
+  jsonlog.py    append-only fsynced logs
+app/api/      FastAPI adapter over the above
+app/static/   the console
+```
 
 ## Tests
 
-The suite needs none of the runtime stack — no MinIO, no FastAPI — so it runs
-anywhere in seconds:
-
 ```bash
-python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-```
-
-```bash
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
-
-What it deliberately does not cover is anything requiring real I/O. Verify those
-on the VPS with `app.cli --check`, `--preflight-only`, and a small `--limit` run,
-and by fetching one exported `url` **from outside your network, unauthenticated** —
-that last one is what Gemini will do, and the only test that proves the deliverable
-works.

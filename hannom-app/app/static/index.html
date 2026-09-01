@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Image Prep — crawl images for OCR</title>
+<title>OCR Review — audit the upstream transcriptions</title>
 <style>
   :root {
     color-scheme: light;
@@ -68,13 +68,19 @@
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   button.primary { background: var(--series-1); color: #fff; border-color: transparent; }
   button.danger  { background: var(--critical); color: #fff; border-color: transparent; }
+  button.good    { background: var(--good); color: #fff; border-color: transparent; }
+  button.warn    { background: var(--warning); color: #0b0b0b; border-color: transparent; }
 
-  input[type=search], input[type=file] {
+  input, textarea, select {
     font-family: inherit; font-size: 0.85rem; padding: 0.42rem 0.6rem;
     border: 1px solid var(--border); border-radius: 6px;
-    background: var(--plane); color: var(--ink);
+    background: var(--plane); color: var(--ink); max-width: 100%;
   }
-  input[type=search]:focus { outline: 2px solid var(--series-1); outline-offset: 1px; }
+  input:focus, textarea:focus, select:focus { outline: 2px solid var(--series-1); outline-offset: 1px; }
+  textarea { width: 100%; resize: vertical; line-height: 1.7; }
+  label.field { display: block; font-size: 0.7rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+    margin-bottom: 0.3rem; }
 
   /* ---- status strip ---- */
   .strip { display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap; }
@@ -104,8 +110,10 @@
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 10px; overflow: hidden; cursor: pointer;
     display: flex; flex-direction: column; transition: box-shadow .15s ease;
+    position: relative;
   }
   .tile:hover { box-shadow: var(--shadow); }
+  .tile.done { border-color: color-mix(in srgb, var(--good) 45%, var(--border)); }
   .tile .thumb {
     width: 100%; aspect-ratio: 4 / 3; background: var(--grid);
     display: block; object-fit: cover;
@@ -113,47 +121,64 @@
   .tile .meta { padding: 0.55rem 0.65rem; display: flex; flex-direction: column; gap: 0.2rem; }
   .tile .who { font-size: 0.82rem; font-weight: 600; }
   .tile .cap {
-    font-size: 0.75rem; color: var(--ink-2); line-height: 1.35;
+    font-size: 0.78rem; color: var(--ink-2); line-height: 1.5;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
     overflow: hidden;
   }
   .tile .foot {
     font-size: 0.68rem; color: var(--muted); display: flex;
-    justify-content: space-between; gap: 0.4rem;
+    justify-content: space-between; gap: 0.4rem; align-items: center;
   }
   .pill {
-    font-size: 0.65rem; font-weight: 700; padding: 0.05rem 0.35rem;
+    font-size: 0.64rem; font-weight: 700; padding: 0.05rem 0.38rem;
     border-radius: 3px; border: 1px solid var(--border); color: var(--muted);
+    white-space: nowrap;
   }
+  .pill.exact { color: var(--good-text); border-color: var(--good); }
+  .pill.near  { color: var(--good-text); border-color: var(--grid); }
+  .pill.far   { color: var(--warning); border-color: var(--warning); }
+  .pill.poor  { color: var(--critical); border-color: var(--critical); }
+  .pill.empty { color: var(--muted); border-style: dashed; }
+  .pill.v-correct { color: var(--good-text); border-color: var(--good); }
+  .pill.v-minor { color: var(--warning); border-color: var(--warning); }
+  .pill.v-wrong, .pill.v-not_an_image { color: var(--critical); border-color: var(--critical); }
 
-  /* ---- lightbox ---- */
+  /* ---- reviewer workspace (lightbox) ---- */
   .lb {
     display: none; position: fixed; inset: 0; z-index: 50;
-    background: rgba(0,0,0,0.72); padding: 1.5rem;
+    background: rgba(0,0,0,0.72); padding: 1.2rem;
     align-items: center; justify-content: center;
   }
   .lb.show { display: flex; }
   .lb-inner {
     background: var(--surface); border-radius: 12px; overflow: hidden;
-    max-width: 1050px; width: 100%; max-height: 90vh;
-    display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr);
+    max-width: 1180px; width: 100%; max-height: 92vh;
+    display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(340px, 1fr);
   }
-  @media (max-width: 780px) { .lb-inner { grid-template-columns: 1fr; } }
-  .lb-img { background: #000; display: flex; align-items: center; justify-content: center; min-height: 240px; }
-  .lb-img img { max-width: 100%; max-height: 90vh; object-fit: contain; display: block; }
-  .lb-side { padding: 1.1rem 1.25rem; overflow-y: auto; }
-  .lb-side h3 { font-size: 0.95rem; margin-bottom: 0.15rem; }
-  .lb-side .cap { font-size: 0.82rem; color: var(--ink-2); margin: 0.5rem 0 0.9rem; white-space: pre-wrap; }
-  .kv { display: grid; grid-template-columns: 88px 1fr; gap: 0.25rem 0.6rem; font-size: 0.76rem; }
+  @media (max-width: 900px) { .lb-inner { grid-template-columns: 1fr; max-height: 94vh; } }
+  .lb-img { background: #000; display: flex; align-items: center; justify-content: center;
+            min-height: 240px; max-height: 92vh; overflow: auto; }
+  .lb-img img { max-width: 100%; object-fit: contain; display: block; cursor: zoom-in; }
+  .lb-img img.zoom { max-width: none; cursor: zoom-out; }
+  .lb-side { padding: 1rem 1.2rem; overflow-y: auto; max-height: 92vh; }
+  .lb-side h3 { font-size: 0.92rem; margin-bottom: 0.15rem; }
+  .lb-close { position: absolute; top: 1.2rem; right: 1.2rem; }
+
+  .txtblock {
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.6rem;
+    background: var(--plane); font-size: 1.05rem; line-height: 1.85;
+    white-space: pre-wrap; word-break: break-word; max-height: 190px; overflow-y: auto;
+  }
+  .txtblock.empty-val { color: var(--muted); font-size: 0.82rem; font-style: italic; }
+  .cjk { font-family: "Noto Serif CJK TC", "Source Han Serif", "MS Mincho", serif; }
+
+  .kv { display: grid; grid-template-columns: 92px 1fr; gap: 0.25rem 0.6rem; font-size: 0.76rem; }
   .kv dt { color: var(--muted); }
   .kv dd { word-break: break-all; font-variant-numeric: tabular-nums; }
-  .lb-close { position: absolute; top: 1.5rem; right: 1.5rem; }
-  .thumbstrip { display: flex; gap: 0.35rem; margin-top: 0.8rem; flex-wrap: wrap; }
-  .thumbstrip img {
-    width: 44px; height: 44px; object-fit: cover; border-radius: 4px;
-    border: 2px solid transparent; cursor: pointer;
-  }
-  .thumbstrip img.on { border-color: var(--series-1); }
+
+  .verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 0.35rem; }
+  .verdicts button { width: 100%; }
+  .verdicts button[aria-pressed="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
 
   /* ---- collapsible ---- */
   details.card > summary {
@@ -171,26 +196,22 @@
   .kpi .v { font-size: 1.25rem; font-weight: 700; }
   .kpi .s { font-size: 0.72rem; color: var(--ink-2); }
 
-  .log {
-    background: var(--plane); border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.55rem 0.65rem; max-height: 220px; overflow-y: auto;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.73rem;
-  }
-  .log div { padding: 0.06rem 0; white-space: pre-wrap; word-break: break-word; }
-  .log .warn { color: var(--warning); } .log .error { color: var(--critical); }
-  .log .ts { color: var(--muted); }
-
+  .tablewrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
-  th, td { text-align: left; padding: 0.32rem 0.45rem; border-bottom: 1px solid var(--grid); }
+  th, td { text-align: left; padding: 0.32rem 0.45rem; border-bottom: 1px solid var(--grid); white-space: nowrap; }
   th { color: var(--muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
-  .ebar { display: grid; grid-template-columns: 150px 1fr 48px; gap: 0.5rem; align-items: center; margin-bottom: 0.35rem; }
-  .ebar .name { font-size: 0.76rem; color: var(--ink-2); font-family: ui-monospace, monospace; white-space: nowrap; }
-  .ebar .track { height: 13px; background: var(--grid); border-radius: 4px; overflow: hidden; }
-  .ebar .fill { height: 100%; background: var(--seq-450); border-radius: 0 4px 4px 0; }
-  .ebar .n { font-size: 0.78rem; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
-  @media (max-width: 560px) { .ebar { grid-template-columns: 1fr 48px; } .ebar .track { grid-column: 1 / -1; } }
+  /* ---- distribution bars ---- */
+  .ebar { display: grid; grid-template-columns: 132px 1fr 96px; gap: 0.5rem; align-items: center; margin-bottom: 0.4rem; }
+  .ebar .name { font-size: 0.76rem; color: var(--ink-2); white-space: nowrap; }
+  .ebar .track { height: 15px; background: var(--grid); border-radius: 4px; overflow: hidden; position: relative; }
+  .ebar .fill { height: 100%; background: var(--seq-450); }
+  .ebar .fill.assigned { background: color-mix(in srgb, var(--seq-450) 35%, transparent); position: absolute; inset: 0 auto 0 0; }
+  .ebar .fill.reviewed { background: var(--seq-450); position: absolute; inset: 0 auto 0 0; }
+  .ebar .target { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--series-2); }
+  .ebar .n { font-size: 0.75rem; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  @media (max-width: 620px) { .ebar { grid-template-columns: 1fr 90px; } .ebar .track { grid-column: 1 / -1; } }
 
   .banner {
     display: none; padding: 0.75rem 0.95rem; border-radius: 8px; margin-bottom: 1rem;
@@ -201,43 +222,50 @@
   .banner b { display: block; margin-bottom: 0.2rem; }
 
   .empty { text-align: center; padding: 2.5rem 1rem; color: var(--muted); font-size: 0.88rem; }
+  .tabs { display: flex; gap: 0.3rem; }
+  .tabs button[aria-selected="true"] { background: var(--series-1); color: #fff; border-color: transparent; }
+  .hide { display: none !important; }
 </style>
 </head>
 <body>
 <div class="wrap">
 
   <header>
-    <h1>Image Prep</h1>
-    <span class="muted" id="conn">…</span>
+    <h1>OCR Review</h1>
+    <span class="muted" id="whoami">…</span>
     <div class="spacer"></div>
-    <span class="muted" id="sched-state"></span>
+    <span class="muted" id="corpus-line"></span>
     <button id="btn-logout">Sign out</button>
   </header>
 
   <div class="banner" id="banner" role="alert">
     <b id="banner-title"></b><span id="banner-body"></span>
-    <div class="row" id="banner-actions" style="margin-top:0.55rem"></div>
   </div>
 
-  <!-- ============ status + run ============ -->
+  <!-- ============ status + get work ============ -->
   <div class="card">
     <div class="strip">
       <div class="stat">
-        <div class="k">Prepared</div>
-        <div class="v"><span id="s-prepared">—</span> <small>of <span id="s-total">—</span> posts</small></div>
+        <div class="k">My queue</div>
+        <div class="v"><span id="s-done">—</span> <small>of <span id="s-mine">—</span> reviewed</small></div>
       </div>
       <div class="stat">
-        <div class="k">Images</div>
-        <div class="v" id="s-images">—</div>
+        <div class="k">Team reviewed</div>
+        <div class="v" id="s-team">—</div>
       </div>
       <div class="stat">
-        <div class="k">Failed</div>
-        <div class="v" id="s-failed">—</div>
+        <div class="k">Their label accuracy</div>
+        <div class="v" id="s-gt">—</div>
+      </div>
+      <div class="stat">
+        <div class="k">Gemini accuracy</div>
+        <div class="v" id="s-gemini">—</div>
       </div>
       <div class="spacer"></div>
       <div class="row">
-        <button class="primary" id="btn-run">Prepare next batch</button>
-        <button id="btn-cancel" disabled>Cancel</button>
+        <input type="number" id="assign-n" min="1" max="1000" step="10" value="100" style="width:88px" aria-label="How many images" />
+        <button class="primary" id="btn-assign">Get images</button>
+        <button id="btn-review" disabled>Start reviewing</button>
       </div>
     </div>
 
@@ -245,16 +273,20 @@
     <div class="row" style="margin-top:0.5rem; font-size:0.78rem">
       <span class="muted" id="s-hint">—</span>
       <span class="spacer"></span>
-      <span class="muted" id="job-line"></span>
+      <span class="muted" id="s-coverage"></span>
     </div>
   </div>
 
   <!-- ============ gallery ============ -->
   <div class="card">
     <div class="row" style="margin-bottom:0.85rem">
-      <h2 style="margin:0">Prepared images</h2>
+      <div class="tabs">
+        <button id="tab-mine" aria-selected="true">My queue</button>
+        <button id="tab-team" aria-selected="false">Everyone's reviews</button>
+      </div>
       <span class="spacer"></span>
-      <input type="search" id="q" placeholder="author, post id, caption, or link…" style="min-width:240px" />
+      <select id="filter-reviewer" class="hide" aria-label="Filter by reviewer"><option value="">All reviewers</option></select>
+      <input type="search" id="q" placeholder="post id, transcription, note…" style="min-width:220px" />
       <button id="btn-prev" disabled>Prev</button>
       <button id="btn-next" disabled>Next</button>
       <span class="muted" id="page-info"></span>
@@ -263,53 +295,83 @@
     <div class="empty" id="gallery-empty" style="display:none"></div>
   </div>
 
-  <!-- ============ collapsed detail ============ -->
-  <details class="card">
-    <summary>Batch activity</summary>
-    <div id="bars" style="margin-bottom:0.8rem"></div>
-    <div class="muted" id="preflight-line" style="font-size:0.78rem; margin-bottom:0.7rem"></div>
-    <div class="log" id="log"><div class="muted">No batch running.</div></div>
-  </details>
-
-  <details class="card">
-    <summary>Failures</summary>
-    <div id="errors"><p class="muted" style="font-size:0.82rem">No failures recorded.</p></div>
-    <div class="row" style="margin-top:0.7rem">
-      <button id="btn-retry">Retry retryable failures</button>
-    </div>
-  </details>
-
-  <details class="card">
-    <summary>Host &amp; storage</summary>
-    <div class="kpis">
-      <div class="kpi"><div class="k">Memory</div><div class="v" id="h-mem">—</div><div class="s" id="h-mem-sub">—</div></div>
-      <div class="kpi"><div class="k">CPU</div><div class="v" id="h-cpu">—</div><div class="s" id="h-cpu-sub">—</div></div>
-      <div class="kpi"><div class="k">Disk</div><div class="v" id="h-disk">—</div><div class="s" id="h-disk-sub">—</div></div>
-      <div class="kpi"><div class="k">Image store</div><div class="v" id="h-imgcount">—</div><div class="s" id="h-imgsize">—</div></div>
-    </div>
-    <p class="muted" style="font-size:0.75rem; margin-top:0.7rem">
-      Nothing deletes downloaded images automatically — they must outlive the Gemini run that consumes them.
+  <!-- ============ progress panel ============ -->
+  <details class="card" open>
+    <summary>Sample distribution &amp; progress</summary>
+    <p class="muted" style="font-size:0.78rem; margin-bottom:0.85rem">
+      The draw is stratified on how far the upstream Gemini output sits from their own
+      ground truth, so reviewer time lands on disagreement rather than on rows everyone
+      already agrees about. The orange tick marks each band's target share.
     </p>
+    <div id="bands"></div>
+    <div class="kpis" style="margin-top:1rem">
+      <div class="kpi"><div class="k">Corpus</div><div class="v" id="k-records">—</div><div class="s" id="k-posts">—</div></div>
+      <div class="kpi"><div class="k">Claimed</div><div class="v" id="k-assigned">—</div><div class="s" id="k-pending">—</div></div>
+      <div class="kpi"><div class="k">Reviewed</div><div class="v" id="k-reviewed">—</div><div class="s" id="k-coverage">—</div></div>
+      <div class="kpi"><div class="k">Audited pairs</div><div class="v" id="k-pairs">—</div><div class="s">ground truth vs Gemini</div></div>
+    </div>
+    <div id="verdict-mix" style="margin-top:1rem"></div>
   </details>
 
   <details class="card">
-    <summary>Source &amp; downloads</summary>
-    <div class="row" style="margin-bottom:0.9rem">
-      <input type="file" id="file-in" accept=".jsonl,.json,.ndjson" />
-      <button class="primary" id="btn-upload">Upload valid_post.jsonl</button>
-      <span class="muted" id="upload-status"></span>
+    <summary>Reviewers</summary>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>Reviewer</th><th class="num">Claimed</th><th class="num">Reviewed</th>
+          <th class="num">Left</th><th class="num">Flagged</th><th class="num">Avg sec</th>
+          <th class="num">Label accuracy</th><th>Last activity</th>
+        </tr></thead>
+        <tbody id="reviewers"><tr><td colspan="8" class="muted">No activity yet.</td></tr></tbody>
+      </table>
     </div>
-    <div class="meter" id="up-wrap" style="display:none; margin-bottom:0.8rem"><i id="up-bar" style="width:0%"></i></div>
-    <div id="upload-summary" style="margin-bottom:1rem"></div>
-    <table>
-      <thead><tr><th>File</th><th class="num">Records</th><th class="num">Size</th><th></th></tr></thead>
-      <tbody id="downloads"><tr><td colspan="4" class="muted">Nothing produced yet.</td></tr></tbody>
-    </table>
+  </details>
+
+  <details class="card" id="admin-card">
+    <summary>Admin — data, users, exports</summary>
+
+    <h2 style="margin-top:0.2rem">Upstream data</h2>
+    <div class="row" style="margin-bottom:0.6rem">
+      <input type="file" id="file-in" accept=".jsonl,.json,.ndjson,.xlsx,.xlsm" />
+      <button id="btn-upload">Upload</button>
+      <button class="primary" id="btn-ingest">Ingest</button>
+      <button id="btn-drive">Index Drive folder</button>
+      <span class="muted" id="admin-status"></span>
+    </div>
+    <div class="tablewrap" style="margin-bottom:1.2rem">
+      <table>
+        <thead><tr><th>File</th><th class="num">Size</th><th>Uploaded</th></tr></thead>
+        <tbody id="uploads"><tr><td colspan="3" class="muted">Nothing uploaded yet.</td></tr></tbody>
+      </table>
+    </div>
+
+    <h2>Add a reviewer</h2>
+    <div class="row" style="margin-bottom:0.6rem">
+      <input id="u-name" placeholder="username" autocomplete="off" style="width:150px" />
+      <input id="u-display" placeholder="display name" autocomplete="off" style="width:160px" />
+      <input id="u-pass" type="password" placeholder="password (8+ chars)" autocomplete="new-password" style="width:190px" />
+      <select id="u-role"><option value="reviewer">Reviewer</option><option value="admin">Admin</option></select>
+      <button class="primary" id="btn-adduser">Add user</button>
+      <span class="muted" id="user-status"></span>
+    </div>
+    <div class="tablewrap" style="margin-bottom:1.2rem">
+      <table>
+        <thead><tr><th>User</th><th>Role</th><th>Added</th><th>Last sign-in</th><th></th></tr></thead>
+        <tbody id="users"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <h2>Export</h2>
+    <div class="row">
+      <a href="/api/export/reviews.xlsx" download><button>reviews.xlsx</button></a>
+      <a href="/api/export/reviews.csv" download><button>reviews.csv</button></a>
+      <a href="/api/export/reviews.jsonl" download><button>reviews.jsonl</button></a>
+    </div>
   </details>
 </div>
 
-<!-- ============ lightbox ============ -->
-<div class="lb" id="lb" role="dialog" aria-modal="true">
+<!-- ============ review workspace ============ -->
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Review image">
   <button class="lb-close" id="lb-close">Close</button>
   <div class="lb-inner" id="lb-inner"></div>
 </div>
@@ -318,412 +380,566 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const PAGE = 24;
-let offset = 0, query = "", total = 0, current = null;
-let activeJob = null, eventCursor = 0;
+
+const state = {
+  me: null, tab: "mine", offset: 0, query: "", reviewer: "",
+  items: [], total: 0, hasMore: false, current: null, openedAt: 0,
+};
 
 const fmt = (n) => (n === null || n === undefined) ? "—" : Number(n).toLocaleString();
-const pct = (n) => (n === null || n === undefined) ? "—" : Number(n).toFixed(0) + "%";
 const esc = (s) => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
-const mb = (b) => (!b ? "—" : (b / 1048576).toFixed(2) + " MB");
+const pctOf = (v) => (v === null || v === undefined) ? "—" : (Number(v) * 100).toFixed(1) + "%";
+
+function errorText(body, res) {
+  const detail = body.detail;
+  if (typeof detail === "string" && detail) return detail;
+  // FastAPI validation failures arrive as [{loc:[...], msg:"..."}], which
+  // stringifies to "[object Object]" if handed straight to Error().
+  if (Array.isArray(detail) && detail.length) {
+    return detail.map((e) => {
+      const field = Array.isArray(e.loc) ? e.loc[e.loc.length - 1] : "";
+      return field ? `${field}: ${e.msg}` : e.msg;
+    }).join("; ");
+  }
+  return `${res.status} ${res.statusText}`;
+}
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (res.status === 401) { window.location.reload(); throw new Error("unauthenticated"); }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `${res.status} ${res.statusText}`);
+    throw new Error(errorText(body, res));
   }
-  return res.json();
+  return res.status === 204 ? null : res.json();
 }
+
+function banner(title, body, critical) {
+  $("banner-title").textContent = title;
+  $("banner-body").textContent = body;
+  $("banner").classList.toggle("crit", !!critical);
+  $("banner").classList.add("show");
+}
+function clearBanner() { $("banner").classList.remove("show"); }
 
 /* ---------------- gallery ---------------- */
 async function loadGallery() {
-  let d;
+  let data;
   try {
-    d = await api(`/api/gallery?offset=${offset}&limit=${PAGE}&q=${encodeURIComponent(query)}`);
-  } catch { return; }
+    if (state.tab === "mine") {
+      const all = await api("/api/queue");
+      let items = all.items;
+      if (state.query) {
+        const n = state.query.toLowerCase();
+        items = items.filter((i) => (
+          [i.post_id, i.ground_truth, i.gemini, i.caption, i.image].join(" ").toLowerCase().includes(n)
+        ));
+      }
+      state.total = items.length;
+      state.items = items.slice(state.offset, state.offset + PAGE);
+      state.hasMore = state.offset + state.items.length < state.total;
+      $("s-mine").textContent = fmt(all.total);
+      $("s-done").textContent = fmt(all.done);
+      $("s-meter").style.width = all.total ? (all.done / all.total * 100) + "%" : "0%";
+      $("btn-review").disabled = all.remaining === 0;
+      $("s-hint").textContent = all.total === 0
+        ? "No images yet — choose how many and press Get images."
+        : `${fmt(all.remaining)} left to review`;
+    } else {
+      const params = new URLSearchParams({
+        offset: state.offset, limit: PAGE, q: state.query, reviewer: state.reviewer,
+      });
+      data = await api(`/api/reviewed?${params}`);
+      state.items = data.items;
+      state.total = data.total;
+      state.hasMore = data.has_more;
+    }
+  } catch (e) { return; }
 
-  total = d.total;
   const grid = $("gallery"), empty = $("gallery-empty");
-
-  if (!d.items.length) {
+  if (!state.items.length) {
     grid.innerHTML = "";
     empty.style.display = "block";
-    empty.textContent = query
-      ? `No prepared posts match “${query}”.`
-      : "Nothing prepared yet. Run a batch to download images and issue signed URLs.";
+    empty.textContent = state.query
+      ? `Nothing matches “${state.query}”.`
+      : state.tab === "mine"
+        ? "Your queue is empty. Press Get images to draw a stratified sample."
+        : "No reviews recorded yet.";
   } else {
     empty.style.display = "none";
-    grid.innerHTML = d.items.map((post, i) => {
-      const img = post.images[0];
-      const caption = (post.label || post.sub_caption || "").slice(0, 140);
-      const count = post.images.length > 1
-        ? `<span class="pill">${post.images.length} images</span>` : "";
-      return `
-        <div class="tile" data-i="${i}">
-          ${img
-            ? `<img class="thumb" loading="lazy" src="${esc(img.url)}" alt=""
-                 onerror="this.style.opacity=.25" />`
-            : `<div class="thumb"></div>`}
-          <div class="meta">
-            <span class="who">${esc(post.author || "unknown")}</span>
-            ${caption ? `<span class="cap">${esc(caption)}</span>` : ""}
-            <span class="foot">
-              <span>${esc(post.post_id.slice(0, 14))}</span>
-              ${count}
-            </span>
-          </div>
-        </div>`;
-    }).join("");
-
+    grid.innerHTML = state.items.map((item, i) => tile(item, i)).join("");
     grid.querySelectorAll(".tile").forEach((el) => {
-      el.onclick = () => openLightbox(d.items[+el.dataset.i], 0);
+      el.onclick = () => openReview(+el.dataset.i);
     });
   }
 
-  const from = total ? offset + 1 : 0;
-  $("page-info").textContent = `${fmt(from)}–${fmt(offset + d.items.length)} of ${fmt(total)}`;
-  $("btn-prev").disabled = offset <= 0;
-  $("btn-next").disabled = !d.has_more;
+  const from = state.total ? state.offset + 1 : 0;
+  $("page-info").textContent = `${fmt(from)}–${fmt(state.offset + state.items.length)} of ${fmt(state.total)}`;
+  $("btn-prev").disabled = state.offset <= 0;
+  $("btn-next").disabled = !state.hasMore;
 }
 
-function openLightbox(post, idx) {
-  current = { post, idx };
-  const img = post.images[idx];
-  const strip = post.images.length > 1
-    ? `<div class="thumbstrip">${post.images.map((im, i) =>
-        `<img src="${esc(im.url)}" class="${i === idx ? "on" : ""}" data-i="${i}" alt="" />`).join("")}</div>`
+function tile(item, i) {
+  const review = item.review;
+  const text = (review && review.corrected) || item.ground_truth || "";
+  const verdictPill = review
+    ? `<span class="pill v-${esc(review.verdict)}">${esc(review.verdict.replace(/_/g, " "))}</span>`
     : "";
+  const who = state.tab === "team" && review
+    ? `<span class="pill">${esc(review.username)}</span>` : "";
+  return `
+    <div class="tile ${item.done ? "done" : ""}" data-i="${i}">
+      ${item.image_url
+        ? `<img class="thumb" loading="lazy" src="${esc(item.image_url)}" alt=""
+             onerror="this.style.opacity=.2" />`
+        : `<div class="thumb"></div>`}
+      <div class="meta">
+        <span class="cap cjk">${esc(text.slice(0, 90)) || "<span class='muted'>no transcription</span>"}</span>
+        <span class="foot">
+          <span class="pill ${esc(item.band)}">${esc(item.band_label)}</span>
+          ${verdictPill || who || `<span>#${esc(String(item.idx))}</span>`}
+        </span>
+      </div>
+    </div>`;
+}
+
+/* ---------------- review workspace ---------------- */
+function openReview(i) {
+  const item = state.items[i];
+  if (!item) return;
+  state.current = { item, index: i };
+  state.openedAt = Date.now();
+
+  const review = item.review || {};
+  const editable = state.tab === "mine" || state.me.role === "admin";
+  const sim = item.gemini_similarity || {};
 
   $("lb-inner").innerHTML = `
-    <div class="lb-img">${img ? `<img src="${esc(img.url)}" alt="" />` : ""}</div>
+    <div class="lb-img">
+      ${item.image_url
+        ? `<img id="lb-photo" src="${esc(item.image_url)}" alt="Calligraphy image under review" />`
+        : `<div class="empty" style="color:#888">No image URL — is IMAGE_SIGNING_SECRET set?</div>`}
+    </div>
     <div class="lb-side">
-      <h3>${esc(post.author || "unknown")}</h3>
-      <div class="muted" style="font-size:0.74rem">${esc(post.post_id)}</div>
-      ${post.label || post.sub_caption
-        ? `<div class="cap">${esc(post.label || post.sub_caption)}</div>` : "<div style='height:.7rem'></div>"}
-      ${strip}
-      <dl class="kv" style="margin-top:0.9rem">
-        <dt>Image</dt><dd>${idx + 1} of ${post.images.length}</dd>
-        <dt>Size</dt><dd>${img && img.width ? `${img.width}×${img.height}` : "—"} · ${mb(img && img.bytes)}</dd>
-        <dt>Type</dt><dd>${esc((img && img.content_type) || "—")}</dd>
-        <dt>SHA-256</dt><dd>${esc(((img && img.sha256) || "—").slice(0, 24))}…</dd>
-        <dt>Prepared</dt><dd>${esc((post.prepared_at || "").slice(0, 19))}</dd>
-        <dt>CDN expiry</dt><dd>${esc(((img && img.source_expires_at) || "—").slice(0, 19))}</dd>
-        <dt>URL expiry</dt><dd>${esc(((img && img.url_expires_at) || "—").slice(0, 19))}</dd>
-      </dl>
-      <div class="row" style="margin-top:1rem">
-        ${post.post_link ? `<a href="${esc(post.post_link)}" target="_blank" rel="noopener"><button class="primary">Open post</button></a>` : ""}
-        <button id="lb-copy">Copy image URL</button>
+      <div class="row" style="margin-bottom:0.6rem">
+        <span class="pill ${esc(item.band)}">${esc(item.band_label)}</span>
+        <span class="muted" style="font-size:0.72rem">${esc(item.image)}</span>
+        <span class="spacer"></span>
+        <span class="muted" style="font-size:0.72rem">${state.offset + i + 1} / ${fmt(state.total)}</span>
       </div>
-      <p class="muted" style="font-size:0.7rem; margin-top:0.6rem">
-        This URL is what the Gemini stage fetches. It needs no login.
-      </p>
+
+      <label class="field">Their ground truth — does this match the image?</label>
+      <div class="txtblock cjk">${esc(item.ground_truth) || "<i class='muted'>empty</i>"}</div>
+
+      <div style="margin-top:0.75rem">
+        <label class="field">Gemini <span style="text-transform:none">(${pctOf(sim.cer_accuracy)} vs their label)</span></label>
+        <div class="txtblock cjk ${item.gemini ? "" : "empty-val"}">${esc(item.gemini) || "no output"}</div>
+      </div>
+
+      <div style="margin-top:0.75rem">
+        <label class="field">DeepSeek <span style="text-transform:none">(context only)</span></label>
+        <div class="txtblock cjk ${item.deepseek ? "" : "empty-val"}">${esc(item.deepseek) || "no output"}</div>
+      </div>
+
+      ${editable ? verdictForm(item, review) : reviewSummary(review)}
+
+      <dl class="kv" style="margin-top:1rem">
+        <dt>Post</dt><dd>${item.post_link
+          ? `<a href="${esc(item.post_link)}" target="_blank" rel="noopener">Open on Facebook</a>` : "—"}</dd>
+        <dt>Post id</dt><dd>${esc(item.post_id)}</dd>
+        <dt>Caption</dt><dd>${esc((item.caption || "—").slice(0, 200))}</dd>
+      </dl>
     </div>`;
 
   $("lb").classList.add("show");
-  $("lb-inner").querySelectorAll(".thumbstrip img").forEach((el) => {
-    el.onclick = (e) => { e.stopPropagation(); openLightbox(post, +el.dataset.i); };
-  });
-  const copy = $("lb-copy");
-  if (copy) copy.onclick = async () => {
-    try { await navigator.clipboard.writeText(img.url); copy.textContent = "Copied"; }
-    catch { copy.textContent = "Copy failed"; }
-    setTimeout(() => { copy.textContent = "Copy image URL"; }, 1500);
+  wireWorkspace(item, review, editable);
+}
+
+function verdictForm(item, review) {
+  const v = review.verdict || "";
+  const gv = review.gemini_verdict || "skipped";
+  const btn = (val, cls, text) =>
+    `<button type="button" class="v-btn ${cls}" data-v="${val}" aria-pressed="${v === val}">${text}</button>`;
+  return `
+    <hr style="margin:1rem 0; border:0; border-top:1px solid var(--border)" />
+    <label class="field">Your verdict on their ground truth</label>
+    <div class="verdicts">
+      ${btn("correct", "good", "Correct")}
+      ${btn("minor", "warn", "Minor errors")}
+      ${btn("wrong", "danger", "Wrong")}
+      ${btn("unreadable", "", "Unreadable")}
+      ${btn("not_an_image", "", "Not an image")}
+    </div>
+
+    <div id="correction-wrap" style="margin-top:0.8rem" class="${["minor","wrong"].includes(v) ? "" : "hide"}">
+      <label class="field" for="corrected">Correct transcription</label>
+      <textarea id="corrected" class="cjk" rows="4"
+        placeholder="Type what the image actually says">${esc(review.corrected || "")}</textarea>
+      <div class="row" style="margin-top:0.35rem">
+        <button type="button" id="btn-copy-gt">Start from their label</button>
+        <button type="button" id="btn-copy-gemini">Start from Gemini</button>
+      </div>
+    </div>
+
+    <div style="margin-top:0.8rem">
+      <label class="field" for="gemini-verdict">Gemini output</label>
+      <select id="gemini-verdict">
+        <option value="skipped"${gv === "skipped" ? " selected" : ""}>Not judged</option>
+        <option value="good"${gv === "good" ? " selected" : ""}>Good</option>
+        <option value="partial"${gv === "partial" ? " selected" : ""}>Partial</option>
+        <option value="bad"${gv === "bad" ? " selected" : ""}>Bad</option>
+      </select>
+    </div>
+
+    <div style="margin-top:0.8rem">
+      <label class="field" for="note">Note</label>
+      <textarea id="note" rows="2" placeholder="lạc khoản, variant forms, damage…">${esc(review.note || "")}</textarea>
+    </div>
+
+    <div class="row" style="margin-top:0.9rem">
+      <button class="primary" id="btn-save">Save &amp; next</button>
+      <button id="btn-skip">Skip</button>
+      <span class="spacer"></span>
+      <span class="muted" id="save-status" style="font-size:0.75rem"></span>
+    </div>
+    <p class="muted" style="font-size:0.7rem; margin-top:0.5rem">
+      ← → move between images · Esc closes. Nothing is pre-filled: a verdict is only
+      recorded when you choose one.
+    </p>`;
+}
+
+function reviewSummary(review) {
+  if (!review.verdict) return "";
+  const gt = review.ground_truth_similarity || {};
+  return `
+    <hr style="margin:1rem 0; border:0; border-top:1px solid var(--border)" />
+    <label class="field">Reviewed by ${esc(review.username)}</label>
+    <div class="row"><span class="pill v-${esc(review.verdict)}">${esc(review.verdict.replace(/_/g, " "))}</span></div>
+    ${review.corrected ? `<div style="margin-top:0.6rem">
+      <label class="field">Corrected</label>
+      <div class="txtblock cjk">${esc(review.corrected)}</div></div>` : ""}
+    ${review.note ? `<p class="muted" style="margin-top:0.5rem; font-size:0.8rem">${esc(review.note)}</p>` : ""}
+    <dl class="kv" style="margin-top:0.7rem">
+      <dt>Label accuracy</dt><dd>${pctOf(gt.cer_accuracy)}</dd>
+      <dt>Reviewed</dt><dd>${esc((review.reviewed_at || "").slice(0, 19).replace("T", " "))}</dd>
+    </dl>`;
+}
+
+function wireWorkspace(item, review, editable) {
+  const photo = $("lb-photo");
+  if (photo) photo.onclick = () => photo.classList.toggle("zoom");
+  if (!editable) return;
+
+  let verdict = review.verdict || "";
+  const buttons = $("lb-inner").querySelectorAll(".v-btn");
+  const setVerdict = (value) => {
+    verdict = value;
+    buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === value)));
+    $("correction-wrap").classList.toggle("hide", !["minor", "wrong"].includes(value));
+    if (["minor", "wrong"].includes(value)) $("corrected").focus();
+  };
+  buttons.forEach((b) => { b.onclick = () => setVerdict(b.dataset.v); });
+
+  $("btn-copy-gt").onclick = () => { $("corrected").value = item.ground_truth; $("corrected").focus(); };
+  $("btn-copy-gemini").onclick = () => { $("corrected").value = item.gemini; $("corrected").focus(); };
+  $("btn-skip").onclick = () => advance(1);
+
+  $("btn-save").onclick = async () => {
+    if (!verdict) { $("save-status").textContent = "Choose a verdict first."; return; }
+    const body = {
+      record_id: item.record_id,
+      verdict,
+      corrected: $("corrected") ? $("corrected").value : "",
+      note: $("note").value,
+      gemini_verdict: $("gemini-verdict").value,
+      seconds_spent: (Date.now() - state.openedAt) / 1000,
+    };
+    $("btn-save").disabled = true;
+    $("save-status").textContent = "Saving…";
+    try {
+      const result = await api("/api/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      item.review = result.review;
+      item.done = verdict !== "not_an_image";
+      await refreshAll();
+      // After the refresh, not before: loadProgress() owns the banner and would
+      // otherwise overwrite this the moment it lands.
+      if (result.released) {
+        banner("Image flagged as unusable",
+          "It has gone back to the pool and no longer counts against your queue. " +
+          "Press Get images to draw a replacement.", false);
+      }
+      advance(1);
+    } catch (e) {
+      $("save-status").textContent = e.message;
+      $("btn-save").disabled = false;
+    }
   };
 }
 
-function closeLightbox() { $("lb").classList.remove("show"); current = null; }
-$("lb-close").onclick = closeLightbox;
-$("lb").onclick = (e) => { if (e.target === $("lb")) closeLightbox(); };
+function advance(step) {
+  const next = state.current.index + step;
+  if (next >= 0 && next < state.items.length) { openReview(next); return; }
+  if (step > 0 && state.hasMore) {
+    state.offset += PAGE;
+    loadGallery().then(() => { if (state.items.length) openReview(0); else closeReview(); });
+    return;
+  }
+  closeReview();
+}
+
+function closeReview() { $("lb").classList.remove("show"); state.current = null; }
+$("lb-close").onclick = closeReview;
+$("lb").onclick = (e) => { if (e.target === $("lb")) closeReview(); };
+
 document.addEventListener("keydown", (e) => {
-  if (!current) return;
-  if (e.key === "Escape") closeLightbox();
-  if (e.key === "ArrowRight" && current.idx + 1 < current.post.images.length) openLightbox(current.post, current.idx + 1);
-  if (e.key === "ArrowLeft" && current.idx > 0) openLightbox(current.post, current.idx - 1);
+  if (!state.current) return;
+  const typing = ["TEXTAREA", "INPUT", "SELECT"].includes(document.activeElement.tagName);
+  if (e.key === "Escape") { closeReview(); return; }
+  if (typing) return;
+  if (e.key === "ArrowRight") advance(1);
+  if (e.key === "ArrowLeft") advance(-1);
 });
 
-$("btn-prev").onclick = () => { offset = Math.max(0, offset - PAGE); loadGallery(); };
-$("btn-next").onclick = () => { offset += PAGE; loadGallery(); };
+/* ---------------- progress ---------------- */
+async function loadProgress() {
+  let p;
+  try { p = await api("/api/progress"); } catch { return; }
+
+  $("s-team").textContent = fmt(p.reviewed);
+  $("s-gt").textContent = pctOf(p.ground_truth_accuracy);
+  $("s-gemini").textContent = pctOf(p.gemini_accuracy);
+  $("s-coverage").textContent = `${p.coverage_percent}% of the corpus audited`;
+
+  $("k-records").textContent = fmt(p.corpus.records);
+  $("k-posts").textContent = `${fmt(p.corpus.posts)} posts`;
+  $("k-assigned").textContent = fmt(p.assigned);
+  $("k-pending").textContent = `${fmt(p.pending)} awaiting a verdict`;
+  $("k-reviewed").textContent = fmt(p.reviewed);
+  $("k-coverage").textContent = `${p.percent}% of claimed`;
+  $("k-pairs").textContent = fmt(p.audited_pairs);
+  $("corpus-line").textContent = p.corpus.records
+    ? `${fmt(p.corpus.records)} images loaded` : "no corpus loaded";
+
+  const max = Math.max(1, ...p.bands.map((b) => b.in_corpus));
+  $("bands").innerHTML = p.bands.map((b) => `
+    <div class="ebar">
+      <span class="name">${esc(b.label)}</span>
+      <span class="track">
+        <i class="fill assigned" style="width:${b.assigned / max * 100}%"></i>
+        <i class="fill reviewed" style="width:${b.reviewed / max * 100}%"></i>
+        <i class="target" style="left:${Math.min(100, b.target_share * p.assigned / max * 100)}%"
+           title="target share ${(b.target_share * 100).toFixed(0)}%"></i>
+      </span>
+      <span class="n">${fmt(b.reviewed)}/${fmt(b.assigned)} <span class="muted">of ${fmt(b.in_corpus)}</span></span>
+    </div>`).join("");
+
+  const verdicts = Object.entries(p.verdicts || {});
+  $("verdict-mix").innerHTML = verdicts.length
+    ? `<label class="field">Verdicts so far</label><div class="row">` +
+      verdicts.map(([k, v]) => `<span class="pill v-${esc(k)}">${esc(k.replace(/_/g, " "))} ${v}</span>`).join("") +
+      `</div>`
+    : "";
+
+  $("reviewers").innerHTML = p.reviewers.length ? p.reviewers.map((r) => `
+    <tr>
+      <td>${esc(r.username)}</td>
+      <td class="num">${fmt(r.assigned)}</td>
+      <td class="num">${fmt(r.reviewed)}</td>
+      <td class="num">${fmt(r.remaining)}</td>
+      <td class="num">${fmt(r.flagged_unusable)}</td>
+      <td class="num">${r.avg_seconds ?? "—"}</td>
+      <td class="num">${pctOf(r.ground_truth_accuracy)}</td>
+      <td>${esc((r.last_review_at || "").slice(0, 19).replace("T", " ")) || "—"}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="8" class="muted">No activity yet.</td></tr>`;
+
+  const drive = p.status.drive || {};
+  if (!drive.configured) {
+    banner("Google Drive is not configured",
+      "Set GOOGLE_DRIVE_FOLDER_ID and GOOGLE_DRIVE_API_KEY, then press Index Drive folder. " +
+      "Until then no images will load.", true);
+  } else if (!drive.indexed) {
+    banner("Drive folder not indexed yet",
+      "Press “Index Drive folder” under Admin to map filenames to Drive files.", false);
+  } else if (!p.status.signing_configured) {
+    banner("IMAGE_SIGNING_SECRET is not set", "No image URLs can be minted.", true);
+  } else {
+    clearBanner();
+  }
+}
+
+/* ---------------- admin ---------------- */
+async function loadAdmin() {
+  if (!state.me || state.me.role !== "admin") { $("admin-card").classList.add("hide"); }
+  try {
+    const c = await api("/api/corpus");
+    $("uploads").innerHTML = c.uploads.map((u) => `
+      <tr>
+        <td><code>${esc(u.name)}</code></td>
+        <td class="num">${u.missing ? "—" : u.mb + " MB"}</td>
+        <td>${u.missing ? "<span class='muted'>not uploaded</span>"
+              : esc(u.uploaded_at.slice(0, 19).replace("T", " "))}</td>
+      </tr>`).join("");
+  } catch {}
+
+  try {
+    const u = await api("/api/users");
+    const isAdmin = state.me.role === "admin";
+    $("users").innerHTML = u.users.map((row) => `
+      <tr>
+        <td>${esc(row.username)}${row.display_name ? ` <span class="muted">${esc(row.display_name)}</span>` : ""}</td>
+        <td>${esc(row.role)}${row.active ? "" : ' <span class="pill">disabled</span>'}</td>
+        <td>${esc((row.created_at || "").slice(0, 10))}</td>
+        <td>${esc((row.last_login_at || "").slice(0, 10)) || "—"}</td>
+        <td style="text-align:right">${
+          isAdmin && row.created_by !== "environment"
+            ? `<button data-user="${esc(row.username)}" data-active="${row.active ? "0" : "1"}">${row.active ? "Disable" : "Enable"}</button>`
+            : ""}</td>
+      </tr>`).join("");
+
+    $("users").querySelectorAll("button[data-user]").forEach((b) => {
+      b.onclick = async () => {
+        await api(`/api/users/${b.dataset.user}/active`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active: b.dataset.active === "1" }),
+        }).catch((e) => banner("Could not change the account", e.message, true));
+        loadAdmin();
+      };
+    });
+
+    const select = $("filter-reviewer");
+    const chosen = select.value;
+    select.innerHTML = `<option value="">All reviewers</option>` +
+      u.users.map((row) => `<option value="${esc(row.username)}">${esc(row.username)}</option>`).join("");
+    select.value = chosen;
+  } catch {}
+}
+
+$("btn-upload").onclick = async () => {
+  const file = $("file-in").files[0];
+  if (!file) { $("admin-status").textContent = "Choose a file first."; return; }
+  const form = new FormData();
+  form.append("file", file);
+  $("admin-status").textContent = "Uploading…";
+  try {
+    const result = await api("/api/corpus/upload", { method: "POST", body: form });
+    $("admin-status").textContent = `Stored ${result.name} (${result.mb} MB). Now press Ingest.`;
+    loadAdmin();
+  } catch (e) { $("admin-status").textContent = e.message; }
+};
+
+$("btn-ingest").onclick = async () => {
+  $("admin-status").textContent = "Merging…";
+  try {
+    const result = await api("/api/corpus/ingest", { method: "POST" });
+    const skipped = result.ingest.skipped_total;
+    $("admin-status").textContent =
+      `${result.records} records ready` + (skipped ? ` · ${skipped} rows skipped` : "");
+    await refreshAll();
+  } catch (e) { $("admin-status").textContent = e.message; }
+};
+
+$("btn-drive").onclick = async () => {
+  $("admin-status").textContent = "Listing the Drive folder…";
+  try {
+    const result = await api("/api/drive/refresh", { method: "POST" });
+    $("admin-status").textContent = `Indexed ${result.images} images.`;
+    await refreshAll();
+  } catch (e) { $("admin-status").textContent = e.message; }
+};
+
+$("btn-adduser").onclick = async () => {
+  $("user-status").textContent = "";
+  try {
+    await api("/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: $("u-name").value.trim(),
+        password: $("u-pass").value,
+        display_name: $("u-display").value.trim(),
+        role: $("u-role").value,
+      }),
+    });
+    $("user-status").textContent = `Added ${$("u-name").value.trim()}.`;
+    $("u-name").value = $("u-pass").value = $("u-display").value = "";
+    loadAdmin();
+  } catch (e) { $("user-status").textContent = e.message; }
+};
+
+/* ---------------- controls ---------------- */
+$("btn-assign").onclick = async () => {
+  const count = Math.max(1, parseInt($("assign-n").value, 10) || 100);
+  $("btn-assign").disabled = true;
+  try {
+    const result = await api("/api/queue/assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ count }),
+    });
+    if (result.message) banner("Fewer images than requested", result.message, false);
+    else clearBanner();
+    state.tab = "mine"; state.offset = 0;
+    await refreshAll();
+  } catch (e) { banner("Could not draw a sample", e.message, true); }
+  $("btn-assign").disabled = false;
+};
+
+$("btn-review").onclick = async () => {
+  state.tab = "mine"; state.offset = 0;
+  setTab();
+  await loadGallery();
+  const first = state.items.findIndex((i) => !i.done);
+  if (first >= 0) openReview(first);
+};
+
+function setTab() {
+  $("tab-mine").setAttribute("aria-selected", String(state.tab === "mine"));
+  $("tab-team").setAttribute("aria-selected", String(state.tab === "team"));
+  $("filter-reviewer").classList.toggle("hide", state.tab !== "team");
+}
+$("tab-mine").onclick = () => { state.tab = "mine"; state.offset = 0; setTab(); loadGallery(); };
+$("tab-team").onclick = () => { state.tab = "team"; state.offset = 0; setTab(); loadGallery(); };
+$("filter-reviewer").onchange = (e) => { state.reviewer = e.target.value; state.offset = 0; loadGallery(); };
+
+$("btn-prev").onclick = () => { state.offset = Math.max(0, state.offset - PAGE); loadGallery(); };
+$("btn-next").onclick = () => { state.offset += PAGE; loadGallery(); };
+
 let searchTimer;
 $("q").oninput = (e) => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { query = e.target.value; offset = 0; loadGallery(); }, 250);
+  searchTimer = setTimeout(() => { state.query = e.target.value; state.offset = 0; loadGallery(); }, 250);
 };
 
-/* ---------------- pipeline ---------------- */
-async function pollPipeline() {
-  let p;
-  try { p = await api("/api/pipeline"); } catch { return; }
-
-  const m = p.minio || {}, up = p.upload || {};
-  // MinIO is optional; not configured is a mode, not a fault.
-  if (!m.configured) {
-    $("conn").innerHTML = `<span class="dot" style="background:var(--series-1)"></span>upload mode`;
-  } else if (m.connected) {
-    $("conn").innerHTML = `<span class="dot" style="background:var(--good)"></span>MinIO connected`;
-  } else {
-    $("conn").innerHTML = `<span class="dot" style="background:var(--critical)"></span>MinIO unreachable`;
-    if (m.error) showBanner("MinIO unreachable", m.error, true);
-  }
-
-  $("s-prepared").textContent = fmt(p.processed_total);
-  $("s-total").textContent    = fmt(p.corpus_total);
-  $("s-failed").textContent   = fmt(p.failed);
-  $("s-meter").style.width    = (p.percent || 0) + "%";
-
-  $("s-hint").textContent = up.present
-    ? (up.pending_posts
-        ? `${fmt(up.pending_posts)} posts pending (${fmt(up.pending_images)} images)`
-        : "nothing pending — all posts prepared")
-    : (m.configured ? "reading from MinIO" : "upload a valid_post.jsonl to begin");
-
-  renderDownloads(p.downloads || []);
-  $("btn-run").disabled = !!p.busy || (!up.present && !m.configured);
-  if (p.active_job && !activeJob) activeJob = p.active_job.job_id;
-}
-
-async function pollGalleryStats() {
-  try { $("s-images").textContent = fmt((await api("/api/gallery/stats")).images); } catch {}
-}
-
-function renderDownloads(files) {
-  const any = files.some((f) => f.available);
-  $("downloads").innerHTML = any ? files.map((f) => `
-    <tr>
-      <td><code>${f.name}</code></td>
-      <td class="num">${f.available ? fmt(f.lines) : "—"}</td>
-      <td class="num">${f.available ? mb(f.bytes) : "—"}</td>
-      <td style="text-align:right">${f.available
-        ? `<a href="/api/results/${f.name}" download><button>Download</button></a>`
-        : `<span class="muted">not yet</span>`}</td>
-    </tr>`).join("")
-    : `<tr><td colspan="4" class="muted">Nothing produced yet.</td></tr>`;
-}
-
-/* ---------------- job ---------------- */
-const PHASES = ["preflight", "download", "publish", "done"];
-
-async function pollJob() {
-  if (!activeJob) return;
-  let j;
-  try { j = await api(`/api/jobs/${activeJob}`); } catch { activeJob = null; return; }
-
-  const c = j.counts || {};
-  $("job-line").textContent = `${j.job_id} · ${j.phase}`;
-  $("bars").innerHTML =
-    bar("Downloaded", c.downloaded, c.total_images, c.download_failed ? `· ${c.download_failed} failed` : "") +
-    bar("Published", c.published, c.total_posts, "posts");
-
-  const pf = j.preflight || {};
-  $("preflight-line").textContent = pf.total
-    ? `Preflight: ${pf.total} images — ${pf.expired} expired, ${pf.expiring_soon} expiring soon, ${pf.healthy} healthy.`
-    : "";
-
-  $("btn-cancel").disabled = !j.is_active;
-
-  if (j.awaiting_confirmation) {
-    showBanner(
-      "Paused — most source URLs have already expired",
-      `${pf.expired} of ${pf.total} images are past their signed-URL expiry. Re-crawling is usually the right move.`,
-      false,
-      [{ label: "Prepare anyway", cls: "danger", fn: () => startBatch(true) }]
-    );
-  }
-
-  await pollEvents();
-  await pollErrors();
-
-  if (!j.is_active) {
-    activeJob = null;
-    // A finished batch means new images to browse.
-    offset = 0; loadGallery(); pollGalleryStats(); pollPipeline();
-  }
-}
-
-function bar(label, done, totalN, note) {
-  const p = totalN ? Math.min(100, (done / totalN) * 100) : 0;
-  return `<div style="margin-bottom:0.6rem">
-      <div class="row" style="font-size:0.78rem; justify-content:space-between; margin-bottom:0.2rem">
-        <span>${label} ${note ? `<span class="muted">${note}</span>` : ""}</span>
-        <span><b>${fmt(done)}</b> / ${fmt(totalN)}</span>
-      </div>
-      <div class="meter"><i style="width:${p}%"></i></div>
-    </div>`;
-}
-
-async function pollEvents() {
-  if (!activeJob) return;
-  let d;
-  try { d = await api(`/api/jobs/${activeJob}/events?cursor=${eventCursor}`); } catch { return; }
-  if (!d.events.length) return;
-  const log = $("log");
-  if (eventCursor === 0) log.innerHTML = "";
-  for (const e of d.events) {
-    const div = document.createElement("div");
-    div.className = e.level;
-    div.innerHTML = `<span class="ts">${(e.ts || "").slice(11, 19)}</span>  ${esc(e.message)}`;
-    log.appendChild(div);
-  }
-  eventCursor = d.cursor;
-  log.scrollTop = log.scrollHeight;
-}
-
-async function pollErrors() {
-  if (!activeJob) return;
-  let d;
-  try { d = await api(`/api/jobs/${activeJob}/errors`); } catch { return; }
-  const entries = Object.entries(d.by_class || {}).sort((a, b) => b[1].count - a[1].count);
-  if (!entries.length) {
-    $("errors").innerHTML = `<p class="muted" style="font-size:0.82rem">No failures recorded.</p>`;
-    return;
-  }
-  const RETRYABLE = new Set(["http_429", "http_5xx", "timeout", "dns_error"]);
-  const max = entries[0][1].count;
-  $("errors").innerHTML = entries.map(([name, info]) => `
-      <div class="ebar" title="${esc(info.sample?.detail || "")}">
-        <span class="name">${name}
-          <span class="pill">${RETRYABLE.has(name) ? "retryable" : "terminal"}</span></span>
-        <span class="track"><span class="fill" style="width:${(info.count / max) * 100}%"></span></span>
-        <span class="n">${fmt(info.count)}</span>
-      </div>`).join("");
-}
-
-/* ---------------- health ---------------- */
-function meterClass(p) { return p >= 90 ? "crit" : p >= 75 ? "warn" : "good"; }
-
-async function pollHealth() {
-  let h;
-  try { h = await api("/api/health/system"); } catch { return; }
-
-  if (h.memory?.available) {
-    $("h-mem").textContent = pct(h.memory.percent);
-    $("h-mem-sub").textContent = `${(h.memory.used_mb / 1024).toFixed(1)} / ${(h.memory.total_mb / 1024).toFixed(1)} GB`;
-  }
-  if (h.cpu?.available) {
-    $("h-cpu").textContent = pct(h.cpu.percent);
-    $("h-cpu-sub").textContent = `${h.cpu.count} vCPU`;
-  }
-  if (h.disk?.available) {
-    $("h-disk").textContent = pct(h.disk.percent);
-    $("h-disk-sub").textContent = `${h.disk.free_gb} GB free of ${h.disk.total_gb} GB`;
-  }
-  if (h.images) {
-    $("h-imgcount").textContent = fmt(h.images.count);
-    $("h-imgsize").textContent = `${h.images.mb} MB on disk`;
-  }
-  if (h.scheduler) {
-    const on = h.config?.minio_enabled;
-    $("sched-state").textContent = on
-      ? (h.scheduler.paused ? "scheduler paused" : `auto every ${h.scheduler.interval_s}s`)
-      : "manual";
-  }
-}
-
-/* ---------------- actions ---------------- */
-function showBanner(title, body, critical, actions) {
-  $("banner-title").textContent = title;
-  $("banner-body").textContent = body;
-  $("banner").className = "banner show" + (critical ? " crit" : "");
-  const row = $("banner-actions"); row.innerHTML = "";
-  for (const a of actions || []) {
-    const b = document.createElement("button");
-    b.textContent = a.label; b.className = a.cls || "";
-    b.onclick = () => { hideBanner(); a.fn(); };
-    row.appendChild(b);
-  }
-  const d = document.createElement("button");
-  d.textContent = "Dismiss"; d.onclick = hideBanner;
-  row.appendChild(d);
-}
-function hideBanner() { $("banner").className = "banner"; }
-
-async function startBatch(confirmExpired) {
-  $("btn-run").disabled = true;
-  try {
-    const d = await api("/api/jobs", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm_expired: !!confirmExpired }),
-    });
-    activeJob = d.job_id; eventCursor = 0; $("log").innerHTML = "";
-    document.querySelector("details.card").open = true;
-  } catch (e) {
-    showBanner("Could not start", e.message, true);
-    $("btn-run").disabled = false;
-  }
-}
-
-$("btn-run").onclick = () => startBatch(false);
-$("btn-cancel").onclick = async () => {
-  if (!activeJob) return;
-  try { await api(`/api/jobs/${activeJob}/cancel`, { method: "POST" }); }
-  catch (e) { showBanner("Cancel failed", e.message, true); }
-};
-$("btn-retry").onclick = async () => {
-  const target = activeJob || (await api("/api/jobs?limit=1")).jobs[0]?.job_id;
-  if (!target) return;
-  try {
-    const d = await api(`/api/jobs/${target}/retry-failed`, { method: "POST" });
-    if (!d.job_id) { showBanner("Nothing to retry", d.message || "No retryable failures.", false); return; }
-    activeJob = d.job_id; eventCursor = 0; $("log").innerHTML = "";
-  } catch (e) { showBanner("Retry failed", e.message, true); }
-};
 $("btn-logout").onclick = async () => {
   await fetch("/api/auth/logout", { method: "POST" });
   window.location.reload();
 };
 
-$("btn-upload").onclick = () => {
-  const file = $("file-in").files?.[0];
-  if (!file) { $("upload-status").textContent = "choose a file first"; return; }
-
-  const body = new FormData(); body.append("file", file);
-  const xhr = new XMLHttpRequest();
-  $("up-wrap").style.display = "block";
-  $("btn-upload").disabled = true;
-  $("upload-status").textContent = "uploading…";
-
-  xhr.upload.onprogress = (e) => {
-    if (e.lengthComputable) $("up-bar").style.width = (e.loaded / e.total * 100) + "%";
-  };
-  xhr.onload = () => {
-    $("btn-upload").disabled = false;
-    $("up-wrap").style.display = "none"; $("up-bar").style.width = "0%";
-    if (xhr.status === 401) { window.location.reload(); return; }
-    let d; try { d = JSON.parse(xhr.responseText); } catch { d = {}; }
-    $("upload-status").textContent = "";
-    if (xhr.status >= 400) { showBanner("Upload failed", d.detail || `HTTP ${xhr.status}`, true); return; }
-    renderUploadSummary(d);
-    pollPipeline();
-  };
-  xhr.onerror = () => {
-    $("btn-upload").disabled = false;
-    $("up-wrap").style.display = "none";
-    $("upload-status").textContent = "";
-    showBanner("Upload failed", "network error", true);
-  };
-  xhr.open("POST", "/api/uploads");
-  xhr.send(body);
-};
-
-function renderUploadSummary(d) {
-  if (!d.present) { $("upload-summary").innerHTML = ""; return; }
-  $("upload-summary").innerHTML = `
-    <div class="kpis">
-      <div class="kpi"><div class="k">Scannable</div><div class="v">${fmt(d.scannable_posts)}</div></div>
-      <div class="kpi"><div class="k">Already done</div><div class="v">${fmt(d.already_processed)}</div><div class="s">skipped by checkpoint</div></div>
-      <div class="kpi"><div class="k">Pending</div><div class="v">${fmt(d.pending_posts)}</div><div class="s">${fmt(d.pending_images)} images</div></div>
-      <div class="kpi"><div class="k">Malformed</div><div class="v">${fmt(d.malformed_lines)}</div><div class="s">lines skipped</div></div>
-    </div>
-    ${!d.scannable_posts ? `<p style="color:var(--warning);font-size:0.82rem;margin-top:0.7rem">
-      No scannable posts found — check this is the crawler's <code>valid_post.jsonl</code>.</p>` : ""}`;
+/* ---------------- boot ---------------- */
+async function refreshAll() {
+  await Promise.all([loadGallery(), loadProgress(), loadAdmin()]);
 }
 
-/* ---------------- loops ---------------- */
-pollPipeline(); pollHealth(); pollGalleryStats(); loadGallery(); pollJob();
-setInterval(pollPipeline, 5000);
-setInterval(pollHealth, 5000);
-setInterval(pollJob, 2000);
+(async function boot() {
+  try {
+    state.me = await api("/api/auth/me");
+  } catch { window.location.reload(); return; }
+
+  $("whoami").textContent = `${state.me.username} · ${state.me.role}`;
+  if (state.me.role !== "admin") $("admin-card").classList.add("hide");
+  setTab();
+  await refreshAll();
+  // Slow poll: reviewers want to see the team's progress move, but this page
+  // is a workspace, not a dashboard — refreshing under someone's cursor is worse
+  // than being a minute out of date.
+  setInterval(() => { if (!state.current) { loadProgress(); } }, 30000);
+})();
 </script>
 </body>
 </html>

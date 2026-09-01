@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from app.core.imagestore import (
-    is_safe_post_id,
+    is_safe_slug,
     parse_image_filename,
     resolve_image_path,
 )
@@ -73,16 +73,32 @@ class TestSigner:
         assert 29 * 86400 < expires_at - int(time.time()) <= 30 * 86400
 
 
-class TestPostIdSafety:
-    @pytest.mark.parametrize("pid", ["p123", "abc_1.2:3", "ok-id", "9" * 128])
-    def test_accepts_realistic_ids(self, pid):
-        assert is_safe_post_id(pid) is True
+class TestPostSlugSafety:
+    @pytest.mark.parametrize(
+        "pid",
+        [
+            "p123",
+            "abc_1-2",
+            "ok-id",
+            "9" * 512,
+            # A real slugged post id, which is what actually reaches the route.
+            "UzpfSTEwMDAwMDU5MzExMzI1ODpWSzoyNzgzNTQ4OTgyNjA5MzEwMA",
+        ],
+    )
+    def test_accepts_slugged_ids(self, pid):
+        assert is_safe_slug(pid) is True
 
     @pytest.mark.parametrize(
-        "pid", ["../etc", "a/b", "..", "a\\b", "", "x" * 129, "a b", "p\x00"]
+        "pid",
+        [
+            "../etc", "a/b", "..", "a\b", "", "x" * 513, "a b", "p" + chr(0),
+            # Raw base64 must never reach a path: '+', '/' and '=' are the whole
+            # reason the slug form exists.
+            "ab+cd", "ab/cd", "abcd==",
+        ],
     )
-    def test_rejects_separators_traversal_and_overlong(self, pid):
-        assert is_safe_post_id(pid) is False
+    def test_rejects_raw_base64_separators_and_traversal(self, pid):
+        assert is_safe_slug(pid) is False
 
 
 class TestFilenameParsing:

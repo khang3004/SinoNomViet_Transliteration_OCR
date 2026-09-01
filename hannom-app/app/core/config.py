@@ -1,14 +1,20 @@
 """Env-driven settings (12-factor). No config files, no secrets in code.
 
-Every value here comes from the environment so the same image runs locally, on
-the VPS, and later under K8s with only the env changing.
+Every value comes from the environment so the same image runs locally and on the
+VPS with only the env changing.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from app.core.models import Band
+from app.core.sampling import DEFAULT_PER_POST_CAP, DEFAULT_TARGETS
+
+log = logging.getLogger(__name__)
 
 
 def _env(key: str, default: str = "") -> str:
@@ -37,162 +43,126 @@ def _env_float(key: str, default: float) -> float:
 
 def _env_bool(key: str, default: bool) -> bool:
     raw = _env(key).lower()
+    return raw in {"1", "true", "yes", "on"} if raw else default
+
+
+def parse_targets(raw: str) -> dict[Band, float]:
+    """``exact=0.15,near=0.2,far=0.25,poor=0.25,empty=0.15`` -> band weights.
+
+    Weights need not sum to 1; the sampler normalizes. An unparseable entry is
+    dropped with a warning rather than failing startup — a malformed tuning knob
+    should not take the service down.
+    """
     if not raw:
-        return default
-    return raw in {"1", "true", "yes", "on"}
+        return dict(DEFAULT_TARGETS)
+    weights: dict[Band, float] = {}
+    for chunk in raw.split(","):
+        name, _, value = chunk.partition("=")
+        name = name.strip().lower()
+        if not name:
+            continue
+        try:
+            weights[Band(name)] = float(value)
+        except ValueError:
+            log.warning("ignoring unrecognised SAMPLE_TARGETS entry: %r", chunk)
+    return weights or dict(DEFAULT_TARGETS)
 
 
 @dataclass(frozen=True)
-class MinioConfig:
-    """Where post records are read from and prepared records written back to.
+class DriveConfig:
+    """The upstream team's public image folder.
 
-    ``endpoint`` must be reachable from THIS host. A cluster-internal address
-    like ``minio.storage.svc.cluster.local:9000`` will not resolve from outside
-    the k3s cluster — use the tailnet-reachable NodePort/ingress address.
+    ``api_key`` is a plain Google API key restricted to the Drive API. It reads
+    only what is already public; it is still an env secret because a leaked key
+    burns someone's quota.
     """
 
-    endpoint: str = ""
-    access_key: str = ""
-    secret_key: str = ""
-    secure: bool = False
-    bucket: str = "final-exam-nlp-raw"
-    # Group prefix, e.g. "facebook/322453387859386". Everything below is relative to it.
-    group_prefix: str = ""
-    output_prefix: str = "han_scan"
-
-    # --- read paths ---
-    @property
-    def by_run_prefix(self) -> str:
-        return f"{self.group_prefix.rstrip('/')}/logs/by_run"
-
-    @property
-    def valid_post_key(self) -> str:
-        """Cumulative crawler export — used only as the progress denominator."""
-        return f"{self.group_prefix.rstrip('/')}/export/valid_post.jsonl"
-
-    # --- write paths (mirrors the crawler's export/ logs/ state/ convention) ---
-    @property
-    def out_root(self) -> str:
-        return f"{self.group_prefix.rstrip('/')}/{self.output_prefix.strip('/')}"
-
-    @property
-    def ready_for_ocr_key(self) -> str:
-        """The single export: images downloaded and addressable, for the Gemini
-        stage to OCR. Named for what it is FOR, not what happened to it."""
-        return f"{self.out_root}/export/ready_for_ocr.jsonl"
-
-    @property
-    def failed_key(self) -> str:
-        """Cumulative failure log across all runs (for retry sweeps)."""
-        return f"{self.out_root}/errors/failed.jsonl"
-
-    @property
-    def processed_ids_key(self) -> str:
-        return f"{self.out_root}/state/processed_ids.jsonl"
-
-    def run_key(self, scan_run_id: str, name: str) -> str:
-        """Per-run artifact: result.json | upserts.jsonl | errors.jsonl."""
-        return f"{self.out_root}/logs/by_run/{scan_run_id}/{name}"
-
-
-@dataclass(frozen=True)
-class DownloadConfig:
-    concurrency: int = 16
-    timeout_s: float = 30.0
-    max_attempts: int = 4
-    # Refuse absurd payloads rather than filling the disk.
+    folder_id: str = ""
+    api_key: str = ""
+    timeout_s: float = 60.0
     max_bytes: int = 25 * 1024 * 1024
-    # Adaptive throttle: sustained 429s halve concurrency down to this floor.
-    min_concurrency: int = 2
-    user_agent: str = "hannom-image-prep/1.0"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.folder_id and self.api_key)
 
 
 @dataclass(frozen=True)
 class ImageServeConfig:
-    """Gemini fetches these URLs anonymously, so they are HMAC-signed rather
-    than behind the session cookie."""
+    """Reviewers' browsers fetch images from us, not from Drive.
+
+    Signed rather than cookie-gated so the same URL works in an <img> tag from
+    any of the reviewers' sessions without a preflight.
+    """
 
     public_base_url: str = ""
     signing_secret: str = ""
-    ttl_days: int = 30
+    ttl_days: int = 7
+
+
+@dataclass(frozen=True)
+class SamplingConfig:
+    default_batch: int = 100
+    max_batch: int = 1000
+    per_post_cap: int = DEFAULT_PER_POST_CAP
+    targets: dict[Band, float] = field(default_factory=lambda: dict(DEFAULT_TARGETS))
 
 
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path = Path("/data")
-    batch_size: int = 500
-    scan_interval_s: int = 300
-    scheduler_enabled: bool = True
-    # Crawler-invalid posts are skipped by default; the exports hold both.
-    only_crawler_valid: bool = True
-
-    minio: MinioConfig = field(default_factory=MinioConfig)
-    download: DownloadConfig = field(default_factory=DownloadConfig)
+    drive: DriveConfig = field(default_factory=DriveConfig)
     images: ImageServeConfig = field(default_factory=ImageServeConfig)
-
-    @property
-    def minio_enabled(self) -> bool:
-        """MinIO is entirely optional.
-
-        The default flow is uploading ``valid_post.jsonl`` and downloading
-        results, which needs no network path into the k3s cluster. Everything
-        MinIO-related stays dormant unless an endpoint is configured.
-        """
-        return bool(self.minio.endpoint and self.minio.group_prefix)
+    sampling: SamplingConfig = field(default_factory=SamplingConfig)
 
     @property
     def images_dir(self) -> Path:
         return self.data_dir / "images"
 
     @property
-    def jobs_dir(self) -> Path:
-        return self.data_dir / "jobs"
-
-    @property
-    def state_dir(self) -> Path:
-        return self.data_dir / "state"
+    def corpus_dir(self) -> Path:
+        return self.data_dir / "corpus"
 
     @property
     def uploads_dir(self) -> Path:
         return self.data_dir / "uploads"
 
     @property
-    def results_dir(self) -> Path:
-        return self.data_dir / "results"
+    def exports_dir(self) -> Path:
+        return self.data_dir / "exports"
 
     @property
-    def checkpoint_path(self) -> Path:
-        return self.state_dir / "processed_ids.jsonl"
+    def users_path(self) -> Path:
+        return self.data_dir / "users.json"
+
+    @property
+    def drive_index_path(self) -> Path:
+        return self.data_dir / "drive_index.json"
 
 
 def load_settings() -> Settings:
     """Build settings from the environment. Never logs secret values."""
+    from app.core.drive import folder_id_from
+
     return Settings(
         data_dir=Path(_env("DATA_DIR", "/data")),
-        batch_size=_env_int("BATCH_SIZE", 500),
-        scan_interval_s=_env_int("SCAN_INTERVAL", 300),
-        scheduler_enabled=_env_bool("SCHEDULER_ENABLED", True),
-        only_crawler_valid=_env_bool("ONLY_CRAWLER_VALID", True),
-        minio=MinioConfig(
-            endpoint=_env("MINIO_ENDPOINT"),
-            access_key=_env("MINIO_ACCESS_KEY"),
-            secret_key=_env("MINIO_SECRET_KEY"),
-            secure=_env_bool("MINIO_SECURE", False),
-            bucket=_env("MINIO_BUCKET", "final-exam-nlp-raw"),
-            group_prefix=_env("MINIO_GROUP_PREFIX"),
-            output_prefix=_env("MINIO_OUTPUT_PREFIX", "han_scan"),
-        ),
-        download=DownloadConfig(
-            concurrency=_env_int("DOWNLOAD_CONCURRENCY", 16),
-            timeout_s=_env_float("DOWNLOAD_TIMEOUT", 30.0),
-            max_attempts=_env_int("DOWNLOAD_MAX_ATTEMPTS", 4),
-            max_bytes=_env_int("DOWNLOAD_MAX_BYTES", 25 * 1024 * 1024),
-            min_concurrency=_env_int("DOWNLOAD_MIN_CONCURRENCY", 2),
+        drive=DriveConfig(
+            # Accept the full folder URL too — that is what gets pasted.
+            folder_id=folder_id_from(_env("GOOGLE_DRIVE_FOLDER_ID")),
+            api_key=_env("GOOGLE_DRIVE_API_KEY"),
+            timeout_s=_env_float("DRIVE_TIMEOUT", 60.0),
+            max_bytes=_env_int("DRIVE_MAX_BYTES", 25 * 1024 * 1024),
         ),
         images=ImageServeConfig(
             public_base_url=_env("PUBLIC_BASE_URL").rstrip("/"),
             signing_secret=_env("IMAGE_SIGNING_SECRET"),
-            ttl_days=_env_int("IMAGE_URL_TTL_DAYS", 30),
+            ttl_days=_env_int("IMAGE_URL_TTL_DAYS", 7),
+        ),
+        sampling=SamplingConfig(
+            default_batch=_env_int("SAMPLE_BATCH", 100),
+            max_batch=_env_int("SAMPLE_MAX_BATCH", 1000),
+            per_post_cap=_env_int("SAMPLE_PER_POST_CAP", DEFAULT_PER_POST_CAP),
+            targets=parse_targets(_env("SAMPLE_TARGETS")),
         ),
     )
 
@@ -203,6 +173,5 @@ def describe_secrets() -> dict[str, bool]:
         "AUTH_SECRET": bool(_env("AUTH_SECRET")),
         "APP_PASSWORD_HASH": bool(_env("APP_PASSWORD_HASH")),
         "IMAGE_SIGNING_SECRET": bool(_env("IMAGE_SIGNING_SECRET")),
-        "MINIO_ACCESS_KEY": bool(_env("MINIO_ACCESS_KEY")),
-        "MINIO_SECRET_KEY": bool(_env("MINIO_SECRET_KEY")),
+        "GOOGLE_DRIVE_API_KEY": bool(_env("GOOGLE_DRIVE_API_KEY")),
     }

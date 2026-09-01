@@ -1,8 +1,7 @@
-# Image prep — crawler records in, downloaded images + signed URLs out.
+# OCR Review — the upstream team's transcriptions in, audited verdicts out.
 #
-# No OCR: this stage does not read images, so there is no PaddleOCR, no
-# paddlepaddle, and no model bake step. That is what keeps this image small
-# (a few hundred MB instead of ~3 GB) and the build around a minute.
+# No models and no image processing beyond reading dimensions, so this stays a
+# small pure-Python image that builds in about a minute.
 
 FROM python:3.12-slim
 
@@ -22,10 +21,9 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # Defaults; every one is overridable via .env (see .env.example).
 ENV DATA_DIR=/data \
-    BATCH_SIZE=500 \
-    SCAN_INTERVAL=300 \
-    DOWNLOAD_CONCURRENCY=16 \
-    DOWNLOAD_TIMEOUT=30 \
+    SAMPLE_BATCH=100 \
+    SAMPLE_PER_POST_CAP=2 \
+    IMAGE_URL_TTL_DAYS=7 \
     COOKIE_SECURE=1
 
 COPY app/ ./app/
@@ -36,6 +34,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/healthz || exit 1
 
-# --workers 1 is REQUIRED, not a default worth tuning: batch state lives in this
-# process, and a second worker would fork it and corrupt progress tracking.
+# --workers 1 is REQUIRED, not a default worth tuning: assignment is serialised
+# by an in-process lock, and a second worker would hand the same image to two
+# reviewers.
 CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

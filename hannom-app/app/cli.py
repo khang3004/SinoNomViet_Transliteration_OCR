@@ -1,13 +1,14 @@
-"""Headless batch runner.
+"""Command line for setup and inspection, without the web layer.
 
-This exists to prove the decoupling is real: it drives the full pipeline with no
-FastAPI, no uvicorn, no web layer at all. If this file ever needs a web import,
-the ``core``/``api`` split has broken.
+Deliberately imports nothing from ``app.api``: if this file ever needs FastAPI to
+run, the core/adapter split has been broken. ``--check`` enforces that by
+importing every core module.
 
-    python -m app.cli --file exports/valid_post.jsonl --limit 100
-    python -m app.cli --preflight-only --file exports/valid_post.jsonl
-    python -m app.cli --minio --limit 100
-    python -m app.cli --health
+    python -m app.cli --hash-password           # for APP_PASSWORD_HASH
+    python -m app.cli --check
+    python -m app.cli --ingest --jsonl gt.jsonl --xlsx gt.xlsx
+    python -m app.cli --stats
+    python -m app.cli --add-user mai --password '...' --display 'Mai'
 """
 
 from __future__ import annotations
@@ -15,227 +16,173 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
+import os
 import sys
 from pathlib import Path
 
-from app.core.batch import BatchRunner
-from app.core.checkpoint import ProcessedCheckpoint
-from app.core.config import Settings, describe_secrets, load_settings
-from app.core.health import image_store, snapshot
-from app.core.jobstore import JobStore, new_run_id
-from app.core.signing import ImageUrlSigner
-from app.core.sink import FileResultSink, MinioResultSink, TeeResultSink
-from app.core.source import FileRecordSource, MinioRecordSource
-from app.core.storage import MinioStorage
-from app.core.uploads import UploadStore
 
-log = logging.getLogger("hannom.cli")
+def _settings():
+    from app.core.config import load_settings
+
+    return load_settings()
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="app.cli", description="Prepare one batch of images without the web app."
-    )
-    parser.add_argument(
-        "--file", type=Path, default=None,
-        help="path to a valid_post.jsonl (default: the most recent upload)",
-    )
-    parser.add_argument(
-        "--minio", action="store_true",
-        help="read from the crawler's MinIO by_run logs instead of a file",
-    )
-    parser.add_argument("--limit", type=int, default=None, help="max posts (default BATCH_SIZE)")
-    parser.add_argument(
-        "--confirm-expired", action="store_true",
-        help="proceed even when many source URLs have already expired",
-    )
-    parser.add_argument(
-        "--preflight-only", action="store_true",
-        help="report the expiry audit and pending counts, then exit",
-    )
-    parser.add_argument("--health", action="store_true", help="print host telemetry and exit")
-    parser.add_argument("--check", action="store_true", help="verify MinIO connectivity and exit")
-    parser.add_argument("--verbose", "-v", action="store_true")
-    return parser
+def cmd_hash_password(password: str) -> int:
+    from app.core.users import hash_password
 
+    if not password:
+        import getpass
 
-def _build_source(args, settings: Settings):
-    """Pick an input, mirroring what the web layer does."""
-    if args.minio:
-        if not settings.minio_enabled:
-            raise SystemExit(
-                "--minio needs MINIO_ENDPOINT and MINIO_GROUP_PREFIX set. "
-                "Omit it to scan an uploaded valid_post.jsonl instead."
-            )
-        return MinioRecordSource(settings, storage=MinioStorage(settings.minio))
-
-    checkpoint = ProcessedCheckpoint(settings.checkpoint_path)
-    if args.file is not None:
-        if not args.file.exists():
-            raise SystemExit(f"no such file: {args.file}")
-        return FileRecordSource(args.file, checkpoint, settings)
-
-    upload = UploadStore(settings.uploads_dir).latest()
-    if upload is None:
-        raise SystemExit(
-            "No upload found and no --file given. Upload a valid_post.jsonl from "
-            "the dashboard, or pass --file /path/to/valid_post.jsonl."
-        )
-    return FileRecordSource(upload.path, checkpoint, settings)
-
-
-def _build_sink(settings: Settings):
-    """Local always; MinIO too when configured."""
-    local = FileResultSink(settings.results_dir)
-    if not settings.minio_enabled:
-        return local
-    return TeeResultSink(local, MinioResultSink(settings, storage=MinioStorage(settings.minio)))
-
-
-async def run_batch(args) -> int:
-    settings = load_settings()
-    source = _build_source(args, settings)
-    sink = _build_sink(settings)
-    signer = ImageUrlSigner(
-        base_url=settings.images.public_base_url,
-        secret=settings.images.signing_secret,
-        ttl_days=settings.images.ttl_days,
-    )
-
-    limit = args.limit or settings.batch_size
-
-    if args.preflight_only:
-        from app.core.parser import preflight_expiry
-
-        batch = await asyncio.to_thread(source.iter_pending, limit)
-        report = {
-            "source": "minio" if args.minio else "file",
-            "pending_posts": len(batch.posts),
-            "corpus_total": batch.corpus_total,
-            "processed_total": batch.processed_total,
-            "malformed_lines": batch.malformed_lines,
-            "expiry": preflight_expiry(batch.posts) if batch.posts else {},
-        }
-        print(json.dumps(report, indent=2, ensure_ascii=False))
-        return 0
-
-    for directory in (
-        settings.jobs_dir, settings.images_dir,
-        settings.state_dir, settings.results_dir,
-    ):
-        directory.mkdir(parents=True, exist_ok=True)
-
-    store = JobStore(settings.jobs_dir)
-    job_dir, state = store.create(new_run_id(), limit=limit)
-    print(f"job {state.job_id} starting (limit={limit})", file=sys.stderr)
-
-    runner = BatchRunner(settings, source, sink, signer)
-    state = await runner.run(
-        job_dir, state, confirm_expired=args.confirm_expired
-    )
-
-    summary = {
-        "job_id": state.job_id,
-        "phase": state.phase.value,
-        "counts": state.counts.__dict__,
-        "preflight": state.preflight,
-        "error": state.error,
-        "awaiting_confirmation": state.awaiting_confirmation,
-    }
-    print(json.dumps(summary, indent=2, ensure_ascii=False))
-
-    if state.awaiting_confirmation:
-        print(
-            "\nPaused: too many source URLs have already expired. "
-            "Re-crawl, or re-run with --confirm-expired to scan anyway.",
-            file=sys.stderr,
-        )
-        return 2
-    return 0 if state.phase.value == "done" else 1
-
-
-def check_connectivity() -> int:
-    """Report configuration status. MinIO is optional, so its absence is
-    reported rather than treated as a failure."""
-    settings = load_settings()
-    report = {
-        "mode": "minio" if settings.minio_enabled else "upload",
-        "secrets_present": describe_secrets(),
-        "data_dir": str(settings.data_dir),
-    }
-
-    upload = UploadStore(settings.uploads_dir).latest()
-    if upload is None:
-        report["upload"] = {"present": False}
-    else:
-        checkpoint = ProcessedCheckpoint(settings.checkpoint_path)
-        source = FileRecordSource(upload.path, checkpoint, settings)
-        report["upload"] = {"present": True, **upload.to_json(), **source.stats()}
-
-    report["results"] = FileResultSink(settings.results_dir).counts()
-
-    if not settings.minio_enabled:
-        report["minio"] = {
-            "configured": False,
-            "note": "Upload mode. Set MINIO_ENDPOINT and MINIO_GROUP_PREFIX to "
-                    "also read the crawler's by_run logs directly.",
-        }
-        print(json.dumps(report, indent=2, ensure_ascii=False))
-        return 0
-
-    try:
-        source = MinioRecordSource(settings, storage=MinioStorage(settings.minio))
-        runs = source.list_run_ids()
-        report["minio"] = {
-            "configured": True, "connected": True,
-            "endpoint": settings.minio.endpoint,
-            "bucket": settings.minio.bucket,
-            "group_prefix": settings.minio.group_prefix,
-            "crawl_runs": len(runs),
-            "latest_run": runs[-1] if runs else None,
-        }
-    except Exception as exc:  # noqa: BLE001
-        report["minio"] = {
-            "configured": True, "connected": False,
-            "endpoint": settings.minio.endpoint,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-        print(json.dumps(report, indent=2, ensure_ascii=False))
-        print(
-            "\nMinIO is unreachable. A *.svc.cluster.local address will not "
-            "resolve from outside the k3s cluster — use a tailnet-reachable "
-            "NodePort (30000-32767) or ingress address. Upload mode works "
-            "regardless, so this is not blocking.",
-            file=sys.stderr,
-        )
+        password = getpass.getpass("Password: ")
+        if password != getpass.getpass("Repeat: "):
+            print("Passwords do not match.", file=sys.stderr)
+            return 1
+    if len(password) < 8:
+        print("Use at least 8 characters.", file=sys.stderr)
         return 1
-
-    print(json.dumps(report, indent=2, ensure_ascii=False))
+    print(hash_password(password))
     return 0
 
 
-def print_health() -> int:
-    settings = load_settings()
-    data = snapshot(settings.data_dir, settings.images_dir)
-    data["images"] = image_store(settings.images_dir)
-    print(json.dumps(data, indent=2))
+def cmd_check() -> int:
+    from app.core import audit, corpus, drive, metrics, postid, sampling, users  # noqa: F401
+    from app.core.config import describe_secrets
+
+    settings = _settings()
+    print("core modules import cleanly (no web framework)")
+    print(f"data dir      : {settings.data_dir}")
+    print(f"drive folder  : {settings.drive.folder_id or '(not set)'}")
+    print(f"public base   : {settings.images.public_base_url or '(not set)'}")
+    print(f"sample batch  : {settings.sampling.default_batch}")
+    print(f"per-post cap  : {settings.sampling.per_post_cap}")
+    print("targets       : " + ", ".join(
+        f"{b.value}={w:.0%}" for b, w in
+        sampling.normalize_targets(settings.sampling.targets).items()
+    ))
+    print("secrets       : " + ", ".join(
+        f"{k}={'set' if v else 'MISSING'}" for k, v in describe_secrets().items()
+    ))
+
+    index = drive.DriveIndex(
+        settings.drive_index_path, settings.drive.folder_id, settings.drive.api_key
+    )
+    print(f"drive index   : {len(index.load())} files")
+
+    missing = [k for k, v in describe_secrets().items()
+               if not v and k in {"AUTH_SECRET", "APP_PASSWORD_HASH"}]
+    if missing:
+        print(f"\nThe app will refuse to start: {', '.join(missing)} not set.")
+        return 1
+    return 0
+
+
+def cmd_ingest(jsonl: str, xlsx: str) -> int:
+    from app.core import corpus
+    from app.core.audit import AuditStore
+
+    settings = _settings()
+    jsonl_path = Path(jsonl) if jsonl else settings.uploads_dir / "ground_truth.jsonl"
+    xlsx_path = Path(xlsx) if xlsx else settings.uploads_dir / "ground_truth.xlsx"
+
+    if not jsonl_path.exists() and not xlsx_path.exists():
+        print(f"Neither {jsonl_path} nor {xlsx_path} exists.", file=sys.stderr)
+        return 1
+
+    records, report = corpus.build(
+        jsonl_path if jsonl_path.exists() else None,
+        xlsx_path if xlsx_path.exists() else None,
+    )
+    if not records:
+        print("No reviewable records produced.", file=sys.stderr)
+        print(json.dumps(report.to_json(), indent=2, ensure_ascii=False))
+        return 1
+
+    AuditStore(settings.data_dir).corpus.replace(records, report)
+    print(json.dumps(report.to_json(), indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_stats() -> int:
+    from app.core.audit import AuditStore
+
+    store = AuditStore(_settings().data_dir)
+    print(json.dumps(store.progress(), indent=2, ensure_ascii=False))
+    for row in store.per_reviewer():
+        print(
+            f"  {row['username']:<16} {row['reviewed']:>5} reviewed / "
+            f"{row['assigned']:>5} claimed"
+        )
+    return 0
+
+
+def cmd_add_user(name: str, password: str, display: str, role: str) -> int:
+    from app.core.users import UserError, UserStore
+
+    settings = _settings()
+    store = UserStore(
+        settings.users_path, super_admin=os.environ.get("APP_USERNAME", "admin")
+    )
+    if not password:
+        import getpass
+
+        password = getpass.getpass("Password: ")
+    try:
+        user = store.create(name, password, role=role, display_name=display,
+                            created_by="cli")
+    except UserError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"created {user.username} ({user.role})")
+    return 0
+
+
+def cmd_drive_index() -> int:
+    from app.core.drive import DriveIndex
+
+    settings = _settings()
+    index = DriveIndex(
+        settings.drive_index_path, settings.drive.folder_id, settings.drive.api_key
+    )
+    report = asyncio.run(index.refresh())
+    if report.error:
+        print(report.error, file=sys.stderr)
+        return 1
+    print(json.dumps(report.to_json(), indent=2))
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-        stream=sys.stderr,
-    )
+    parser = argparse.ArgumentParser(prog="app.cli", description=__doc__)
+    parser.add_argument("--check", action="store_true", help="verify configuration")
+    parser.add_argument("--hash-password", action="store_true",
+                        help="print a bcrypt hash for APP_PASSWORD_HASH")
+    parser.add_argument("--ingest", action="store_true", help="build the corpus")
+    parser.add_argument("--drive-index", action="store_true",
+                        help="list the Drive folder into the local index")
+    parser.add_argument("--stats", action="store_true", help="print audit progress")
+    parser.add_argument("--add-user", metavar="NAME", default="")
+    parser.add_argument("--jsonl", default="", help="path to ground_truth.jsonl")
+    parser.add_argument("--xlsx", default="", help="path to ground_truth.xlsx")
+    parser.add_argument("--password", default="")
+    parser.add_argument("--display", default="")
+    parser.add_argument("--role", default="reviewer", choices=["reviewer", "admin"])
+    args = parser.parse_args(argv)
 
-    if args.health:
-        return print_health()
+    if args.hash_password:
+        return cmd_hash_password(args.password)
     if args.check:
-        return check_connectivity()
-    return asyncio.run(run_batch(args))
+        return cmd_check()
+    if args.ingest:
+        return cmd_ingest(args.jsonl, args.xlsx)
+    if args.drive_index:
+        return cmd_drive_index()
+    if args.stats:
+        return cmd_stats()
+    if args.add_user:
+        return cmd_add_user(args.add_user, args.password, args.display, args.role)
+
+    parser.print_help()
+    return 0
 
 
 if __name__ == "__main__":

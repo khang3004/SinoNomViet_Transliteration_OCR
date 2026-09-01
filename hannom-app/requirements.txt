@@ -1,11 +1,7 @@
-# Image-prep runtime deps.
+# OCR-review runtime deps.
 #
-# No OCR stack: this stage downloads images and serves them, it does not read
-# them. Dropping paddleocr/paddlepaddle/numpy took the image from ~3 GB to a few
-# hundred MB and the build from ~15 minutes to about one.
-#
-# Pillow stays — image_dimensions() in app/core/imagestore.py records width and
-# height on every output record.
+# This stage reads no images and runs no models: it fetches the upstream team's
+# pictures from Google Drive, shows them to reviewers, and records verdicts.
 
 # Web layer
 fastapi==0.115.0
@@ -16,10 +12,14 @@ python-multipart==0.0.9
 bcrypt==4.2.0
 PyJWT==2.9.0
 
-# Storage + HTTP
-minio==7.2.9
+# Google Drive listing + image mirroring
 httpx==0.27.2
+
+# Their ground_truth.xlsx in, our reviews.xlsx out
+openpyxl==3.1.5
+
+# Image dimensions on the review screen
 Pillow==10.4.0
 
-# Host telemetry for the monitoring UI
+# Host telemetry for the monitoring panel
 psutil==6.0.0
