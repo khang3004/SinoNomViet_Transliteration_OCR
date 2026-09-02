@@ -31,7 +31,7 @@ from typing import Any, Callable, Iterable
 from app.core import sampling
 from app.core.corpus import IngestReport
 from app.core.jsonlog import JsonlLog, read_json, write_json, write_jsonl
-from app.core.metrics import compare
+from app.core.metrics import compare, normalize
 from app.core.models import (
     Assignment,
     Band,
@@ -348,6 +348,17 @@ class AuditStore:
             if not corrected:
                 raise AuditError(
                     "Type the correct transcription when marking a label wrong."
+                )
+            # The review screen seeds this box with their transcription so a
+            # reviewer edits a few characters rather than retyping twenty. That
+            # convenience makes one contradiction reachable: calling a label
+            # wrong while leaving the text identical to it. Refusing it here is
+            # what keeps a pre-filled box from becoming a rubber stamp.
+            if normalize(corrected) == normalize(record.ground_truth):
+                raise AuditError(
+                    "The corrected text is identical to their transcription. "
+                    "Edit it to show what the image actually says, or mark the "
+                    "label correct instead."
                 )
         else:
             corrected = ""

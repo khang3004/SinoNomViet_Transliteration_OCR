@@ -37,10 +37,17 @@ one question: **does their transcription match the image?**
 Gemini gets a lighter `good` / `partial` / `bad` rating alongside. DeepSeek is
 shown but not scored.
 
-**Nothing is pre-filled.** The correction box starts empty, and a verdict is
-only recorded when the reviewer chooses one — so clicking through without
-looking cannot masquerade as a perfect score. `not_an_image` does not count as
-a review — the image leaves the study and a replacement is drawn for it.
+The **Corrected** box sits directly under Gemini, pre-seeded with their
+transcription so a reviewer edits two characters instead of retyping twenty.
+DeepSeek sits below the metadata, for context only.
+
+Pre-seeding that box makes one contradiction reachable — calling a label wrong
+while the text still says exactly what was just called wrong — so the server
+refuses `minor`/`wrong` when the correction is unchanged from their label
+(whitespace-insensitively). Together with the fact that **a verdict is only
+recorded when the reviewer chooses one**, that is what stops clicking through
+from masquerading as a perfect score. `not_an_image` does not count as a review
+— the image leaves the study and a replacement is drawn for it.
 
 ## How the study is drawn
 

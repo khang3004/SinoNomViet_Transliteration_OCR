@@ -43,7 +43,7 @@
     background: var(--plane); color: var(--ink);
     font-size: 14px; line-height: 1.45; padding: 1rem;
   }
-  .wrap { max-width: 1320px; margin: 0 auto; }
+  .wrap { max-width: 1560px; margin: 0 auto; }
 
   header { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; margin-bottom: 1rem; }
   header h1 { font-size: 1.05rem; font-weight: 700; }
@@ -104,7 +104,7 @@
   /* ---- gallery: the primary surface ---- */
   .gallery {
     display: grid; gap: 0.85rem;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   }
   .tile {
     background: var(--surface); border: 1px solid var(--border);
@@ -115,8 +115,11 @@
   .tile:hover { box-shadow: var(--shadow); }
   .tile.done { border-color: color-mix(in srgb, var(--good) 45%, var(--border)); }
   .tile .thumb {
-    width: 100%; aspect-ratio: 4 / 3; background: var(--grid);
-    display: block; object-fit: cover;
+    /* Portrait, and contained rather than cropped: `cover` on a 4/3 box cut the
+       top and bottom off every scroll, which is where the seals and the
+       lạc khoản are. */
+    width: 100%; aspect-ratio: 3 / 4; background: var(--plane);
+    display: block; object-fit: contain;
   }
   .tile .meta { padding: 0.55rem 0.65rem; display: flex; flex-direction: column; gap: 0.2rem; }
   .tile .who { font-size: 0.82rem; font-weight: 600; }
@@ -154,13 +157,16 @@
   .lb.show { display: flex; }
   .lb-inner {
     background: var(--surface); border-radius: 12px; overflow: hidden;
-    max-width: 1180px; width: 100%; max-height: 92vh;
-    display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(340px, 1fr);
+    max-width: 1720px; width: 100%; max-height: 94vh;
+    display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(400px, 1fr);
   }
   @media (max-width: 900px) { .lb-inner { grid-template-columns: 1fr; max-height: 94vh; } }
   .lb-img { background: #000; display: flex; align-items: center; justify-content: center;
-            min-height: 240px; max-height: 92vh; overflow: auto; }
-  .lb-img img { max-width: 100%; object-fit: contain; display: block; cursor: zoom-in; }
+            min-height: 240px; max-height: 94vh; overflow: auto; }
+  /* max-height as well as max-width: without it a tall scroll overflows the
+     panel and has to be scrolled to be seen at all. */
+  .lb-img img { max-width: 100%; max-height: 94vh; object-fit: contain;
+                display: block; cursor: zoom-in; }
   .lb-img img.zoom { max-width: none; cursor: zoom-out; }
   .lb-side { padding: 1rem 1.2rem; overflow-y: auto; max-height: 92vh; }
   .lb-side h3 { font-size: 0.92rem; margin-bottom: 0.15rem; }
@@ -562,10 +568,7 @@ function openReview(i) {
         <div class="txtblock cjk ${item.gemini ? "" : "empty-val"}">${esc(item.gemini) || "no output"}</div>
       </div>
 
-      <div style="margin-top:0.75rem">
-        <label class="field">DeepSeek <span style="text-transform:none">(context only)</span></label>
-        <div class="txtblock cjk ${item.deepseek ? "" : "empty-val"}">${esc(item.deepseek) || "no output"}</div>
-      </div>
+      ${editable ? correctionBlock(item, review) : ""}
 
       ${editable ? verdictForm(item, review) : reviewSummary(review)}
 
@@ -575,10 +578,35 @@ function openReview(i) {
         <dt>Post id</dt><dd>${esc(item.post_id)}</dd>
         <dt>Caption</dt><dd>${esc((item.caption || "—").slice(0, 200))}</dd>
       </dl>
+
+      <div style="margin-top:0.9rem">
+        <label class="field">DeepSeek <span style="text-transform:none">(context only, not scored)</span></label>
+        <div class="txtblock cjk ${item.deepseek ? "" : "empty-val"}">${esc(item.deepseek) || "no output"}</div>
+      </div>
     </div>`;
 
   $("lb").classList.add("show");
   wireWorkspace(item, review, editable);
+}
+
+function correctionBlock(item, review) {
+  // Seeded with their ground truth so a reviewer edits a couple of characters
+  // instead of retyping twenty. The verdict is still an explicit choice, and
+  // the server refuses "minor"/"wrong" when this text is left identical to
+  // their label — so the convenience cannot quietly become a rubber stamp.
+  const text = review.corrected || item.ground_truth || "";
+  return `
+    <div style="margin-top:0.75rem">
+      <label class="field" for="corrected">Corrected
+        <span style="text-transform:none">(edit their transcription to match the image)</span>
+      </label>
+      <textarea id="corrected" class="cjk" rows="5">${esc(text)}</textarea>
+      <div class="row" style="margin-top:0.35rem">
+        <button type="button" id="btn-copy-gt">Reset to their label</button>
+        <button type="button" id="btn-copy-gemini">Use Gemini</button>
+        <span class="muted" id="edited-flag" style="font-size:0.72rem"></span>
+      </div>
+    </div>`;
 }
 
 function verdictForm(item, review) {
@@ -595,16 +623,6 @@ function verdictForm(item, review) {
       ${btn("wrong", "danger", "Wrong")}
       ${btn("unreadable", "", "Unreadable")}
       ${btn("not_an_image", "", "Not an image")}
-    </div>
-
-    <div id="correction-wrap" style="margin-top:0.8rem" class="${["minor","wrong"].includes(v) ? "" : "hide"}">
-      <label class="field" for="corrected">Correct transcription</label>
-      <textarea id="corrected" class="cjk" rows="4"
-        placeholder="Type what the image actually says">${esc(review.corrected || "")}</textarea>
-      <div class="row" style="margin-top:0.35rem">
-        <button type="button" id="btn-copy-gt">Start from their label</button>
-        <button type="button" id="btn-copy-gemini">Start from Gemini</button>
-      </div>
     </div>
 
     <div style="margin-top:0.8rem">
@@ -657,17 +675,28 @@ function wireWorkspace(item, review, editable) {
   if (!editable) return;
 
   let verdict = review.verdict || "";
+  const box = $("corrected");
+  const flag = $("edited-flag");
+  const markEdited = () => {
+    if (!box || !flag) return;
+    flag.textContent = box.value.trim() === (item.ground_truth || "").trim()
+      ? "unchanged from their label" : "edited";
+  };
+  markEdited();
+  if (box) box.oninput = markEdited;
+
   const buttons = $("lb-inner").querySelectorAll(".v-btn");
   const setVerdict = (value) => {
     verdict = value;
     buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === value)));
-    $("correction-wrap").classList.toggle("hide", !["minor", "wrong"].includes(value));
-    if (["minor", "wrong"].includes(value)) $("corrected").focus();
+    // Saying a label is wrong means the text below has to change. Focus it
+    // rather than making the reviewer hunt for the next step.
+    if (["minor", "wrong"].includes(value) && box) box.focus();
   };
   buttons.forEach((b) => { b.onclick = () => setVerdict(b.dataset.v); });
 
-  $("btn-copy-gt").onclick = () => { $("corrected").value = item.ground_truth; $("corrected").focus(); };
-  $("btn-copy-gemini").onclick = () => { $("corrected").value = item.gemini; $("corrected").focus(); };
+  $("btn-copy-gt").onclick = () => { box.value = item.ground_truth; markEdited(); box.focus(); };
+  $("btn-copy-gemini").onclick = () => { box.value = item.gemini; markEdited(); box.focus(); };
   $("btn-skip").onclick = () => advance(1);
 
   $("btn-save").onclick = async () => {

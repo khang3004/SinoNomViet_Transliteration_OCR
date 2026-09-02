@@ -177,8 +177,9 @@ class TestSubmit:
     def test_correct_adopts_their_transcription_as_the_truth(self, store):
         item = self._assign_one(store)
         review = store.submit("alice", item.record_id, Verdict.CORRECT)
-        # Never prefilled in the UI, filled here — so "clicked through without
-        # looking" cannot masquerade as a perfect score.
+        # Filled server-side when the client sends nothing, so the verdict is
+        # always what decides — see TestPreSeededCorrection for the guard that
+        # keeps the pre-filled box from becoming a rubber stamp.
         assert review.corrected == item.ground_truth
         assert review.ground_truth_similarity["cer_accuracy"] == 1.0
 
@@ -407,3 +408,52 @@ class TestExport:
         assert row["gemini_verdict"] == "partial"
         # Numeric, not "97.50%" — a text column cannot be averaged.
         assert isinstance(row["ground_truth_cer_accuracy"], float)
+
+
+class TestPreSeededCorrection:
+    """The review screen seeds the correction box with their transcription.
+
+    That is a real convenience for CJK — editing two characters beats retyping
+    twenty — but it makes one contradiction reachable, so the server closes it.
+    """
+
+    def _assign_one(self, store, user="alice"):
+        return store.assign(user, 1, rng=random.Random(1)).records[0]
+
+    def test_wrong_with_an_unedited_correction_is_refused(self, store):
+        item = self._assign_one(store)
+        with pytest.raises(AuditError, match="identical to their transcription"):
+            store.submit(
+                "alice", item.record_id, Verdict.WRONG, corrected=item.ground_truth
+            )
+
+    def test_minor_with_an_unedited_correction_is_refused(self, store):
+        item = self._assign_one(store)
+        with pytest.raises(AuditError, match="identical to their transcription"):
+            store.submit(
+                "alice", item.record_id, Verdict.MINOR, corrected=item.ground_truth
+            )
+
+    def test_whitespace_only_edits_do_not_count_as_a_correction(self, store):
+        """Line breaks are layout, not content — they are not a fix."""
+        item = self._assign_one(store)
+        with pytest.raises(AuditError, match="identical"):
+            store.submit(
+                "alice", item.record_id, Verdict.WRONG,
+                corrected="  " + item.ground_truth.replace("", " ").strip() + "\n",
+            )
+
+    def test_a_real_edit_is_accepted(self, store):
+        item = self._assign_one(store)
+        review = store.submit(
+            "alice", item.record_id, Verdict.MINOR, corrected="年歲漸增"
+        )
+        assert review.corrected == "年歲漸增"
+
+    def test_correct_still_accepts_the_unedited_text(self, store):
+        """Marking a label correct is exactly the case where it should match."""
+        item = self._assign_one(store)
+        review = store.submit(
+            "alice", item.record_id, Verdict.CORRECT, corrected=item.ground_truth
+        )
+        assert review.ground_truth_similarity["cer_accuracy"] == 1.0
