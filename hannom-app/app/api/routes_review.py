@@ -180,6 +180,47 @@ async def submit_review(
     }
 
 
+class SkipRequest(BaseModel):
+    record_id: str
+
+
+@router.post("/queue/skip")
+async def skip(
+    request: Request, body: SkipRequest, user: dict = Depends(current_user)
+):
+    """Swap one image out of the study and take a replacement for it.
+
+    Distinct from /queue/release, which hands an image back but leaves it in
+    the study for someone else. This removes it from the study entirely and
+    draws a fresh one in the same band, so the study still covers its target.
+    """
+    runtime = _runtime(request)
+    try:
+        replacement = runtime.audit.swap_out(
+            body.record_id,
+            user["username"],
+            reason="not_wanted",
+            is_admin=user.get("role") == "admin",
+        )
+    except AuditError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {
+        "skipped": body.record_id,
+        "replacement": _present(runtime, _queue_item(runtime, replacement))
+        if replacement is not None
+        else None,
+        "message": ""
+        if replacement is not None
+        else "Swapped out, but the pool had no replacement left to give.",
+    }
+
+
+def _queue_item(runtime, record) -> QueueItem:
+    assignment = runtime.audit.active_assignments()[record.record_id]
+    return QueueItem(record, assignment, None)
+
+
 class ReleaseRequest(BaseModel):
     record_id: str
 

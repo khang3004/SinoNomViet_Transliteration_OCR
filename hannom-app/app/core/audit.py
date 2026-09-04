@@ -389,12 +389,65 @@ class AuditStore:
         # replacement in the same band — the study is meant to yield `size`
         # judged images, not `size` minus however many were broken.
         if verdict is Verdict.NOT_AN_IMAGE:
-            self.release(record_id, username)
-            if self.sample.exists and record_id in self.sample.members():
-                self.sample.drop(record_id, record.band, reason="flagged_unusable")
-                self.top_up_sample()
+            self.swap_out(record_id, username, reason="flagged_unusable")
 
         return review
+
+    def swap_out(
+        self,
+        record_id: str,
+        username: str,
+        *,
+        reason: str,
+        is_admin: bool = False,
+    ) -> CorpusRecord | None:
+        """Take one image out of the study and hand its holder a fresh one.
+
+        The replacement is drawn from the same band, so removing an image
+        changes *which* images the study covers without changing its size or
+        its shape. Every removal is recorded against the person who asked for
+        it: a reviewer dropping what they would rather not judge moves what the
+        audit measures, and that has to be countable.
+
+        Returns the replacement, or None when the pool has nothing left to give.
+        """
+        record = self.corpus.get(record_id)
+        if record is None:
+            raise AuditError(f"Unknown record: {record_id}")
+
+        holder = self.active_assignments().get(record_id)
+        if holder is None:
+            raise AuditError("That image is not currently assigned to anyone.")
+        if holder.username != username and not is_admin:
+            raise AuditError(f"That image is assigned to {holder.username}.")
+
+        self.release(record_id, username)
+        topped_up = None
+        if self.sample.exists and record_id in self.sample.members():
+            self.sample.drop(record_id, record.band, reason=reason, username=username)
+            topped_up = self.top_up_sample()
+
+        if not self.sample.exists:
+            return None
+
+        # Hand back the record the top-up just drew, rather than any free member:
+        # it is the one in the same band, so the reviewer's own mix of easy and
+        # hard images stays comparable to everyone else's.
+        if topped_up is not None and topped_up.added:
+            replacement = topped_up.added[0]
+            self.assignments.append(
+                Assignment(
+                    record_id=replacement.record_id,
+                    username=username,
+                    band=replacement.band,
+                ).to_json()
+            )
+            return replacement
+
+        # Nothing new could be drawn — fall back to any unclaimed study record
+        # so the reviewer is not left a person short of work.
+        drawn = self.assign(username, 1)
+        return drawn.records[0] if drawn.records else None
 
     # --- views -----------------------------------------------------------
 
@@ -550,6 +603,10 @@ class AuditStore:
 
         done: Counter = Counter()
         flagged: Counter = Counter()
+        skipped: Counter = Counter()
+        for row in self.sample.drops():
+            if row.get("reason") == "not_wanted" and row.get("username"):
+                skipped[row["username"]] += 1
         seconds: dict[str, float] = defaultdict(float)
         last: dict[str, str] = {}
         accuracy: dict[str, list[float]] = defaultdict(list)
@@ -568,7 +625,7 @@ class AuditStore:
                     float(review.ground_truth_similarity.get("cer_accuracy", 0.0))
                 )
 
-        names = set(assigned) | set(done) | set(flagged)
+        names = set(assigned) | set(done) | set(flagged) | set(skipped)
         rows = []
         for name in sorted(names):
             scores = accuracy.get(name, [])
@@ -579,6 +636,7 @@ class AuditStore:
                     "reviewed": done.get(name, 0),
                     "remaining": max(0, assigned.get(name, 0) - done.get(name, 0)),
                     "flagged_unusable": flagged.get(name, 0),
+                    "skipped": skipped.get(name, 0),
                     "avg_seconds": round(seconds[name] / done[name], 1)
                     if done.get(name)
                     else None,

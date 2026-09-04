@@ -242,10 +242,15 @@ class TestUnusableImages:
     def _assign_one(self, store, user="alice"):
         return store.assign(user, 1, rng=random.Random(1)).records[0]
 
-    def test_a_broken_image_leaves_the_reviewers_queue(self, store):
+    def test_a_broken_image_leaves_the_queue_and_a_replacement_takes_its_place(
+        self, store
+    ):
+        """The reviewer asked for one image to review and should still have one."""
         item = self._assign_one(store)
         store.submit("alice", item.record_id, Verdict.NOT_AN_IMAGE)
-        assert store.queue("alice") == []
+        queue = store.queue("alice")
+        assert [i.record.record_id for i in queue] != [item.record_id]
+        assert len(queue) == 1
 
     def test_it_does_not_count_as_reviewed(self, store):
         item = self._assign_one(store)
@@ -457,3 +462,96 @@ class TestPreSeededCorrection:
             "alice", item.record_id, Verdict.CORRECT, corrected=item.ground_truth
         )
         assert review.ground_truth_similarity["cer_accuracy"] == 1.0
+
+
+class TestSwapOut:
+    """Reviewers can decline an image; the study keeps its size and its shape."""
+
+    def _assign_one(self, store, user="alice"):
+        return store.assign(user, 1, rng=random.Random(1)).records[0]
+
+    def test_the_study_keeps_its_target_size(self, store):
+        item = self._assign_one(store)
+        store.swap_out(item.record_id, "alice", reason="not_wanted")
+        assert len(store.sample.members()) == SAMPLE_SIZE
+
+    def test_the_replacement_comes_from_the_same_band(self, store):
+        item = self._assign_one(store)
+        before = Counter(r.band for r in store.sample_records())
+        store.swap_out(item.record_id, "alice", reason="not_wanted")
+        assert Counter(r.band for r in store.sample_records()) == before
+
+    def test_the_reviewer_is_handed_the_replacement(self, store):
+        item = self._assign_one(store)
+        replacement = store.swap_out(item.record_id, "alice", reason="not_wanted")
+        assert replacement is not None
+        assert replacement.record_id != item.record_id
+        # Their queue is the size they asked for, not one short.
+        assert len(store.queue("alice")) == 1
+        assert store.queue("alice")[0].record.record_id == replacement.record_id
+
+    def test_the_skipped_image_never_comes_back(self, store):
+        item = self._assign_one(store)
+        store.swap_out(item.record_id, "alice", reason="not_wanted")
+        assert item.record_id not in store.sample.members()
+        store.assign("bob", SAMPLE_SIZE, rng=random.Random(4))
+        assert item.record_id not in {i.record.record_id for i in store.queue("bob")}
+
+    def test_the_skip_is_recorded_against_the_reviewer(self, store):
+        item = self._assign_one(store)
+        store.swap_out(item.record_id, "alice", reason="not_wanted")
+        row = {r["record_id"]: r for r in store.sample.drops()}[item.record_id]
+        assert row["reason"] == "not_wanted"
+        assert row["username"] == "alice"
+
+    def test_skips_are_counted_per_reviewer(self, store):
+        for item in store.assign("alice", 3, rng=random.Random(1)).records:
+            store.swap_out(item.record_id, "alice", reason="not_wanted")
+        row = {r["username"]: r for r in store.per_reviewer()}["alice"]
+        assert row["skipped"] == 3
+        assert row["reviewed"] == 0
+
+    def test_skipping_does_not_count_as_progress(self, store):
+        item = self._assign_one(store)
+        store.swap_out(item.record_id, "alice", reason="not_wanted")
+        progress = store.progress()
+        assert progress["reviewed"] == 0
+        assert progress["target"] == SAMPLE_SIZE
+
+    def test_reasons_are_reported_separately(self, store):
+        first = self._assign_one(store)
+        store.swap_out(first.record_id, "alice", reason="not_wanted")
+        second = store.queue("alice")[0].record
+        store.submit("alice", second.record_id, Verdict.NOT_AN_IMAGE)
+
+        reasons = store.progress()["sample"]["dropped_by_reason"]
+        assert reasons["not_wanted"] == 1
+        assert reasons["flagged_unusable"] == 1
+
+    def test_another_reviewers_image_cannot_be_skipped(self, store):
+        item = self._assign_one(store, "alice")
+        with pytest.raises(AuditError, match="assigned to alice"):
+            store.swap_out(item.record_id, "bob", reason="not_wanted")
+
+    def test_an_unassigned_image_cannot_be_skipped(self, store):
+        record = store.sample_records()[0]
+        with pytest.raises(AuditError, match="not currently assigned"):
+            store.swap_out(record.record_id, "alice", reason="not_wanted")
+
+    def test_an_exhausted_pool_returns_no_replacement_rather_than_failing(
+        self, tmp_path
+    ):
+        audit = AuditStore(tmp_path)
+        audit.corpus.replace(
+            [record(f"p{i}", 0, Band.POOR) for i in range(2)], IngestReport(records=2)
+        )
+        audit.create_sample(2, rng=random.Random(1))
+        held = audit.assign("alice", 2, rng=random.Random(1)).records
+        # Both are held, so nothing is left to swap in.
+        assert audit.swap_out(held[0].record_id, "alice", reason="not_wanted") is None
+
+    def test_the_reviewer_receives_the_same_band_replacement(self, store):
+        """Their own mix of easy and hard images has to stay comparable too."""
+        item = self._assign_one(store)
+        replacement = store.swap_out(item.record_id, "alice", reason="not_wanted")
+        assert replacement.band is item.band

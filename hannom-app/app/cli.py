@@ -52,7 +52,6 @@ def cmd_check() -> int:
     print("core modules import cleanly (no web framework)")
     print(f"data dir      : {settings.data_dir}")
     print(f"drive folder  : {settings.drive.folder_id or '(not set)'}")
-    print(f"public base   : {settings.images.public_base_url or '(not set)'}")
     print(f"sample batch  : {settings.sampling.default_batch}")
     print(f"per-post cap  : {settings.sampling.per_post_cap}")
     print("targets       : " + ", ".join(

@@ -183,16 +183,35 @@ class SampleStore:
             ]
         )
 
-    def drop(self, record_id: str, band: Band, reason: str) -> None:
+    def drop(
+        self, record_id: str, band: Band, reason: str, username: str = ""
+    ) -> None:
+        """Remove a record from the study, for good.
+
+        ``username`` is recorded because a reviewer dropping images they would
+        rather not review shifts what the study measures. Counting those per
+        person is what makes that visible instead of invisible.
+        """
         self.log.append(
             {
                 "record_id": record_id,
                 "band": band.value,
                 "added_at": _now(),
                 "reason": reason,
+                "username": username,
                 "dropped": True,
             }
         )
+
+    def drops(self) -> list[dict[str, Any]]:
+        """Every record removed from the study, with its reason and author."""
+        return [row for row in self._state().values() if row.get("dropped")]
+
+    def drop_reasons(self) -> Counter:
+        counts: Counter = Counter()
+        for row in self.drops():
+            counts[row.get("reason", "unknown")] += 1
+        return counts
 
     # --- drawing ---------------------------------------------------------
 
@@ -262,6 +281,7 @@ class SampleStore:
             "complete": len(members) >= self.size,
             "created_at": meta.get("created_at", ""),
             "created_by": meta.get("created_by", ""),
+            "dropped_by_reason": dict(self.drop_reasons()),
             "per_post_cap": self.per_post_cap,
             "posts": len(self.post_counts(records_by_id)),
         }

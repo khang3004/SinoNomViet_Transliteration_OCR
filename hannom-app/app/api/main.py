@@ -70,9 +70,6 @@ async def lifespan(app: FastAPI):
             "IMAGE_SIGNING_SECRET is not set — image URLs cannot be minted and "
             "no thumbnails will load."
         )
-    if not settings.images.public_base_url:
-        log.warning("PUBLIC_BASE_URL is not set — image URLs will be relative")
-
     try:
         yield
     finally:

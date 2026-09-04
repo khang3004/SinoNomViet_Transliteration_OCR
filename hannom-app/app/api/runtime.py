@@ -39,7 +39,11 @@ class Runtime:
             self.drive_index, settings.images_dir, max_bytes=settings.drive.max_bytes
         )
         self.signer = ImageUrlSigner(
-            base_url=settings.images.public_base_url,
+            # Deliberately empty, so every minted URL is a same-origin path.
+            # Only reviewers' browsers load these, and baking in a hostname
+            # meant one stale PUBLIC_BASE_URL broke every image on the page
+            # with no visible reason.
+            base_url="",
             secret=settings.images.signing_secret,
             ttl_days=settings.images.ttl_days,
         )
@@ -74,7 +78,6 @@ class Runtime:
             "drive": self.drive_index.stats(),
             "mirrored_images": self.images.mirrored_count(),
             "signing_configured": bool(self.settings.images.signing_secret),
-            "public_base_url": self.settings.images.public_base_url,
             "sampling": {
                 "sample_size": self.settings.sampling.sample_size,
                 "default_batch": self.settings.sampling.default_batch,

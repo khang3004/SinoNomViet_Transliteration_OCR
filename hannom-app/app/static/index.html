@@ -113,6 +113,13 @@
     position: relative;
   }
   .tile:hover { box-shadow: var(--shadow); }
+  /* A broken thumbnail should look broken, not merely faint: open it and the
+     workspace says what the server said. */
+  .tile .thumb.broken {
+    opacity: 0.35;
+    background: repeating-linear-gradient(45deg, var(--grid), var(--grid) 6px,
+                                          var(--plane) 6px, var(--plane) 12px);
+  }
   .tile.done { border-color: color-mix(in srgb, var(--good) 45%, var(--border)); }
   .tile .thumb {
     /* Portrait, and contained rather than cropped: `cover` on a 4/3 box cut the
@@ -171,6 +178,15 @@
   .lb-side { padding: 1rem 1.2rem; overflow-y: auto; max-height: 92vh; }
   .lb-side h3 { font-size: 0.92rem; margin-bottom: 0.15rem; }
   .lb-close { position: absolute; top: 1.2rem; right: 1.2rem; }
+  .imgfail {
+    color: #ddd; padding: 2rem 1.5rem; text-align: center; font-size: 0.85rem;
+    line-height: 1.6; max-width: 460px;
+  }
+  .imgfail b { display: block; color: #fff; margin-bottom: 0.4rem; font-size: 0.95rem; }
+  .imgfail code {
+    display: block; margin-top: 0.7rem; font-size: 0.72rem; color: #bbb;
+    word-break: break-all; font-family: ui-monospace, monospace;
+  }
 
   .txtblock {
     border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.6rem;
@@ -336,10 +352,11 @@
       <table>
         <thead><tr>
           <th>Reviewer</th><th class="num">Claimed</th><th class="num">Reviewed</th>
-          <th class="num">Left</th><th class="num">Flagged</th><th class="num">Avg sec</th>
+          <th class="num">Left</th><th class="num">Swapped</th><th class="num">Flagged</th>
+          <th class="num">Avg sec</th>
           <th class="num">Label accuracy</th><th>Last activity</th>
         </tr></thead>
-        <tbody id="reviewers"><tr><td colspan="8" class="muted">No activity yet.</td></tr></tbody>
+        <tbody id="reviewers"><tr><td colspan="9" class="muted">No activity yet.</td></tr></tbody>
       </table>
     </div>
   </details>
@@ -550,8 +567,11 @@ function openReview(i) {
   $("lb-inner").innerHTML = `
     <div class="lb-img">
       ${item.image_url
-        ? `<img id="lb-photo" src="${esc(item.image_url)}" alt="Calligraphy image under review" />`
-        : `<div class="empty" style="color:#888">No image URL — is IMAGE_SIGNING_SECRET set?</div>`}
+        ? `<img id="lb-photo" src="${esc(item.image_url)}" alt="Calligraphy image under review" />
+           <div class="imgfail" id="lb-imgfail" style="display:none"></div>`
+        : `<div class="imgfail"><b>No image URL was minted</b>
+             IMAGE_SIGNING_SECRET is not set, so the app cannot sign image
+             links. Set it in .env and recreate the container.</div>`}
     </div>
     <div class="lb-side">
       <div class="row" style="margin-bottom:0.6rem">
@@ -643,13 +663,16 @@ function verdictForm(item, review) {
 
     <div class="row" style="margin-top:0.9rem">
       <button class="primary" id="btn-save">Save &amp; next</button>
-      <button id="btn-skip">Skip</button>
+      <button id="btn-skip">Later</button>
+      <button id="btn-swap">Swap for another</button>
       <span class="spacer"></span>
       <span class="muted" id="save-status" style="font-size:0.75rem"></span>
     </div>
     <p class="muted" style="font-size:0.7rem; margin-top:0.5rem">
-      ← → move between images · Esc closes. Nothing is pre-filled: a verdict is only
-      recorded when you choose one.
+      ← → move between images · Esc closes. <b>Later</b> keeps this image in your
+      queue. <b>Swap</b> takes it out of the study for good and draws a different
+      one in the same band, so the study still covers its target — it is recorded
+      against you and does not count as a review.
     </p>`;
 }
 
@@ -670,9 +693,54 @@ function reviewSummary(review) {
     </dl>`;
 }
 
+async function explainImageFailure(item) {
+  // The <img> tag only ever reports "it broke". The route itself gives a real
+  // reason — a 502 naming the Drive error, a 403 for a stale signature — so
+  // fetch it and show that instead of a silent grey rectangle.
+  const panel = $("lb-imgfail"), photo = $("lb-photo");
+  if (!panel) return;
+  if (photo) photo.style.display = "none";
+  panel.style.display = "block";
+  panel.innerHTML = "<b>Image did not load</b>Asking the server why\u2026";
+
+  let detail = "", status = 0;
+  try {
+    const res = await fetch(item.image_url);
+    status = res.status;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      detail = body.detail || `${res.status} ${res.statusText}`;
+    } else {
+      detail = "The server returned the image, but the browser could not " +
+               "display it — the file may be corrupt.";
+    }
+  } catch (e) {
+    detail = `Could not reach the server (${e.message}).`;
+  }
+
+  const hint = status === 502
+    ? "The image could not be fetched from Google Drive. Check the folder is " +
+      "shared with 'anyone with the link', and re-index it under Admin."
+    : status === 404
+    ? "This filename is not in the Drive index. Re-index the folder under Admin."
+    : status === 403
+    ? "The signature was rejected. Reload the page to mint a fresh link."
+    : "";
+
+  panel.innerHTML =
+    `<b>Image did not load</b>${esc(detail)}` +
+    (hint ? `<div style="margin-top:0.6rem">${esc(hint)}</div>` : "") +
+    `<code>${esc(item.image)}</code>`;
+}
+
 function wireWorkspace(item, review, editable) {
   const photo = $("lb-photo");
-  if (photo) photo.onclick = () => photo.classList.toggle("zoom");
+  if (photo) {
+    photo.onclick = () => photo.classList.toggle("zoom");
+    photo.onerror = () => explainImageFailure(item);
+    // A cached failure fires no error event, so check the decoded state too.
+    if (photo.complete && photo.naturalWidth === 0) explainImageFailure(item);
+  }
   if (!editable) return;
 
   let verdict = review.verdict || "";
@@ -699,6 +767,32 @@ function wireWorkspace(item, review, editable) {
   $("btn-copy-gt").onclick = () => { box.value = item.ground_truth; markEdited(); box.focus(); };
   $("btn-copy-gemini").onclick = () => { box.value = item.gemini; markEdited(); box.focus(); };
   $("btn-skip").onclick = () => advance(1);
+
+  $("btn-swap").onclick = async () => {
+    const button = $("btn-swap");
+    button.disabled = true;
+    $("save-status").textContent = "Swapping\u2026";
+    try {
+      const result = await api("/api/queue/skip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ record_id: item.record_id }),
+      });
+      await refreshAll();
+      if (result.replacement) {
+        // Drop the replacement into the slot the skipped image just left, so
+        // the reviewer keeps their place instead of being thrown to the end.
+        state.items[state.current.index] = result.replacement;
+        openReview(state.current.index);
+      } else {
+        banner("Swapped out", result.message, false);
+        advance(1);
+      }
+    } catch (e) {
+      $("save-status").textContent = e.message;
+      button.disabled = false;
+    }
+  };
 
   $("btn-save").onclick = async () => {
     if (!verdict) { $("save-status").textContent = "Choose a verdict first."; return; }
@@ -822,19 +916,22 @@ async function loadProgress() {
       <td class="num">${fmt(r.assigned)}</td>
       <td class="num">${fmt(r.reviewed)}</td>
       <td class="num">${fmt(r.remaining)}</td>
+      <td class="num">${fmt(r.skipped)}</td>
       <td class="num">${fmt(r.flagged_unusable)}</td>
       <td class="num">${r.avg_seconds ?? "—"}</td>
       <td class="num">${pctOf(r.ground_truth_accuracy)}</td>
       <td>${esc((r.last_review_at || "").slice(0, 19).replace("T", " ")) || "—"}</td>
     </tr>`).join("")
-    : `<tr><td colspan="8" class="muted">No activity yet.</td></tr>`;
+    : `<tr><td colspan="9" class="muted">No activity yet.</td></tr>`;
 
   if ($("sample-n") && !$("sample-n").value) {
     $("sample-n").value = sample.size || (p.status.sampling || {}).sample_size || 500;
   }
+  const reasons = sample.dropped_by_reason || {};
   $("sample-status").textContent = sample.exists
     ? `${fmt(sample.active)} of ${fmt(sample.size)} in the study` +
-      (sample.dropped ? ` · ${fmt(sample.dropped)} dropped as unusable` : "")
+      (reasons.flagged_unusable ? ` · ${fmt(reasons.flagged_unusable)} unusable` : "") +
+      (reasons.not_wanted ? ` · ${fmt(reasons.not_wanted)} swapped out` : "")
     : "";
 
   const drive = p.status.drive || {};

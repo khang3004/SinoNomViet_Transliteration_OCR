@@ -34,6 +34,10 @@ one question: **does their transcription match the image?**
 | `unreadable` | image too damaged or unclear to judge | no |
 | `not_an_image` | broken, missing, or not a photograph | no — dropped and replaced |
 
+Two buttons sit beside the verdicts: **Later** leaves the image in your queue to
+come back to, and **Swap for another** takes it out of the study for good and
+hands you a different one from the same band.
+
 Gemini gets a lighter `good` / `partial` / `bad` rating alongside. DeepSeek is
 shown but not scored.
 
@@ -74,10 +78,24 @@ Two constraints ride along:
 Shortfalls redistribute: if a band runs dry, its quota moves to the bands that
 still have depth rather than silently returning a short study.
 
-**An unusable image is replaced, not just dropped.** When a reviewer marks one
-`not_an_image` it leaves the study, is recorded as dropped so it can never be
-handed out again, and a fresh image from the *same band* takes its place. The
-study still ends with 500 judged images rather than 493.
+**An image can leave the study, but the study never shrinks.** Two things take
+one out:
+
+- `not_an_image` — the picture is broken or is not a photograph;
+- **Swap for another** — the reviewer would simply rather not review this one.
+
+Either way it is recorded (with who asked for it, and why) so it can never be
+handed out again, a fresh image from the *same band* takes its place, and that
+replacement goes straight to the same reviewer. The study still ends with 500
+judged images rather than 493, its band shape is unchanged, and the reviewer's
+own mix of easy and hard images stays comparable to everyone else's.
+
+A word of warning about **Swap**: reviewers removing images they would rather
+not judge moves what the audit measures — towards "accuracy on the images
+reviewers were willing to look at". The same-band replacement limits the drift
+to within a band, and every swap is counted per reviewer in the Reviewers table
+and on the study panel, so the size of the effect is visible rather than
+invisible. It is still worth agreeing as a team when a swap is legitimate.
 
 Tune it with `SAMPLE_SIZE`, `SAMPLE_TARGETS`, `SAMPLE_PER_POST_CAP` and
 `SAMPLE_BATCH` (how many a reviewer claims per click).
@@ -244,7 +262,8 @@ No database. Everything is files under `DATA_DIR`:
 ```
 corpus/records.jsonl     the merged upstream data — replaced wholesale on ingest
 corpus/ingest.json       what the last merge produced and skipped
-sample.jsonl             which records are in the study; drops and replacements
+sample.jsonl             which records are in the study; drops, who dropped
+                         them and why, and their replacements
 sample.json              the study's size, band shares and per-post cap
 assignments.jsonl        append-only claims; the latest row per record wins
 reviews.jsonl            append-only verdicts; a changed mind adds a row

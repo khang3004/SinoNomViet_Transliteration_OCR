@@ -72,7 +72,6 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("COOKIE_SECURE", "0")
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("IMAGE_SIGNING_SECRET", "s" * 48)
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://review.example")
     monkeypatch.setenv("SAMPLE_SIZE", "24")
     monkeypatch.setenv("SAMPLE_BATCH", "20")
 
@@ -236,9 +235,11 @@ class TestReviewFlow:
         assert queue["total"] == 8 and queue["remaining"] == 8
 
         item = queue["items"][0]
-        # Signed, on our own domain — not a Drive link.
-        assert item["image_url"].startswith("https://review.example/img/")
-        assert "sig=" in item["image_url"]
+        # Same-origin and signed — never a Drive link, and never carrying a
+        # configured hostname that could go stale and break every image.
+        assert item["image_url"].startswith("/img/")
+        assert "drive.google" not in item["image_url"]
+        assert "sig=" in item["image_url"] and "exp=" in item["image_url"]
 
         response = client.post(
             "/api/review",
@@ -292,7 +293,7 @@ class TestReviewFlow:
         assert response.status_code == 400
         assert "correct" in response.json()["detail"]
 
-    def test_a_broken_image_frees_a_slot_and_reports_it(self, client, tmp_path):
+    def test_a_broken_image_is_swapped_for_a_fresh_one(self, client, tmp_path):
         seed_corpus(client, tmp_path)
         client.post("/api/queue/assign", json={"count": 3})
         record_id = client.get("/api/queue").json()["items"][0]["record_id"]
@@ -302,7 +303,64 @@ class TestReviewFlow:
             json={"record_id": record_id, "verdict": "not_an_image"},
         )
         assert response.json()["released"] is True
-        assert client.get("/api/queue").json()["total"] == 2
+
+        queue = client.get("/api/queue").json()
+        # Still three to work on: the broken one left, a replacement arrived.
+        assert queue["total"] == 3
+        assert record_id not in {i["record_id"] for i in queue["items"]}
+
+
+class TestSkip:
+    def test_skipping_swaps_the_image_and_returns_the_replacement(
+        self, client, tmp_path
+    ):
+        seed_corpus(client, tmp_path)
+        client.post("/api/queue/assign", json={"count": 3})
+        record_id = client.get("/api/queue").json()["items"][0]["record_id"]
+
+        result = client.post("/api/queue/skip", json={"record_id": record_id}).json()
+        assert result["skipped"] == record_id
+        assert result["replacement"]["record_id"] != record_id
+
+        queue = client.get("/api/queue").json()
+        assert queue["total"] == 3
+        assert record_id not in {i["record_id"] for i in queue["items"]}
+
+    def test_the_study_target_is_untouched(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        client.post("/api/queue/assign", json={"count": 3})
+        record_id = client.get("/api/queue").json()["items"][0]["record_id"]
+        client.post("/api/queue/skip", json={"record_id": record_id})
+
+        progress = client.get("/api/progress").json()
+        assert progress["target"] == 24
+        assert progress["sample"]["active"] == 24
+        assert progress["sample"]["dropped_by_reason"]["not_wanted"] == 1
+
+    def test_skipping_is_attributed_and_does_not_count_as_review(
+        self, client, tmp_path
+    ):
+        seed_corpus(client, tmp_path)
+        client.post("/api/queue/assign", json={"count": 3})
+        record_id = client.get("/api/queue").json()["items"][0]["record_id"]
+        client.post("/api/queue/skip", json={"record_id": record_id})
+
+        progress = client.get("/api/progress").json()
+        row = {r["username"]: r for r in progress["reviewers"]}["root"]
+        assert row["skipped"] == 1
+        assert progress["reviewed"] == 0
+
+    def test_someone_elses_image_cannot_be_skipped(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        client.post("/api/users", json={"username": "mai", "password": "password123"})
+        client.post("/api/queue/assign", json={"count": 3})
+        record_id = client.get("/api/queue").json()["items"][0]["record_id"]
+
+        client.post("/api/auth/logout")
+        login(client, "mai", "password123")
+        response = client.post("/api/queue/skip", json={"record_id": record_id})
+        assert response.status_code == 400
+        assert "root" in response.json()["detail"]
 
     def test_reviewers_hold_disjoint_queues(self, client, tmp_path):
         seed_corpus(client, tmp_path)

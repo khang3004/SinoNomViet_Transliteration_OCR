@@ -101,10 +101,10 @@ class ImageServeConfig:
     """Reviewers' browsers fetch images from us, not from Drive.
 
     Signed rather than cookie-gated so the same URL works in an <img> tag from
-    any of the reviewers' sessions without a preflight.
+    any of the reviewers' sessions without a preflight. The URLs are relative,
+    so there is no hostname to configure and none to get wrong.
     """
 
-    public_base_url: str = ""
     signing_secret: str = ""
     ttl_days: int = 7
 
@@ -167,7 +167,6 @@ def load_settings() -> Settings:
             max_bytes=_env_int("DRIVE_MAX_BYTES", 25 * 1024 * 1024),
         ),
         images=ImageServeConfig(
-            public_base_url=_env("PUBLIC_BASE_URL").rstrip("/"),
             signing_secret=_env("IMAGE_SIGNING_SECRET"),
             ttl_days=_env_int("IMAGE_URL_TTL_DAYS", 7),
         ),
