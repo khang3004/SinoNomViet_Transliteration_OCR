@@ -275,6 +275,7 @@
         <button class="primary" id="btn-assign">Get images</button>
         <button id="btn-review" disabled>Start reviewing</button>
       </div>
+      <span class="muted" id="assign-status" style="font-size:0.78rem"></span>
     </div>
 
     <div class="meter" style="margin-top:0.8rem" title="The whole team's progress through the study">
@@ -1015,19 +1016,33 @@ $("btn-adduser").onclick = async () => {
 
 /* ---------------- controls ---------------- */
 $("btn-assign").onclick = async () => {
-  const count = Math.max(1, parseInt($("assign-n").value, 10) || 100);
+  const count = Math.max(1, parseInt($("assign-n").value, 10) || 50);
   $("btn-assign").disabled = true;
+  $("assign-status").textContent = "Claiming\u2026";
   try {
     const result = await api("/api/queue/assign", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ count }),
     });
-    if (result.message) banner("Fewer images than requested", result.message, false);
-    else clearBanner();
     state.tab = "mine"; state.offset = 0;
+    setTab();
     await refreshAll();
-  } catch (e) { banner("Could not draw a sample", e.message, true); }
+
+    // Set AFTER the refresh, and on a surface loadProgress() does not own:
+    // reporting into the banner here meant the explanation was wiped by the
+    // refresh a moment later, so an exhausted study looked like a dead button.
+    $("assign-status").textContent = result.drawn
+      ? `Claimed ${result.drawn} image${result.drawn === 1 ? "" : "s"}.`
+      : "Nothing left to claim.";
+    if (result.message) {
+      banner(result.drawn ? "Fewer images than requested" : "No images to claim",
+             result.message, false);
+    }
+  } catch (e) {
+    $("assign-status").textContent = e.message;
+    banner("Could not claim images", e.message, true);
+  }
   $("btn-assign").disabled = false;
 };
 
