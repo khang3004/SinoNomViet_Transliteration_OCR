@@ -166,6 +166,20 @@ class SampleStore:
             },
         )
 
+    def set_size(self, size: int) -> None:
+        """Change the study's target without touching its membership.
+
+        Growing a study is not the same as redrawing one: every record already
+        in it, and every review against those records, survives untouched. Only
+        the denominator moves.
+        """
+        meta = self.meta()
+        if not meta:
+            raise ValueError("No study to resize.")
+        meta["size"] = int(size)
+        meta["resized_at"] = _now()
+        write_json(self.meta_path, meta)
+
     def add(self, records: Sequence[CorpusRecord], reason: str = "draw") -> None:
         if not records:
             return

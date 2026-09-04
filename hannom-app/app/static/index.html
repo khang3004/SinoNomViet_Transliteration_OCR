@@ -348,6 +348,16 @@
 
   <details class="card">
     <summary>Reviewers</summary>
+    <div class="row hide" id="reassign-row" style="margin-bottom:0.85rem">
+      <label class="field" style="margin:0">Move unreviewed work</label>
+      <select id="reassign-from" aria-label="From reviewer"></select>
+      <span class="muted">→</span>
+      <select id="reassign-to" aria-label="To reviewer"></select>
+      <input type="number" id="reassign-limit" min="1" placeholder="all" style="width:82px"
+             aria-label="How many (blank for all)" />
+      <button id="btn-reassign">Move</button>
+      <span class="muted" id="reassign-status" style="font-size:0.78rem"></span>
+    </div>
     <div class="tablewrap">
       <table>
         <thead><tr>
@@ -386,12 +396,24 @@
       progress bar. Redrawing replaces which images are in the study; reviews already
       recorded are kept.
     </p>
+    <div class="row" style="margin-bottom:0.5rem">
+      <input type="number" id="extend-n" min="1" max="100000" step="50" value="500"
+             style="width:104px" aria-label="How many images to add" />
+      <button class="primary" id="btn-extend">Add never-seen images</button>
+      <button id="btn-topup">Top up</button>
+      <span class="muted" id="sample-status"></span>
+      <span class="muted" id="sample-action" style="font-size:0.78rem"></span>
+    </div>
+    <p class="muted" style="font-size:0.74rem; margin-bottom:1rem">
+      <b>Add</b> grows the study with images no draw has used before — every existing
+      image, review and claim is kept, and the target grows. <b>Top up</b> only
+      refills images dropped as unusable. <b>Redraw</b> below replaces the study
+      wholesale and is rarely what you want.
+    </p>
     <div class="row" style="margin-bottom:1.2rem">
       <input type="number" id="sample-n" min="1" max="100000" step="50" style="width:104px"
              aria-label="Study size" />
-      <button class="primary" id="btn-sample">Draw study sample</button>
-      <button id="btn-topup">Top up</button>
-      <span class="muted" id="sample-status"></span>
+      <button class="danger" id="btn-sample">Redraw study from scratch</button>
     </div>
 
     <h2>Add a reviewer</h2>
@@ -1012,11 +1034,22 @@ async function loadAdmin() {
       };
     });
 
+    const options = u.users
+      .map((row) => `<option value="${esc(row.username)}">${esc(row.username)}</option>`)
+      .join("");
+
     const select = $("filter-reviewer");
     const chosen = select.value;
-    select.innerHTML = `<option value="">All reviewers</option>` +
-      u.users.map((row) => `<option value="${esc(row.username)}">${esc(row.username)}</option>`).join("");
+    select.innerHTML = `<option value="">All reviewers</option>` + options;
     select.value = chosen;
+
+    // Moving work between reviewers is an admin action, so only admins see it.
+    $("reassign-row").classList.toggle("hide", state.me.role !== "admin");
+    for (const id of ["reassign-from", "reassign-to"]) {
+      const box = $(id), keep = box.value;
+      box.innerHTML = options;
+      box.value = keep;
+    }
   } catch {}
 }
 
@@ -1063,33 +1096,74 @@ $("btn-sample").onclick = async () => {
   // Redrawing changes what the audit is about, so it asks first.
   if (drawn && !confirm(
         "Redraw the study at " + size + " images?\n\n" +
-        "This replaces which images are in it. " + reviewed + " review(s) already " +
-        "recorded are kept, but images that drop out stop counting.")) {
+        "This REPLACES which images are in it. " + reviewed + " review(s) already " +
+        "recorded are kept on disk, but images that drop out stop counting toward " +
+        "progress.\n\nTo add images without losing anything, cancel and use " +
+        "\"Add never-seen images\" instead.")) {
     return;
   }
   $("btn-sample").disabled = true;
-  $("sample-status").textContent = "Drawing\u2026";
+  $("sample-action").textContent = "Drawing\u2026";
   try {
     const result = await api("/api/sample", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ size }),
     });
-    $("sample-status").textContent = `Study drawn: ${result.added} images.`;
+    $("sample-action").textContent = `Study drawn: ${result.added} images.`;
     if (result.message) banner("Study is short of its target", result.message, false);
     await refreshAll();
-  } catch (e) { $("sample-status").textContent = e.message; }
+  } catch (e) { $("sample-action").textContent = e.message; }
   $("btn-sample").disabled = false;
 };
 
 $("btn-topup").onclick = async () => {
-  $("sample-status").textContent = "Topping up\u2026";
+  $("sample-action").textContent = "Topping up\u2026";
   try {
     const result = await api("/api/sample/top-up", { method: "POST" });
-    $("sample-status").textContent = result.added
-      ? `Added ${result.added} replacement(s).` : "Study is already full.";
     await refreshAll();
-  } catch (e) { $("sample-status").textContent = e.message; }
+    $("sample-action").textContent = result.added
+      ? `Added ${result.added} replacement(s).` : "Study is already full.";
+  } catch (e) { $("sample-action").textContent = e.message; }
+};
+
+$("btn-extend").onclick = async () => {
+  const count = Math.max(1, parseInt($("extend-n").value, 10) || 500);
+  $("btn-extend").disabled = true;
+  $("sample-action").textContent = "Drawing\u2026";
+  try {
+    const result = await api("/api/sample/extend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ count }),
+    });
+    await refreshAll();
+    $("sample-action").textContent =
+      `Added ${result.added} images — the study is now ${result.target}.`;
+    if (result.message) banner("Fewer images than asked for", result.message, false);
+  } catch (e) { $("sample-action").textContent = e.message; }
+  $("btn-extend").disabled = false;
+};
+
+$("btn-reassign").onclick = async () => {
+  const from_user = $("reassign-from").value, to_user = $("reassign-to").value;
+  const raw = parseInt($("reassign-limit").value, 10);
+  if (!from_user || !to_user) { $("reassign-status").textContent = "Pick both."; return; }
+  $("btn-reassign").disabled = true;
+  $("reassign-status").textContent = "Moving\u2026";
+  try {
+    const result = await api("/api/queue/reassign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from_user, to_user, only_unreviewed: true,
+        limit: Number.isFinite(raw) && raw > 0 ? raw : null,
+      }),
+    });
+    await refreshAll();
+    $("reassign-status").textContent = result.message;
+  } catch (e) { $("reassign-status").textContent = e.message; }
+  $("btn-reassign").disabled = false;
 };
 
 $("btn-adduser").onclick = async () => {

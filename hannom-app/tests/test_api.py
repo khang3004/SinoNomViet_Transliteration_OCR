@@ -561,3 +561,70 @@ class TestImageRoute:
         seed_corpus(client, tmp_path)
         response = client.get("/img/..%2F..%2Fetc/0.jpg?exp=1&sig=x")
         assert response.status_code in (400, 403, 404)
+
+
+class TestExtendAndReassign:
+    def test_extending_grows_the_target_without_losing_work(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        client.post("/api/queue/assign", json={"count": 5})
+        record_id = client.get("/api/queue").json()["items"][0]["record_id"]
+        client.post("/api/review", json={"record_id": record_id, "verdict": "correct"})
+
+        result = client.post("/api/sample/extend", json={"count": 8}).json()
+        assert result["added"] == 8
+        assert result["target"] == 32
+
+        progress = client.get("/api/progress").json()
+        assert progress["target"] == 32
+        assert progress["reviewed"] == 1          # the review survived
+        assert progress["assigned"] == 5          # the claims survived
+        assert progress["unclaimed"] == 27
+
+    def test_extending_needs_a_study_first(self, client, tmp_path):
+        seed_corpus(client, tmp_path, sample=False)
+        response = client.post("/api/sample/extend", json={"count": 5})
+        assert response.status_code == 400
+        assert "Draw a study sample" in response.json()["detail"]
+
+    def test_only_an_admin_can_extend(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        client.post("/api/users", json={"username": "mai", "password": "password123"})
+        client.post("/api/auth/logout")
+        login(client, "mai", "password123")
+        assert client.post("/api/sample/extend", json={"count": 5}).status_code == 403
+
+    def test_reassigning_moves_unreviewed_work(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        client.post("/api/users", json={"username": "mai", "password": "password123"})
+        client.post("/api/queue/assign", json={"count": 6})
+        record_id = client.get("/api/queue").json()["items"][0]["record_id"]
+        client.post("/api/review", json={"record_id": record_id, "verdict": "correct"})
+
+        result = client.post(
+            "/api/queue/reassign", json={"from_user": "root", "to_user": "mai"}
+        ).json()
+        assert result["moved"] == 5
+
+        rows = {r["username"]: r for r in client.get("/api/progress").json()["reviewers"]}
+        assert rows["root"]["reviewed"] == 1
+        assert rows["root"]["assigned"] == 1     # the reviewed one stays put
+        assert rows["mai"]["assigned"] == 5
+
+    def test_reassigning_to_an_unknown_user_is_refused(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        client.post("/api/queue/assign", json={"count": 3})
+        response = client.post(
+            "/api/queue/reassign", json={"from_user": "root", "to_user": "ghost"}
+        )
+        assert response.status_code == 400
+        assert "ghost" in response.json()["detail"]
+
+    def test_only_an_admin_can_reassign(self, client, tmp_path):
+        seed_corpus(client, tmp_path)
+        client.post("/api/users", json={"username": "mai", "password": "password123"})
+        client.post("/api/auth/logout")
+        login(client, "mai", "password123")
+        response = client.post(
+            "/api/queue/reassign", json={"from_user": "mai", "to_user": "root"}
+        )
+        assert response.status_code == 403

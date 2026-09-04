@@ -235,6 +235,71 @@ class AuditStore:
         log.info("study sample drawn: %d of %d requested", len(result.added), size)
         return result
 
+    def extend_sample(
+        self, count: int, rng: random.Random | None = None
+    ) -> SampleDraw:
+        """Grow the study by ``count`` never-before-used images.
+
+        Distinct from ``create_sample``, which discards the previous membership.
+        Nothing already in the study moves: existing records, the reviews
+        against them, and every outstanding assignment are left alone. Only the
+        target grows, and the new images are drawn in the same band proportions
+        so the enlarged study keeps its shape.
+
+        Records used by any earlier draw — including ones dropped as unusable or
+        swapped out — are never re-drawn.
+        """
+        if count <= 0:
+            raise AuditError("Ask for at least one image.")
+        if not self.sample.exists:
+            raise AuditError("Draw a study sample before extending it.")
+
+        with self._draw_lock:
+            self.sample.set_size(self.sample.size + count)
+            result = self.sample.draw_into(
+                self.drawable(), count=count, rng=rng, reason="extend"
+            )
+        log.info(
+            "study extended by %d (target now %d)", len(result.added), self.sample.size
+        )
+        return result
+
+    def reassign(
+        self,
+        from_user: str,
+        to_user: str,
+        *,
+        only_unreviewed: bool = True,
+        limit: int | None = None,
+    ) -> int:
+        """Hand one reviewer's claims to another. Returns how many moved.
+
+        Reviews are keyed on the record rather than on the assignment, so work
+        already done stays credited to whoever did it — only the outstanding
+        claims change hands.
+        """
+        if from_user == to_user:
+            raise AuditError("Pick two different reviewers.")
+
+        moved: list[dict[str, Any]] = []
+        for item in self.queue(from_user):
+            if only_unreviewed and item.done:
+                continue
+            if limit is not None and len(moved) >= limit:
+                break
+            moved.append(
+                Assignment(
+                    record_id=item.record.record_id,
+                    username=to_user,
+                    band=item.record.band,
+                ).to_json()
+            )
+
+        if moved:
+            self.assignments.extend(moved)
+        log.info("moved %d records from %r to %r", len(moved), from_user, to_user)
+        return len(moved)
+
     def top_up_sample(self, rng: random.Random | None = None) -> SampleDraw:
         """Refill the study to its target size after drops.
 

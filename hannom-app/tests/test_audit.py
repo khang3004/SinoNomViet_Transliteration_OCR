@@ -555,3 +555,127 @@ class TestSwapOut:
         item = self._assign_one(store)
         replacement = store.swap_out(item.record_id, "alice", reason="not_wanted")
         assert replacement.band is item.band
+
+
+class TestExtendStudy:
+    """Growing a study must cost nothing that is already in it."""
+
+    def test_the_target_grows(self, store):
+        store.extend_sample(50, rng=random.Random(2))
+        assert store.sample.size == SAMPLE_SIZE + 50
+        assert len(store.sample.members()) == SAMPLE_SIZE + 50
+
+    def test_existing_members_all_survive(self, store):
+        before = set(store.sample.members())
+        store.extend_sample(50, rng=random.Random(2))
+        assert before <= set(store.sample.members())
+
+    def test_reviews_and_assignments_are_untouched(self, store):
+        held = store.assign("alice", 10, rng=random.Random(1)).records
+        store.submit("alice", held[0].record_id, Verdict.CORRECT)
+
+        store.extend_sample(50, rng=random.Random(2))
+
+        assert held[0].record_id in store.review_state()
+        assert len(store.queue("alice")) == 10
+        assert store.progress()["reviewed"] == 1
+
+    def test_the_new_images_have_never_been_used(self, store):
+        before = set(store.sample.members())
+        result = store.extend_sample(50, rng=random.Random(2))
+        assert not {r.record_id for r in result.added} & before
+
+    def test_swapped_out_images_are_not_drawn_back_in(self, store):
+        item = store.assign("alice", 1, rng=random.Random(1)).records[0]
+        store.swap_out(item.record_id, "alice", reason="not_wanted")
+        store.extend_sample(50, rng=random.Random(2))
+        assert item.record_id not in store.sample.members()
+
+    def test_the_enlarged_study_keeps_its_band_shape(self, store):
+        """The new images follow the plan for the NEW total, not the old one."""
+        from app.core import sampling
+
+        store.extend_sample(50, rng=random.Random(3))
+        counts = Counter(r.band for r in store.sample_records())
+        plan = sampling.quotas(SAMPLE_SIZE + 50, sampling.DEFAULT_TARGETS)
+        assert {b: counts[b] for b in Band} == plan
+
+    def test_shape_gives_way_to_size_when_the_corpus_runs_dry(self, store):
+        """Extending to the whole 200-record corpus cannot hold the plan.
+
+        Bands that run out have their quota redistributed, so the study fills to
+        the requested size with a skewed shape rather than staying small. Worth
+        knowing before extending close to the size of the corpus.
+        """
+        store.extend_sample(100, rng=random.Random(3))
+        counts = Counter(r.band for r in store.sample_records())
+        assert sum(counts.values()) == 200
+        # far/poor wanted 50 each but only 40 of each exist.
+        assert counts[Band.FAR] == 40 and counts[Band.POOR] == 40
+
+    def test_progress_re_bases_on_the_larger_total(self, store):
+        held = store.assign("alice", 4, rng=random.Random(1)).records
+        for item in held:
+            store.submit("alice", item.record_id, Verdict.CORRECT)
+        assert store.progress()["percent"] == 4.0  # 4 of 100
+
+        store.extend_sample(100, rng=random.Random(2))
+        progress = store.progress()
+        assert progress["target"] == 200
+        assert progress["reviewed"] == 4
+        assert progress["percent"] == 2.0  # the same 4, now of 200
+
+    def test_extending_without_a_study_is_refused(self, loaded):
+        with pytest.raises(AuditError, match="Draw a study sample before"):
+            loaded.extend_sample(50)
+
+    def test_a_short_corpus_extends_as_far_as_it_can(self, store):
+        # The corpus holds 200; the study already has 100.
+        result = store.extend_sample(500, rng=random.Random(4))
+        assert len(result.added) == 100 and result.short == 400
+
+
+class TestReassign:
+    def test_moves_unreviewed_claims(self, store):
+        held = store.assign("alice", 10, rng=random.Random(1)).records
+        moved = store.reassign("alice", "bob")
+        assert moved == 10
+        assert store.queue("alice") == []
+        assert len(store.queue("bob")) == 10
+        assert {i.record.record_id for i in store.queue("bob")} == {
+            r.record_id for r in held
+        }
+
+    def test_reviewed_work_stays_with_whoever_did_it(self, store):
+        held = store.assign("alice", 10, rng=random.Random(1)).records
+        store.submit("alice", held[0].record_id, Verdict.CORRECT)
+
+        moved = store.reassign("alice", "bob")
+
+        assert moved == 9
+        # The finished one stays on alice's queue and in her totals.
+        assert [i.record.record_id for i in store.queue("alice")] == [held[0].record_id]
+        rows = {r["username"]: r for r in store.per_reviewer()}
+        assert rows["alice"]["reviewed"] == 1
+        assert rows["bob"]["assigned"] == 9
+
+    def test_a_limit_moves_only_part_of_the_queue(self, store):
+        store.assign("alice", 10, rng=random.Random(1))
+        assert store.reassign("alice", "bob", limit=4) == 4
+        assert len(store.queue("alice")) == 6
+        assert len(store.queue("bob")) == 4
+
+    def test_moving_to_yourself_is_rejected(self, store):
+        store.assign("alice", 5, rng=random.Random(1))
+        with pytest.raises(AuditError, match="two different reviewers"):
+            store.reassign("alice", "alice")
+
+    def test_an_empty_queue_moves_nothing(self, store):
+        assert store.reassign("alice", "bob") == 0
+
+    def test_the_study_is_unaffected(self, store):
+        store.assign("alice", 10, rng=random.Random(1))
+        before = set(store.sample.members())
+        store.reassign("alice", "bob")
+        assert set(store.sample.members()) == before
+        assert store.progress()["assigned"] == 10

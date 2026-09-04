@@ -100,6 +100,31 @@ invisible. It is still worth agreeing as a team when a swap is legitimate.
 Tune it with `SAMPLE_SIZE`, `SAMPLE_TARGETS`, `SAMPLE_PER_POST_CAP` and
 `SAMPLE_BATCH` (how many a reviewer claims per click).
 
+### Growing a study
+
+Three admin actions touch the study, and only one of them is destructive:
+
+| Action | Effect |
+|---|---|
+| **Add never-seen images** | Draws N more the study has never used, in the same band proportions. Every existing image, review and claim is kept; the target grows |
+| **Top up** | Refills only what was dropped as unusable or swapped out. Never goes above the target |
+| **Redraw study from scratch** | Replaces membership wholesale. Reviews stay on disk, but images that drop out stop counting |
+
+Adding is the one to reach for when reviewers need images nobody has seen. The
+cost is that the denominator moves — a study extended from 500 to 1000 reports
+`126 of 1000`, not `126 of 500`. Records used by any earlier draw, including
+ones dropped or swapped out, are never drawn again.
+
+### Moving work between reviewers
+
+Claims are exclusive, so one reviewer claiming a large batch and then not
+working through it starves everyone else — there is nothing left to claim even
+though most of the study is unreviewed. **Reviewers → Move unreviewed work**
+hands one person's outstanding claims to another, optionally capped at N.
+
+Only outstanding claims move. Reviews are keyed on the record rather than on the
+assignment, so finished work stays credited to whoever did it.
+
 ## Accuracy, reported twice
 
 Every comparison reports two numbers, because they diverge exactly where it

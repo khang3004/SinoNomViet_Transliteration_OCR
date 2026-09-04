@@ -124,6 +124,71 @@ async def draw_sample(
     return payload
 
 
+class ExtendRequest(BaseModel):
+    count: int = Field(default=0, ge=1, le=100000)
+
+
+@router.post("/sample/extend")
+async def extend_sample(
+    request: Request, body: ExtendRequest, user: dict = Depends(require_admin)
+):
+    """Add never-before-used images to the study without disturbing it.
+
+    Unlike /api/sample, this keeps every existing member, review and
+    assignment. The target grows by ``count`` and the progress bar re-bases on
+    the larger total.
+    """
+    runtime = _runtime(request)
+    try:
+        result = runtime.audit.extend_sample(body.count)
+    except AuditError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    payload = result.to_json()
+    payload["target"] = runtime.audit.sample.size
+    if result.short:
+        payload["message"] = (
+            f"Added {len(result.added)} of {body.count} — the corpus has no more "
+            "unused images that fit the band plan and the per-post cap."
+        )
+    return payload
+
+
+class ReassignRequest(BaseModel):
+    from_user: str
+    to_user: str
+    only_unreviewed: bool = True
+    limit: int | None = Field(default=None, ge=1, le=100000)
+
+
+@router.post("/queue/reassign")
+async def reassign(
+    request: Request, body: ReassignRequest, user: dict = Depends(require_admin)
+):
+    """Move one reviewer's outstanding claims to another reviewer."""
+    runtime = _runtime(request)
+    users = request.app.state.users
+    for name in (body.from_user, body.to_user):
+        if users.get(name) is None:
+            raise HTTPException(400, f"No such user: {name!r}")
+    try:
+        moved = runtime.audit.reassign(
+            body.from_user,
+            body.to_user,
+            only_unreviewed=body.only_unreviewed,
+            limit=body.limit,
+        )
+    except AuditError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "moved": moved,
+        "from_user": body.from_user,
+        "to_user": body.to_user,
+        "message": f"Moved {moved} image{'' if moved == 1 else 's'} from "
+                   f"{body.from_user} to {body.to_user}.",
+    }
+
+
 @router.post("/sample/top-up")
 async def top_up_sample(request: Request, user: dict = Depends(require_admin)):
     """Refill the study to its target size after unusable images were dropped."""
