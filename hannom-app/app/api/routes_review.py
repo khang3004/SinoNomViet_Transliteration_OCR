@@ -7,13 +7,18 @@ everyone so reviewers can see each other's work.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.auth import current_user, require_admin
+from app.core import assist as assist_core
+from app.core.assist import AssistError
 from app.core.audit import AuditError, QueueItem
+from app.core.drive import DriveError
+from app.core.imagestore import content_type_for
 from app.core.models import GeminiVerdict, Verdict
 
 log = logging.getLogger(__name__)
@@ -243,6 +248,60 @@ async def submit_review(
         # replacement — the UI uses this to offer a top-up.
         "released": verdict is Verdict.NOT_AN_IMAGE,
     }
+
+
+class AssistRequest(BaseModel):
+    record_id: str
+
+
+@router.post("/assist")
+async def assist(
+    request: Request, body: AssistRequest, user: dict = Depends(current_user)
+):
+    """Draft a review for one image with Gemini, for the reviewer to correct.
+
+    Only a draft: it fills the form and nothing is saved until the reviewer
+    presses Save. Scoped to the caller's own records so a click cannot spend
+    someone else's quota on work they do not hold.
+    """
+    runtime = _runtime(request)
+    record = runtime.audit.corpus.get(body.record_id)
+    if record is None:
+        raise HTTPException(404, "unknown record")
+
+    holder = runtime.audit.active_assignments().get(body.record_id)
+    if holder is None:
+        raise HTTPException(400, "That image is not currently assigned to anyone.")
+    if holder.username != user["username"] and user.get("role") != "admin":
+        raise HTTPException(403, f"That image is assigned to {holder.username}.")
+
+    try:
+        path = await runtime.images.ensure(
+            record.post_id, record.idx, record.image, record.suffix
+        )
+        image = path.read_bytes()
+    except DriveError as exc:
+        raise HTTPException(502, f"could not load the image: {exc}") from exc
+    except OSError as exc:
+        raise HTTPException(500, f"could not read the image: {exc}") from exc
+
+    similarity = (record.gemini_similarity or {}).get("cer_accuracy")
+    try:
+        # Blocking HTTP inside the SDK — keep it off the event loop, or one
+        # reviewer pressing Prefill stalls the page for everyone.
+        suggestion = await asyncio.to_thread(
+            assist_core.suggest,
+            runtime.settings.assist,
+            image=image,
+            mime_type=content_type_for(path),
+            ground_truth=record.ground_truth,
+            gemini=record.gemini,
+            similarity=float(similarity) if similarity is not None else None,
+        )
+    except AssistError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    return suggestion.to_json()
 
 
 class SkipRequest(BaseModel):

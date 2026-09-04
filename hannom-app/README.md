@@ -34,9 +34,32 @@ one question: **does their transcription match the image?**
 | `unreadable` | image too damaged or unclear to judge | no |
 | `not_an_image` | broken, missing, or not a photograph | no — dropped and replaced |
 
-Two buttons sit beside the verdicts: **Later** leaves the image in your queue to
-come back to, and **Swap for another** takes it out of the study for good and
-hands you a different one from the same band.
+Three buttons sit beside the verdicts: **Later** leaves the image in your queue
+to come back to, **Swap for another** takes it out of the study for good and
+hands you a different one from the same band, and **Prefill** drafts the whole
+form with Gemini.
+
+### Prefill
+
+Sends the picture, their `ground_truth`, and the Gemini OCR line with its
+agreement percentage, and fills in every control: the corrected text, the
+verdict, the Gemini rating, and a one-line note. It is a **draft** — nothing is
+saved until the reviewer looks at the image and presses Save.
+
+The draft is made internally consistent before it reaches the form, because a
+half-filled or self-contradicting one costs more time than it saves. A verdict
+of `correct` always carries their text verbatim; a `minor`/`wrong` whose
+correction did not actually change anything becomes `correct` (the text is
+trusted over the label); `unreadable` and `not_an_image` carry no transcription.
+
+Needs `GEMINI_API_KEY`. Without it the button reports that and everything else
+works. `GEMINI_MODEL` selects the model — change it if the API rejects the
+default as unknown or unavailable to your key; the error names the model.
+
+A caution worth stating plainly: this app exists so that a *person* judges
+machine output. A reviewer who accepts drafts without reading the image turns
+the audit into one model grading another, and the resulting accuracy figure
+means nothing.
 
 Gemini gets a lighter `good` / `partial` / `bad` rating alongside. DeepSeek is
 shown but not scored.
@@ -319,6 +342,7 @@ app/core/     no web framework, ever — app/cli.py proves it
   audit.py      corpus snapshot, assignments, reviews, progress
   drive.py      folder listing and lazy image mirroring
   users.py      accounts
+  assist.py     Prefill: drafting a review from the picture with Gemini
   jsonlog.py    append-only fsynced logs
 app/api/      FastAPI adapter over the above
 app/static/   the console

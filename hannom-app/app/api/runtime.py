@@ -78,6 +78,10 @@ class Runtime:
             "drive": self.drive_index.stats(),
             "mirrored_images": self.images.mirrored_count(),
             "signing_configured": bool(self.settings.images.signing_secret),
+            "assist": {
+                "configured": self.settings.assist.configured,
+                "model": self.settings.assist.model,
+            },
             "sampling": {
                 "sample_size": self.settings.sampling.sample_size,
                 "default_batch": self.settings.sampling.default_batch,

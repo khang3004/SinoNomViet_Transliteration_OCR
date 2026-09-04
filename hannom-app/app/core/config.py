@@ -11,6 +11,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.core.assist import DEFAULT_MODEL as DEFAULT_ASSIST_MODEL, AssistConfig
 from app.core.models import Band
 from app.core.sample import DEFAULT_SIZE as DEFAULT_SAMPLE_SIZE
 from app.core.sampling import DEFAULT_PER_POST_CAP, DEFAULT_TARGETS
@@ -124,6 +125,7 @@ class SamplingConfig:
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path = Path("/data")
+    assist: AssistConfig = field(default_factory=AssistConfig)
     drive: DriveConfig = field(default_factory=DriveConfig)
     images: ImageServeConfig = field(default_factory=ImageServeConfig)
     sampling: SamplingConfig = field(default_factory=SamplingConfig)
@@ -159,6 +161,11 @@ def load_settings() -> Settings:
 
     return Settings(
         data_dir=Path(_env("DATA_DIR", "/data")),
+        assist=AssistConfig(
+            api_key=_env("GEMINI_API_KEY"),
+            model=_env("GEMINI_MODEL", DEFAULT_ASSIST_MODEL),
+            timeout_s=_env_float("GEMINI_TIMEOUT", 60.0),
+        ),
         drive=DriveConfig(
             # Accept the full folder URL too — that is what gets pasted.
             folder_id=folder_id_from(_env("GOOGLE_DRIVE_FOLDER_ID")),
@@ -187,4 +194,5 @@ def describe_secrets() -> dict[str, bool]:
         "APP_PASSWORD_HASH": bool(_env("APP_PASSWORD_HASH")),
         "IMAGE_SIGNING_SECRET": bool(_env("IMAGE_SIGNING_SECRET")),
         "GOOGLE_SERVICE_ACCOUNT": bool(_env("GOOGLE_SERVICE_ACCOUNT")),
+        "GEMINI_API_KEY": bool(_env("GEMINI_API_KEY")),
     }

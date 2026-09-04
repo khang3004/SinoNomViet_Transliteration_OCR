@@ -687,6 +687,7 @@ function verdictForm(item, review) {
       <button class="primary" id="btn-save">Save &amp; next</button>
       <button id="btn-skip">Later</button>
       <button id="btn-swap">Swap for another</button>
+      <button id="btn-prefill">Prefill</button>
       <span class="spacer"></span>
       <span class="muted" id="save-status" style="font-size:0.75rem"></span>
     </div>
@@ -694,7 +695,8 @@ function verdictForm(item, review) {
       ← → move between images · Esc closes. <b>Later</b> keeps this image in your
       queue. <b>Swap</b> takes it out of the study for good and draws a different
       one in the same band, so the study still covers its target — it is recorded
-      against you and does not count as a review.
+      against you and does not count as a review. <b>Prefill</b> drafts the whole
+      form with Gemini from the picture; check it against the image before saving.
     </p>`;
 }
 
@@ -777,18 +779,44 @@ function wireWorkspace(item, review, editable) {
   if (box) box.oninput = markEdited;
 
   const buttons = $("lb-inner").querySelectorAll(".v-btn");
-  const setVerdict = (value) => {
+  function setVerdict(value) {
     verdict = value;
     buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === value)));
     // Saying a label is wrong means the text below has to change. Focus it
     // rather than making the reviewer hunt for the next step.
     if (["minor", "wrong"].includes(value) && box) box.focus();
-  };
+  }
   buttons.forEach((b) => { b.onclick = () => setVerdict(b.dataset.v); });
 
   $("btn-copy-gt").onclick = () => { box.value = item.ground_truth; markEdited(); box.focus(); };
   $("btn-copy-gemini").onclick = () => { box.value = item.gemini; markEdited(); box.focus(); };
   $("btn-skip").onclick = () => advance(1);
+
+  $("btn-prefill").onclick = async () => {
+    const button = $("btn-prefill");
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = "Reading\u2026";
+    $("save-status").textContent = "";
+    try {
+      const draft = await api("/api/assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ record_id: item.record_id }),
+      });
+
+      // Fill every control the reviewer would otherwise set by hand.
+      setVerdict(draft.verdict);
+      if (box) { box.value = draft.corrected || ""; markEdited(); }
+      $("gemini-verdict").value = draft.gemini_verdict || "skipped";
+      $("note").value = draft.note || "";
+      $("save-status").textContent = `Drafted by ${draft.model} — check it.`;
+    } catch (e) {
+      $("save-status").textContent = e.message;
+    }
+    button.textContent = original;
+    button.disabled = false;
+  };
 
   $("btn-swap").onclick = async () => {
     const button = $("btn-swap");
