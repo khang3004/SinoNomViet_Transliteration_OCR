@@ -550,6 +550,34 @@ class TestExports:
         accuracy = first[header.index("ground_truth_cer_accuracy")]
         assert isinstance(accuracy, float)
 
+    def test_danh_gia_export(self, client, tmp_path):
+        """The upstream team's own format, served from the same reviewed rows."""
+        openpyxl = pytest.importorskip("openpyxl")
+        import io
+
+        self._one_review(client, tmp_path)
+        response = client.get("/api/export/danh_gia.xlsx")
+        assert response.status_code == 200
+
+        book = openpyxl.load_workbook(io.BytesIO(response.content))
+        sheet = book["Đánh giá"]
+        assert [c.value for c in sheet[1]] == [
+            "Post ID", "Image", "FB Caption", "Label", "Corrected",
+            "Levenshtein Accuracy",
+            "Levenshtein Accuracy (bao gồm cả line break)", "Note",
+        ]
+        # Label is their transcription, Corrected is the reviewer's.
+        assert sheet.cell(row=2, column=4).value == "年歲漸長"
+        assert sheet.cell(row=2, column=5).value == "年歲漸增"
+        assert isinstance(sheet.cell(row=2, column=6).value, float)
+        assert sheet.cell(row=2, column=6).number_format == "0.00%"
+
+    def test_danh_gia_needs_a_session(self, client, tmp_path):
+        self._one_review(client, tmp_path)
+        client.post("/api/auth/logout")
+        assert client.get("/api/export/danh_gia.xlsx").status_code == 401
+
+
 
 class TestImageRoute:
     def test_an_unsigned_request_is_refused(self, client, tmp_path):

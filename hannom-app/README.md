@@ -298,10 +298,36 @@ Step 3 is the one that defines the audit. Reviewing is refused until it has
 happened, and redrawing later replaces which images are in the study (reviews
 already recorded are kept).
 
-Export from the same panel as `.xlsx`, `.csv` or `.jsonl`. Accuracy columns are
-written as numbers with a percent format, not as `"97.50%"` strings — a text
-column cannot be averaged, which is the first thing anyone does with the sheet.
-The CSV carries a UTF-8 BOM so Excel does not render the CJK as mojibake.
+## Exports
+
+Four downloads, from the Admin panel:
+
+| File | What it is |
+|---|---|
+| `danh_gia.xlsx` | The upstream team's own review format — eight columns, with every character where Label and Corrected disagree coloured red and blue |
+| `reviews.xlsx` | The full audit: every field, standard CER accuracies |
+| `reviews.csv` | The same, for anything that reads CSV |
+| `reviews.jsonl` | The same, one JSON object per line |
+
+**The two spreadsheets deliberately disagree on the arithmetic.**
+`danh_gia.xlsx` divides by the longer of the two strings, matching their
+`Task.xlsx`, so it can sit beside their existing sheets. `reviews.xlsx` reports
+standard CER (divided by the reference), which is the number to quote outside
+the project. See *Accuracy, reported twice* above.
+
+`danh_gia.xlsx` also differs in two places worth knowing:
+
+- **Unjudgeable images are left unscored.** `unreadable` and `not_an_image`
+  get blank Corrected and blank accuracy rather than 0%, which would drag the
+  average down with pictures nobody could read. The reason moves into the Note,
+  since this format has no verdict column.
+- **The diff is aligned, not positional.** A single inserted character would
+  otherwise mark the whole rest of the line as wrong.
+
+Accuracy columns in every file are numbers with a percent format, not `"97.50%"`
+strings — a text column cannot be averaged, which is the first thing anyone does
+with the sheet. The CSV carries a UTF-8 BOM so Excel does not render the CJK as
+mojibake.
 
 ## Storage
 
@@ -343,6 +369,7 @@ app/core/     no web framework, ever — app/cli.py proves it
   drive.py      folder listing and lazy image mirroring
   users.py      accounts
   assist.py     Prefill: drafting a review from the picture with Gemini
+  evalsheet.py  the team's "format đánh giá" sheet, with the diff coloured
   jsonlog.py    append-only fsynced logs
 app/api/      FastAPI adapter over the above
 app/static/   the console

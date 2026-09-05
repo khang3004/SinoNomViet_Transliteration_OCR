@@ -434,10 +434,18 @@
 
     <h2>Export</h2>
     <div class="row">
+      <a href="/api/export/danh_gia.xlsx" download><button class="primary">danh_gia.xlsx</button></a>
       <a href="/api/export/reviews.xlsx" download><button>reviews.xlsx</button></a>
       <a href="/api/export/reviews.csv" download><button>reviews.csv</button></a>
       <a href="/api/export/reviews.jsonl" download><button>reviews.jsonl</button></a>
     </div>
+    <p class="muted" style="font-size:0.74rem; margin-top:0.5rem">
+      <b>danh_gia.xlsx</b> is the upstream team's own review format — eight columns,
+      with every character where Label and Corrected disagree coloured red and blue.
+      Its accuracy columns divide by the longer of the two strings, matching their
+      Task.xlsx; <b>reviews.xlsx</b> reports standard CER alongside the full audit
+      fields.
+    </p>
   </details>
 </div>
 

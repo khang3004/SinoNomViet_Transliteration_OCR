@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
 from app.api.auth import current_user, require_admin
-from app.core import corpus
+from app.core import corpus, evalsheet
 from app.core.uploads import UnknownUploadKind, UploadStore, UploadTooLarge
 
 log = logging.getLogger(__name__)
@@ -136,6 +136,27 @@ async def export_csv(request: Request, user: dict = Depends(current_user)):
         buffer.getvalue().encode("utf-8-sig"),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="reviews.csv"'},
+    )
+
+
+@router.get("/export/danh_gia.xlsx")
+async def export_eval_sheet(request: Request, user: dict = Depends(current_user)):
+    """The upstream team's own review format, with the character diff coloured.
+
+    Deliberately not the same numbers as reviews.xlsx: this one uses their
+    max-length denominator so it sits alongside their existing sheets, while
+    reviews.xlsx reports standard CER. See app/core/evalsheet.py.
+    """
+    rows = request.app.state.runtime.audit.export_rows()
+    buffer = io.BytesIO()
+    evalsheet.build(rows).save(buffer)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={"Content-Disposition": 'attachment; filename="danh_gia.xlsx"'},
     )
 
 
